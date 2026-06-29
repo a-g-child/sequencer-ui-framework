@@ -87,6 +87,63 @@ select:focus-visible {
   gap: 16px;
 }
 
+.transport-panel {
+  min-height: 48px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface-2);
+}
+
+.transport-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.transport-buttons button {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 5px;
+  font-weight: 700;
+}
+
+.transport-buttons button:first-child {
+  border-color: transparent;
+  background: var(--accent-2);
+  color: #fff;
+}
+
+.bpm-control,
+.beat-readout {
+  min-height: 34px;
+  display: grid;
+  align-items: center;
+  gap: 2px;
+}
+
+.bpm-control span,
+.beat-readout span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.bpm-control input {
+  width: 76px;
+  min-height: 28px;
+  padding: 0 8px;
+}
+
+.beat-readout strong {
+  min-width: 54px;
+  font-size: 14px;
+}
+
 .eyebrow {
   margin: 0 0 4px;
   color: var(--accent);
@@ -318,6 +375,19 @@ select {
   .topbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .transport-panel {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .transport-buttons {
+    flex: 1 1 140px;
+  }
+
+  .transport-buttons button {
+    flex: 1 1 0;
   }
 
   .toolbar {

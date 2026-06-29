@@ -1,9 +1,49 @@
+import type { SequencerApplication } from "./application";
+import type { DocumentStore } from "./document-store";
+
+export interface ServiceEvent<T = unknown> {
+  readonly type: string;
+  readonly serviceId: string;
+  readonly payload?: T;
+}
+
+export type ServiceEventListener = (event: ServiceEvent) => void;
+
+export class ServiceEventBus {
+  private readonly listeners = new Set<ServiceEventListener>();
+
+  subscribe(listener: ServiceEventListener): () => void {
+    this.listeners.add(listener);
+
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  emit<T>(event: ServiceEvent<T>): void {
+    for (const listener of this.listeners) {
+      listener(event);
+    }
+  }
+
+  clear(): void {
+    this.listeners.clear();
+  }
+}
+
+export interface ServiceContext {
+  readonly application: SequencerApplication;
+  readonly documentStore: DocumentStore;
+  readonly services: ServiceRegistry;
+  readonly events: ServiceEventBus;
+}
+
 export interface Service {
   readonly id: string;
   readonly name: string;
 
-  initialise?(): Promise<void> | void;
-  shutdown?(): Promise<void> | void;
+  initialise?(context: ServiceContext): Promise<void> | void;
+  shutdown?(context: ServiceContext): Promise<void> | void;
 }
 
 export class ServiceRegistry {
@@ -36,17 +76,17 @@ export class ServiceRegistry {
     return [...this.services.values()];
   }
 
-  async initialiseAll(): Promise<void> {
+  async initialiseAll(context: ServiceContext): Promise<void> {
     for (const service of this.services.values()) {
-      await service.initialise?.();
+      await service.initialise?.(context);
     }
   }
 
-  async shutdownAll(): Promise<void> {
+  async shutdownAll(context: ServiceContext): Promise<void> {
     const services = [...this.services.values()].reverse();
 
     for (const service of services) {
-      await service.shutdown?.();
+      await service.shutdown?.(context);
     }
   }
 }

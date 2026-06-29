@@ -35,6 +35,9 @@
   let selectedProperties = buildPropertyRows(selectedTrack)
   let draftName = selectedTrack?.name ?? ''
   let numberDrafts: Record<string, number> = {}
+  let transportPlaying = app.editorTransport.playing
+  let transportBpm = app.editorTransport.bpm
+  let transportBeat = app.editorTransport.currentBeat
   let issues = validateDocument(store.document)
   let canUndo = store.history.canUndo()
   let canRedo = store.history.canRedo()
@@ -74,6 +77,32 @@
     issues = validateDocument(store.document)
     canUndo = store.history.canUndo()
     canRedo = store.history.canRedo()
+    syncTransportView()
+  }
+
+  function syncTransportView() {
+    transportPlaying = app.editorTransport.playing
+    transportBpm = app.editorTransport.bpm
+    transportBeat = app.editorTransport.currentBeat
+  }
+
+  function playTransport() {
+    app.editorTransport.play()
+    syncTransportView()
+  }
+
+  function stopTransport() {
+    app.editorTransport.stop()
+    syncTransportView()
+  }
+
+  function setRuntimeBpm(event: Event) {
+    const bpm = readNumberValue(event)
+
+    if (!Number.isFinite(bpm) || bpm <= 0) return
+
+    app.editorTransport.setBpm(bpm)
+    syncTransportView()
   }
 
   function selectTrack(track: Track) {
@@ -188,6 +217,34 @@
     <div>
       <p class="eyebrow">Sequencer</p>
       <h1>{store.document.name}</h1>
+    </div>
+
+    <div class="transport-panel" aria-label="Runtime transport">
+      <div class="transport-buttons">
+        <button type="button" on:click={playTransport} disabled={transportPlaying}>
+          Play
+        </button>
+        <button type="button" on:click={stopTransport} disabled={!transportPlaying}>
+          Stop
+        </button>
+      </div>
+
+      <label class="bpm-control" for="runtime-bpm">
+        <span>BPM</span>
+        <input
+          id="runtime-bpm"
+          type="number"
+          min="1"
+          step="1"
+          value={transportBpm}
+          on:change={setRuntimeBpm}
+        />
+      </label>
+
+      <div class="beat-readout">
+        <span>Beat</span>
+        <strong>{transportBeat.toFixed(2)}</strong>
+      </div>
     </div>
 
     <div class="toolbar" aria-label="Document operations">
