@@ -74,5 +74,84 @@ export function validateProject(project: SequencerProject): ValidationIssue[] {
     }
   }
 
+  for (const parameter of project.parameters.values()) {
+    const definition = project.parameterDefinitions.find(
+      parameter.definitionId
+    );
+
+    if (!definition) {
+      issues.push({
+        level: "error",
+        message: `Parameter references missing definition: ${parameter.definitionId}`,
+        entityId: parameter.id
+      });
+
+      continue;
+    }
+
+    if (definition.kind === "number") {
+      if (typeof parameter.value !== "number") {
+        issues.push({
+          level: "error",
+          message: "Number parameter must have a numeric value",
+          entityId: parameter.id
+        });
+      }
+
+      if (
+        typeof parameter.value === "number" &&
+        definition.min !== undefined &&
+        parameter.value < definition.min
+      ) {
+        issues.push({
+          level: "warning",
+          message: "Parameter value is below minimum",
+          entityId: parameter.id
+        });
+      }
+
+      if (
+        typeof parameter.value === "number" &&
+        definition.max !== undefined &&
+        parameter.value > definition.max
+      ) {
+        issues.push({
+          level: "warning",
+          message: "Parameter value is above maximum",
+          entityId: parameter.id
+        });
+      }
+    }
+
+    if (definition.kind === "boolean" && typeof parameter.value !== "boolean") {
+      issues.push({
+        level: "error",
+        message: "Boolean parameter must have a boolean value",
+        entityId: parameter.id
+      });
+    }
+
+    if (definition.kind === "choice") {
+      const validValues =
+        definition.options?.map((option) => option.value) ?? [];
+
+      if (!validValues.includes(parameter.value)) {
+        issues.push({
+          level: "error",
+          message: "Choice parameter value is not in the available options",
+          entityId: parameter.id
+        });
+      }
+    }
+
+    if (definition.kind === "text" && typeof parameter.value !== "string") {
+      issues.push({
+        level: "error",
+        message: "Text parameter must have a string value",
+        entityId: parameter.id
+      });
+    }
+  }
+
   return issues;
 }
