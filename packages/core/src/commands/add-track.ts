@@ -90,3 +90,5 @@ export class AddTrackCommand implements Command {
     }
   }
 }
+
+export { AddTrackCommand as AddTrackOperation };

@@ -28,3 +28,5 @@ export class RenameEntityCommand<T extends Entity> implements Command {
     entity.name = this.previousName;
   }
 }
+
+export { RenameEntityCommand as RenameEntityOperation };

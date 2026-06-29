@@ -1,36 +1,36 @@
-import type { Command } from "./command";
 import type { SequencerDocument } from "./document";
+import type { Operation } from "./operation";
 
-export class CommandHistory {
-  private undoStack: Command[] = [];
-  private redoStack: Command[] = [];
+export class OperationHistory {
+  private undoStack: Operation[] = [];
+  private redoStack: Operation[] = [];
 
-  execute(document: SequencerDocument, command: Command): void {
-    command.execute(document);
-    this.undoStack.push(command);
+  execute(document: SequencerDocument, operation: Operation): void {
+    operation.execute(document);
+    this.undoStack.push(operation);
     this.redoStack = [];
   }
 
-  undo(document: SequencerDocument): Command | undefined {
-    const command = this.undoStack.pop();
+  undo(document: SequencerDocument): Operation | undefined {
+    const operation = this.undoStack.pop();
 
-    if (!command) return undefined;
+    if (!operation) return undefined;
 
-    command.undo(document);
-    this.redoStack.push(command);
+    operation.undo(document);
+    this.redoStack.push(operation);
 
-    return command;
+    return operation;
   }
 
-  redo(document: SequencerDocument): Command | undefined {
-    const command = this.redoStack.pop();
+  redo(document: SequencerDocument): Operation | undefined {
+    const operation = this.redoStack.pop();
 
-    if (!command) return undefined;
+    if (!operation) return undefined;
 
-    command.execute(document);
-    this.undoStack.push(command);
+    operation.execute(document);
+    this.undoStack.push(operation);
 
-    return command;
+    return operation;
   }
 
   canUndo(): boolean {
@@ -46,3 +46,5 @@ export class CommandHistory {
     this.redoStack = [];
   }
 }
+
+export class CommandHistory extends OperationHistory {}

@@ -1,10 +1,11 @@
 export type EntityId = string;
 
 export interface Entity {
-    id: EntityId;
-    name: string;
+  id: EntityId;
+  key?: string;
+  name: string;
 }
 
 export function createId(prefix: string): EntityId {
-    return `${prefix}_${crypto.randomUUID()}`;
+  return `${prefix}_${crypto.randomUUID()}`;
 }

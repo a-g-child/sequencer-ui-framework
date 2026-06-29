@@ -1,40 +1,53 @@
 import type { Entity, EntityId } from "./entity";
 
 export class Registry<T extends Entity> {
+  private readonly entities = new Map<EntityId, T>();
 
-    private readonly entities = new Map<EntityId, T>();
+  add(entity: T): void {
+    this.entities.set(entity.id, entity);
+  }
 
-    add(entity: T): void {
-        this.entities.set(entity.id, entity);
+  remove(id: EntityId): boolean {
+    return this.entities.delete(id);
+  }
+
+  find(id: EntityId): T | undefined {
+    return this.entities.get(id);
+  }
+
+  get(id: EntityId): T {
+    const entity = this.find(id);
+
+    if (!entity) {
+      throw new Error(`Entity not found: ${id}`);
     }
 
-    remove(id: EntityId): boolean {
-        return this.entities.delete(id);
+    return entity;
+  }
+
+  findByKey(key: string): T | undefined {
+    return this.values().find((entity) => entity.key === key);
+  }
+
+  getByKey(key: string): T {
+    const entity = this.findByKey(key);
+
+    if (!entity) {
+      throw new Error(`Entity not found by key: ${key}`);
     }
 
-    find(id: EntityId): T | undefined {
-        return this.entities.get(id);
-    }
+    return entity;
+  }
 
-    get(id: EntityId): T {
-        const entity = this.find(id);
+  values(): T[] {
+    return [...this.entities.values()];
+  }
 
-        if (!entity) {
-            throw new Error(`Entity not found: ${id}`);
-        }
+  has(id: EntityId): boolean {
+    return this.entities.has(id);
+  }
 
-        return entity;
-    }
-
-    values(): T[] {
-        return [...this.entities.values()];
-    }
-
-    has(id: EntityId): boolean {
-        return this.entities.has(id);
-    }
-
-    clear(): void {
-        this.entities.clear();
-    }
+  clear(): void {
+    this.entities.clear();
+  }
 }

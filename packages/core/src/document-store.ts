@@ -1,39 +1,75 @@
-import type { Command } from "./command";
-import { CommandHistory } from "./history";
+import { ClipboardModel } from "./clipboard";
 import type { SequencerDocument } from "./document";
+import { DocumentEventBus } from "./document-event-bus";
+import type { Entity, EntityId } from "./entity";
+import { OperationHistory } from "./history";
+import type { Operation } from "./operation";
+import { SelectionModel } from "./selection";
 
 export interface DocumentObserver {
-  onCommandExecuted(command: Command): void;
-  onCommandUndone?(command: Command): void;
-  onCommandRedone?(command: Command): void;
+  onCommandExecuted(operation: Operation): void;
+  onCommandUndone?(operation: Operation): void;
+  onCommandRedone?(operation: Operation): void;
 }
 
 export class DocumentStore {
-  readonly history = new CommandHistory();
+  readonly history = new OperationHistory();
+  readonly selection = new SelectionModel();
+  readonly clipboard = new ClipboardModel();
+  readonly events = new DocumentEventBus();
 
   private readonly observers = new Set<DocumentObserver>();
 
   constructor(public readonly document: SequencerDocument) {}
 
-  execute(command: Command): void {
-    this.history.execute(this.document, command);
-    this.notifyCommandExecuted(command);
+  execute(operation: Operation): void {
+    this.history.execute(this.document, operation);
+    this.events.emit({ type: "operation:executed", operation });
+    this.notifyCommandExecuted(operation);
   }
 
   undo(): void {
-    const command = this.history.undo(this.document);
+    const operation = this.history.undo(this.document);
 
-    if (command) {
-      this.notifyCommandUndone(command);
+    if (operation) {
+      this.events.emit({ type: "operation:undone", operation });
+      this.notifyCommandUndone(operation);
     }
   }
 
   redo(): void {
-    const command = this.history.redo(this.document);
+    const operation = this.history.redo(this.document);
 
-    if (command) {
-      this.notifyCommandRedone(command);
+    if (operation) {
+      this.events.emit({ type: "operation:redone", operation });
+      this.notifyCommandRedone(operation);
     }
+  }
+
+  setSelection(ids: EntityId[]): void {
+    this.selection.set(ids);
+    this.events.emit({
+      type: "selection:changed",
+      entityIds: this.selection.values()
+    });
+  }
+
+  clearSelection(): void {
+    this.selection.clear();
+    this.events.emit({ type: "selection:changed", entityIds: [] });
+  }
+
+  setClipboard(items: Entity[]): void {
+    this.clipboard.set(items);
+    this.events.emit({
+      type: "clipboard:changed",
+      items: this.clipboard.values()
+    });
+  }
+
+  clearClipboard(): void {
+    this.clipboard.clear();
+    this.events.emit({ type: "clipboard:changed", items: [] });
   }
 
   addObserver(observer: DocumentObserver): void {
@@ -44,21 +80,21 @@ export class DocumentStore {
     this.observers.delete(observer);
   }
 
-  private notifyCommandExecuted(command: Command): void {
+  private notifyCommandExecuted(operation: Operation): void {
     for (const observer of this.observers) {
-      observer.onCommandExecuted(command);
+      observer.onCommandExecuted(operation);
     }
   }
 
-  private notifyCommandUndone(command: Command): void {
+  private notifyCommandUndone(operation: Operation): void {
     for (const observer of this.observers) {
-      observer.onCommandUndone?.(command);
+      observer.onCommandUndone?.(operation);
     }
   }
 
-  private notifyCommandRedone(command: Command): void {
+  private notifyCommandRedone(operation: Operation): void {
     for (const observer of this.observers) {
-      observer.onCommandRedone?.(command);
+      observer.onCommandRedone?.(operation);
     }
   }
 }
