@@ -8,6 +8,7 @@ import type { BeatTime } from "./events";
 import type { Timeline } from "./timeline";
 import { createId } from "./entity";
 import { Registry } from "./registry";
+import type { Parameter, ParameterDefinition } from "./parameter";
 
 export function createPattern(name = "Pattern A", length = 4): Pattern {
   return {
@@ -71,6 +72,8 @@ export function createProject(name = "Sequencer"): SequencerProject {
     bpm: 120,
     timeline,
     tracks,
-    patterns
+    patterns,
+    parameterDefinitions: new Registry<ParameterDefinition>(),
+    parameters: new Registry<Parameter>()
   };
 }

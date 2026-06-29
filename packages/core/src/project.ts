@@ -3,6 +3,7 @@ import type { Relationship } from "./relationship";
 import type { BeatTime, TimelineEvent } from "./events";
 import type { Registry } from "./registry";
 import type { Timeline } from "./timeline";
+import type { Parameter, ParameterDefinition } from "./parameter";
 
 export interface Pattern extends Entity {
   length: BeatTime;
@@ -25,4 +26,6 @@ export interface SequencerProject extends Entity {
   timeline: Timeline;
   tracks: Registry<Track>;
   patterns: Registry<Pattern>;
+  parameterDefinitions: Registry<ParameterDefinition>;
+  parameters: Registry<Parameter>;
 }
