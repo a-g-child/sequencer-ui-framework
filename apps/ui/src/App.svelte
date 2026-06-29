@@ -1,15 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import {
-    AddTrackOperation,
-    MovePatternPlacementOperation,
-    RenameEntityOperation,
-    ResizePatternPlacementOperation,
-    SetPatternPlacementLoopCountOperation,
-    SetParameterValueOperation,
     SequencerApplication,
     validateDocument,
-    type BeatTime,
     type SelectionItem,
     type ServiceEvent,
     type Parameter,
@@ -17,6 +10,7 @@
     type ParameterValue,
     type Track
   } from '@sequencer/core'
+  import { AppController } from './lib/app-controller'
   import {
     buildInspectorView,
     type InspectorView
@@ -28,12 +22,9 @@
   } from './lib/timeline/timeline-model'
 
   const app = new SequencerApplication()
+  const controller = new AppController(app)
   const store = app.documentStore
-  const initialTrack = store.document.tracks.values()[0]
-
-  if (initialTrack) {
-    store.setSelection({ type: 'track', id: initialTrack.id })
-  }
+  controller.selectInitialTrack()
 
   onMount(() => {
     const unsubscribe = app.serviceEvents.subscribe(handleServiceEvent)
@@ -118,101 +109,59 @@
   }
 
   function playTransport() {
-    app.editorTransport.play()
+    controller.playTransport()
   }
 
   function stopTransport() {
-    app.editorTransport.stop()
+    controller.stopTransport()
   }
 
   function setRuntimeBpm(event: Event) {
     const bpm = readNumberValue(event)
 
-    if (!Number.isFinite(bpm) || bpm <= 0) return
-
-    app.editorTransport.setBpm(bpm)
+    controller.setRuntimeBpm(bpm)
   }
 
   function selectTrack(track: Track) {
-    selected = { type: 'track', id: track.id }
-    store.setSelection(selected)
+    controller.selectTrack(track)
     rebuildInspector()
   }
 
   function selectPlacement(placement: TimelinePlacementView) {
-    selected = {
-      type: 'placement',
-      id: placement.id,
-      parentId: placement.trackId
-    }
-    store.setSelection(selected)
+    controller.selectPlacement(placement)
     rebuildInspector()
   }
 
   function addTrack() {
-    const nextNumber = tracks.length + 1
-    store.execute(new AddTrackOperation(`Track ${nextNumber}`, `Pattern ${nextNumber}`))
-    const nextTrack = store.document.tracks.values().at(-1)
-
-    if (nextTrack) {
-      selected = { type: 'track', id: nextTrack.id }
-      store.setSelection(selected)
-    }
-
+    controller.addTrack()
     syncView()
   }
 
   function renameSelectedTrack() {
     const nextName = draftName.trim()
 
-    if (
-      inspector.type !== 'track' ||
-      selected?.type !== 'track' ||
-      !nextName ||
-      nextName === inspector.title
-    ) {
+    if (!controller.renameSelectedTrack(nextName)) {
       draftName = inspector.type === 'track' ? inspector.title : ''
       return
     }
 
-    store.execute(
-      new RenameEntityOperation(store.document.tracks, selected.id, nextName)
-    )
     syncView()
   }
 
   function setParameterValue(parameterId: string, value: ParameterValue) {
-    store.execute(new SetParameterValueOperation(parameterId, value))
+    controller.setParameterValue(parameterId, value)
     syncView()
   }
 
-  function movePlacement(placement: TimelinePlacementView, delta: BeatTime) {
-    const nextStart = Math.max(0, placement.start + delta)
+  function movePlacement(placement: TimelinePlacementView, delta: number) {
+    if (!controller.movePlacement(placement, delta)) return
 
-    if (nextStart === placement.start) return
-
-    store.execute(
-      new MovePatternPlacementOperation(
-        placement.trackId,
-        placement.id,
-        nextStart
-      )
-    )
     syncView()
   }
 
-  function resizePlacement(placement: TimelinePlacementView, delta: BeatTime) {
-    const nextLength = Math.max(1, placement.length + delta)
+  function resizePlacement(placement: TimelinePlacementView, delta: number) {
+    if (!controller.resizePlacement(placement, delta)) return
 
-    if (nextLength === placement.length) return
-
-    store.execute(
-      new ResizePatternPlacementOperation(
-        placement.trackId,
-        placement.id,
-        nextLength
-      )
-    )
     syncView()
   }
 
@@ -229,78 +178,35 @@
           : property
       )
     }
-    store.previewParameterValue(parameterId, value)
+    controller.previewParameterValue(parameterId, value)
   }
 
   function commitNumberValue(parameterId: string, value: number) {
-    const parameter = store.document.parameters.get(parameterId)
-
     numberDrafts = Object.fromEntries(
       Object.entries(numberDrafts).filter(([id]) => id !== parameterId)
     )
 
-    if (value === parameter.value) {
-      syncView()
-      return
-    }
-
-    setParameterValue(parameterId, value)
+    controller.commitNumberValue(parameterId, value)
+    syncView()
   }
 
   function commitPlacementStart(nextStart: number) {
-    const placement = inspector.placement
+    if (!controller.setPlacementStart(inspector.placement, nextStart)) return
 
-    if (!placement || !Number.isFinite(nextStart)) return
-
-    const clampedStart = Math.max(0, nextStart)
-
-    if (clampedStart === placement.start) return
-
-    store.execute(
-      new MovePatternPlacementOperation(
-        placement.trackId,
-        placement.id,
-        clampedStart
-      )
-    )
     syncView()
   }
 
   function commitPlacementLength(nextLength: number) {
-    const placement = inspector.placement
+    if (!controller.setPlacementLength(inspector.placement, nextLength)) return
 
-    if (!placement || !Number.isFinite(nextLength)) return
-
-    const clampedLength = Math.max(0.25, nextLength)
-
-    if (clampedLength === placement.length) return
-
-    store.execute(
-      new ResizePatternPlacementOperation(
-        placement.trackId,
-        placement.id,
-        clampedLength
-      )
-    )
     syncView()
   }
 
   function commitPlacementLoopCount(nextLoopCount: number) {
-    const placement = inspector.placement
+    if (!controller.setPlacementLoopCount(inspector.placement, nextLoopCount)) {
+      return
+    }
 
-    if (!placement || !Number.isFinite(nextLoopCount)) return
-
-    const clampedLoopCount = Math.max(1, Math.floor(nextLoopCount))
-
-    if (clampedLoopCount === placement.loopCount) return
-
-    store.execute(
-      new SetPatternPlacementLoopCountOperation(
-        placement.trackId,
-        placement.id,
-        clampedLoopCount
-      )
-    )
     syncView()
   }
 
@@ -335,12 +241,12 @@
   }
 
   function undo() {
-    store.undo()
+    controller.undo()
     syncView()
   }
 
   function redo() {
-    store.redo()
+    controller.redo()
     syncView()
   }
 </script>
