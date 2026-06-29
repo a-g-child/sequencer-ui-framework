@@ -1,5 +1,6 @@
 import type { Entity, EntityId } from "./entity";
 import type { Operation } from "./operation";
+import type { SelectionItem } from "./selection";
 
 export type DocumentEventType =
   | "operation:executed"
@@ -19,6 +20,7 @@ export interface BaseDocumentEvent {
   type: Exclude<DocumentEventType, "parameter-preview">;
   operation?: Operation;
   entityIds?: EntityId[];
+  selection?: SelectionItem[];
   items?: Entity[];
 }
 

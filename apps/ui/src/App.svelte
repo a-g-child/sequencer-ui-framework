@@ -5,10 +5,13 @@
     MovePatternPlacementOperation,
     RenameEntityOperation,
     ResizePatternPlacementOperation,
+    SetPatternPlacementLoopCountOperation,
     SetParameterValueOperation,
     SequencerApplication,
+    getPlacement,
     validateDocument,
     type BeatTime,
+    type SelectionItem,
     type ServiceEvent,
     type Parameter,
     type ParameterDefinition,
@@ -32,6 +35,16 @@
     length: number
   }
 
+  interface SelectedPlacementView {
+    id: string
+    trackId: string
+    start: number
+    length: number
+    loopCount: number
+    target: string
+    targetName: string
+  }
+
   const app = new SequencerApplication()
   const store = app.documentStore
 
@@ -46,8 +59,13 @@
   })
 
   let tracks = store.document.tracks.values()
-  let selectedTrackId = tracks[0]?.id ?? ''
+  let selected: SelectionItem | undefined = tracks[0]
+    ? { type: 'track', id: tracks[0].id }
+    : undefined
+  let selectedTrackId = selected?.type === 'track' ? selected.id : ''
   let selectedTrack: Track | undefined = tracks[0]
+  let selectedPlacement: SelectedPlacementView | undefined
+  let selectedTitle = selectedTrack ? 'Track' : ''
   let selectedProperties = buildPropertyRows(selectedTrack)
   let timelinePlacements = buildTimelinePlacements()
   let timelineLength = calculateTimelineLength(timelinePlacements)
@@ -119,20 +137,71 @@
     return timelinePlacements.filter((placement) => placement.trackId === trackId)
   }
 
-  function syncView() {
-    tracks = store.document.tracks.values()
+  function rebuildSelectionView() {
+    selectedTrack = undefined
+    selectedTrackId = ''
+    selectedPlacement = undefined
+    selectedProperties = []
+    selectedTitle = ''
+    draftName = ''
 
-    if (selectedTrackId && !store.document.tracks.has(selectedTrackId)) {
-      selectedTrackId = tracks[0]?.id ?? ''
+    if (!selected) {
+      selected = tracks[0] ? { type: 'track', id: tracks[0].id } : undefined
     }
 
-    selectedTrack = selectedTrackId
-      ? store.document.tracks.find(selectedTrackId)
-      : undefined
-    selectedProperties = buildPropertyRows(selectedTrack)
+    if (selected?.type === 'track') {
+      const track = store.document.tracks.find(selected.id)
+
+      if (track) {
+        selectedTrack = track
+        selectedTrackId = track.id
+        selectedTitle = 'Track'
+        selectedProperties = buildPropertyRows(track)
+        draftName = track.name
+        return
+      }
+    }
+
+    if (selected?.type === 'placement' && selected.parentId) {
+      try {
+        const placement = getPlacement(
+          store.document,
+          selected.parentId,
+          selected.id
+        )
+        const pattern = store.document.patterns.get(placement.target)
+
+        selectedTitle = 'Pattern Placement'
+        selectedPlacement = {
+          id: placement.id,
+          trackId: selected.parentId,
+          start: placement.start,
+          length: placement.length ?? pattern.length,
+          loopCount: placement.loopCount ?? 1,
+          target: placement.target,
+          targetName: pattern.name
+        }
+        return
+      } catch {
+        selected = undefined
+      }
+    }
+
+    if (tracks[0]) {
+      selected = { type: 'track', id: tracks[0].id }
+      selectedTrack = tracks[0]
+      selectedTrackId = tracks[0].id
+      selectedTitle = 'Track'
+      selectedProperties = buildPropertyRows(tracks[0])
+      draftName = tracks[0].name
+    }
+  }
+
+  function syncView() {
+    tracks = store.document.tracks.values()
     timelinePlacements = buildTimelinePlacements()
     timelineLength = calculateTimelineLength(timelinePlacements)
-    draftName = selectedTrack?.name ?? ''
+    rebuildSelectionView()
     issues = validateDocument(store.document)
     canUndo = store.history.canUndo()
     canRedo = store.history.canRedo()
@@ -194,9 +263,19 @@
   }
 
   function selectTrack(track: Track) {
-    selectedTrackId = track.id
-    store.setSelection([track.id])
-    syncView()
+    selected = { type: 'track', id: track.id }
+    store.setSelection(selected)
+    rebuildSelectionView()
+  }
+
+  function selectPlacement(placement: TimelinePlacementView) {
+    selected = {
+      type: 'placement',
+      id: placement.id,
+      parentId: placement.trackId
+    }
+    store.setSelection(selected)
+    rebuildSelectionView()
   }
 
   function addTrack() {
@@ -205,8 +284,8 @@
     const nextTrack = store.document.tracks.values().at(-1)
 
     if (nextTrack) {
-      selectedTrackId = nextTrack.id
-      store.setSelection([nextTrack.id])
+      selected = { type: 'track', id: nextTrack.id }
+      store.setSelection(selected)
     }
 
     syncView()
@@ -287,6 +366,57 @@
     }
 
     setParameterValue(parameterId, value)
+  }
+
+  function commitPlacementStart(nextStart: number) {
+    if (!selectedPlacement || !Number.isFinite(nextStart)) return
+
+    const clampedStart = Math.max(0, nextStart)
+
+    if (clampedStart === selectedPlacement.start) return
+
+    store.execute(
+      new MovePatternPlacementOperation(
+        selectedPlacement.trackId,
+        selectedPlacement.id,
+        clampedStart
+      )
+    )
+    syncView()
+  }
+
+  function commitPlacementLength(nextLength: number) {
+    if (!selectedPlacement || !Number.isFinite(nextLength)) return
+
+    const clampedLength = Math.max(0.25, nextLength)
+
+    if (clampedLength === selectedPlacement.length) return
+
+    store.execute(
+      new ResizePatternPlacementOperation(
+        selectedPlacement.trackId,
+        selectedPlacement.id,
+        clampedLength
+      )
+    )
+    syncView()
+  }
+
+  function commitPlacementLoopCount(nextLoopCount: number) {
+    if (!selectedPlacement || !Number.isFinite(nextLoopCount)) return
+
+    const clampedLoopCount = Math.max(1, Math.floor(nextLoopCount))
+
+    if (clampedLoopCount === selectedPlacement.loopCount) return
+
+    store.execute(
+      new SetPatternPlacementLoopCountOperation(
+        selectedPlacement.trackId,
+        selectedPlacement.id,
+        clampedLoopCount
+      )
+    )
+    syncView()
   }
 
   function readNumberValue(event: Event): number {
@@ -420,10 +550,17 @@
                     class="placement"
                     style={`left: ${(placement.start / timelineLength) * 100}%; width: ${(placement.length / timelineLength) * 100}%;`}
                   >
-                    <div class="placement-title">{placement.patternName}</div>
-                    <div class="placement-meta">
-                      {placement.start} / {placement.length}
-                    </div>
+                    <button
+                      type="button"
+                      class="placement-select"
+                      class:selected={selected?.type === 'placement' && selected.id === placement.id}
+                      on:click={() => selectPlacement(placement)}
+                    >
+                      <span class="placement-title">{placement.patternName}</span>
+                      <span class="placement-meta">
+                        {placement.start} / {placement.length}
+                      </span>
+                    </button>
                     <div class="placement-controls" aria-label={`${placement.patternName} placement controls`}>
                       <button
                         type="button"
@@ -466,7 +603,7 @@
 
       {#if selectedTrack}
         <div class="pane-heading">
-          <h2>Inspector</h2>
+          <h2>{selectedTitle}</h2>
           <span>{selectedTrack.key ?? 'track'}</span>
         </div>
 
@@ -552,9 +689,57 @@
             </div>
           {/each}
         </div>
+      {:else if selectedPlacement}
+        <div class="pane-heading">
+          <h2>{selectedTitle}</h2>
+          <span>{selectedPlacement.id}</span>
+        </div>
+
+        <div class="placement-inspector">
+          <label>
+            <span>Target Pattern</span>
+            <input value={selectedPlacement.targetName} readonly />
+          </label>
+
+          <label>
+            <span>Start</span>
+            <input
+              type="number"
+              step="0.25"
+              min="0"
+              value={selectedPlacement.start}
+              on:change={(event) =>
+                commitPlacementStart(readNumberValue(event))}
+            />
+          </label>
+
+          <label>
+            <span>Length</span>
+            <input
+              type="number"
+              step="0.25"
+              min="0.25"
+              value={selectedPlacement.length}
+              on:change={(event) =>
+                commitPlacementLength(readNumberValue(event))}
+            />
+          </label>
+
+          <label>
+            <span>Loop Count</span>
+            <input
+              type="number"
+              step="1"
+              min="1"
+              value={selectedPlacement.loopCount}
+              on:change={(event) =>
+                commitPlacementLoopCount(readNumberValue(event))}
+            />
+          </label>
+        </div>
       {:else}
         <div class="empty-state">
-          <h2>No Track Selected</h2>
+          <h2>No Selection</h2>
         </div>
       {/if}
     </section>

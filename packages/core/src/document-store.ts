@@ -1,10 +1,10 @@
 import { ClipboardModel } from "./clipboard";
 import type { SequencerDocument } from "./document";
 import { DocumentEventBus } from "./document-event-bus";
-import type { Entity, EntityId } from "./entity";
+import type { Entity } from "./entity";
 import { OperationHistory } from "./history";
 import type { Operation } from "./operation";
-import { SelectionModel } from "./selection";
+import { SelectionModel, type SelectionItem } from "./selection";
 
 export interface DocumentObserver {
   onCommandExecuted(operation: Operation): void;
@@ -46,11 +46,14 @@ export class DocumentStore {
     }
   }
 
-  setSelection(ids: EntityId[]): void {
-    this.selection.set(ids);
+  setSelection(selection: SelectionItem | SelectionItem[]): void {
+    const items = Array.isArray(selection) ? selection : [selection];
+
+    this.selection.set(items);
     this.events.emit({
       type: "selection:changed",
-      entityIds: this.selection.values()
+      entityIds: items.map((item) => item.id),
+      selection: this.selection.values()
     });
   }
 

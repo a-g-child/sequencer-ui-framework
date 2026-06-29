@@ -1,33 +1,43 @@
 import type { EntityId } from "./entity";
 
+export interface SelectionItem {
+  type: string;
+  id: EntityId;
+  parentId?: EntityId;
+}
+
 export class SelectionModel {
-  private readonly ids = new Set<EntityId>();
+  private readonly items = new Map<string, SelectionItem>();
 
-  set(ids: EntityId[]): void {
-    this.ids.clear();
+  set(items: SelectionItem[]): void {
+    this.items.clear();
 
-    for (const id of ids) {
-      this.ids.add(id);
+    for (const item of items) {
+      this.items.set(this.createKey(item), item);
     }
   }
 
-  add(id: EntityId): void {
-    this.ids.add(id);
+  add(item: SelectionItem): void {
+    this.items.set(this.createKey(item), item);
   }
 
-  remove(id: EntityId): boolean {
-    return this.ids.delete(id);
+  remove(item: SelectionItem): boolean {
+    return this.items.delete(this.createKey(item));
   }
 
-  has(id: EntityId): boolean {
-    return this.ids.has(id);
+  has(item: SelectionItem): boolean {
+    return this.items.has(this.createKey(item));
   }
 
-  values(): EntityId[] {
-    return [...this.ids.values()];
+  values(): SelectionItem[] {
+    return [...this.items.values()];
   }
 
   clear(): void {
-    this.ids.clear();
+    this.items.clear();
+  }
+
+  private createKey(item: SelectionItem): string {
+    return `${item.type}:${item.parentId ?? ""}:${item.id}`;
   }
 }
