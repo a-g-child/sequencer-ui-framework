@@ -74,6 +74,34 @@ export function validateProject(project: SequencerProject): ValidationIssue[] {
     }
   }
 
+  for (const pattern of project.patterns.values()) {
+    for (const event of pattern.events) {
+      if (!project.parameters.has(event.target)) {
+        issues.push({
+          level: "error",
+          message: `Timeline event references missing parameter: ${event.target}`,
+          entityId: event.id
+        });
+      }
+
+      if (event.time < 0) {
+        issues.push({
+          level: "error",
+          message: "Timeline event time cannot be negative",
+          entityId: event.id
+        });
+      }
+
+      if (event.time > pattern.length) {
+        issues.push({
+          level: "warning",
+          message: "Timeline event is beyond the pattern length",
+          entityId: event.id
+        });
+      }
+    }
+  }
+
   for (const parameter of project.parameters.values()) {
     const definition = project.parameterDefinitions.find(
       parameter.definitionId
