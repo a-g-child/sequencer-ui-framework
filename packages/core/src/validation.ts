@@ -1,4 +1,4 @@
-import type { SequencerProject } from "./project";
+import type { SequencerDocument } from "./document";
 
 export interface ValidationIssue {
   level: "error" | "warning";
@@ -6,18 +6,18 @@ export interface ValidationIssue {
   entityId?: string;
 }
 
-export function validateProject(project: SequencerProject): ValidationIssue[] {
+export function validateDocument(document: SequencerDocument): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
-  if (project.timeline.length <= 0) {
+  if (document.timeline.length <= 0) {
     issues.push({
       level: "error",
       message: "Timeline length must be greater than zero",
-      entityId: project.id
+      entityId: document.id
     });
   }
 
-  for (const marker of project.timeline.markers) {
+  for (const marker of document.timeline.markers) {
     if (marker.time < 0) {
       issues.push({
         level: "error",
@@ -26,7 +26,7 @@ export function validateProject(project: SequencerProject): ValidationIssue[] {
       });
     }
 
-    if (marker.time > project.timeline.length) {
+    if (marker.time > document.timeline.length) {
       issues.push({
         level: "warning",
         message: "Timeline marker is beyond the project timeline length",
@@ -35,9 +35,9 @@ export function validateProject(project: SequencerProject): ValidationIssue[] {
     }
   }
 
-  for (const track of project.tracks.values()) {
+  for (const track of document.tracks.values()) {
     for (const parameterId of track.parameters) {
-      if (!project.parameters.has(parameterId)) {
+      if (!document.parameters.has(parameterId)) {
         issues.push({
           level: "error",
           message: `Track references missing parameter: ${parameterId}`,
@@ -47,7 +47,7 @@ export function validateProject(project: SequencerProject): ValidationIssue[] {
     }
 
     for (const placement of track.placements) {
-      if (!project.patterns.has(placement.target)) {
+      if (!document.patterns.has(placement.target)) {
         issues.push({
           level: "error",
           message: `Placement references missing pattern: ${placement.target}`,
@@ -74,7 +74,7 @@ export function validateProject(project: SequencerProject): ValidationIssue[] {
       const placementEnd =
         placement.start + (placement.length ?? 0) * (placement.loopCount ?? 1);
 
-      if (placementEnd > project.timeline.length) {
+      if (placementEnd > document.timeline.length) {
         issues.push({
           level: "warning",
           message: "Pattern placement extends beyond the project timeline length",
@@ -84,9 +84,9 @@ export function validateProject(project: SequencerProject): ValidationIssue[] {
     }
   }
 
-  for (const pattern of project.patterns.values()) {
+  for (const pattern of document.patterns.values()) {
     for (const event of pattern.events) {
-      if (!project.parameters.has(event.target)) {
+      if (!document.parameters.has(event.target)) {
         issues.push({
           level: "error",
           message: `Timeline event references missing parameter: ${event.target}`,
@@ -112,8 +112,8 @@ export function validateProject(project: SequencerProject): ValidationIssue[] {
     }
   }
 
-  for (const parameter of project.parameters.values()) {
-    const definition = project.parameterDefinitions.find(
+  for (const parameter of document.parameters.values()) {
+    const definition = document.parameterDefinitions.find(
       parameter.definitionId
     );
 
@@ -192,4 +192,8 @@ export function validateProject(project: SequencerProject): ValidationIssue[] {
   }
 
   return issues;
+}
+
+export function validateProject(project: SequencerDocument): ValidationIssue[] {
+  return validateDocument(project);
 }

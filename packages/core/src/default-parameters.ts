@@ -2,10 +2,11 @@ import {
   createParameter,
   createParameterDefinition
 } from "./parameter";
-import type { SequencerProject, Track } from "./project";
+import type { SequencerDocument } from "./document";
+import type { Track } from "./project";
 
 export function addDefaultTrackParameters(
-  project: SequencerProject,
+  document: SequencerDocument,
   track: Track
 ): void {
   const volumeDef = createParameterDefinition("Volume", "number", 0.8, {
@@ -27,13 +28,13 @@ export function addDefaultTrackParameters(
   const pan = createParameter("Pan", panDef.id, panDef.defaultValue);
   const mute = createParameter("Mute", muteDef.id, muteDef.defaultValue);
 
-  project.parameterDefinitions.add(volumeDef);
-  project.parameterDefinitions.add(panDef);
-  project.parameterDefinitions.add(muteDef);
+  document.parameterDefinitions.add(volumeDef);
+  document.parameterDefinitions.add(panDef);
+  document.parameterDefinitions.add(muteDef);
 
-  project.parameters.add(volume);
-  project.parameters.add(pan);
-  project.parameters.add(mute);
+  document.parameters.add(volume);
+  document.parameters.add(pan);
+  document.parameters.add(mute);
 
   track.parameters.push(volume.id, pan.id, mute.id);
 }

@@ -1,9 +1,9 @@
 import type {
   Pattern,
   PatternPlacement,
-  SequencerProject,
   Track
 } from "./project";
+import type { SequencerDocument } from "./document";
 import type { BeatTime } from "./events";
 import type { Timeline } from "./timeline";
 import { createId } from "./entity";
@@ -55,7 +55,7 @@ export function createTimeline(length = 16): Timeline {
   };
 }
 
-export function createProject(name = "Sequencer"): SequencerProject {
+export function createDocument(name = "Sequencer"): SequencerDocument {
   const pattern = createPattern();
   const track = createTrack("Track 1");
   const patterns = new Registry<Pattern>();
@@ -68,8 +68,8 @@ export function createProject(name = "Sequencer"): SequencerProject {
   patterns.add(pattern);
   tracks.add(track);
 
-  const project: SequencerProject = {
-    id: createId("project"),
+  const document: SequencerDocument = {
+    id: createId("document"),
     name,
     bpm: 120,
     timeline,
@@ -79,7 +79,11 @@ export function createProject(name = "Sequencer"): SequencerProject {
     parameters: new Registry<Parameter>()
   };
 
-  addDefaultTrackParameters(project, track);
+  addDefaultTrackParameters(document, track);
 
-  return project;
+  return document;
+}
+
+export function createProject(name = "Sequencer"): SequencerDocument {
+  return createDocument(name);
 }

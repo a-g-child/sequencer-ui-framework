@@ -1,10 +1,11 @@
 import { Registry } from "./registry";
-import type { Pattern, SequencerProject, Track } from "./project";
+import type { SequencerDocument } from "./document";
+import type { Pattern, Track } from "./project";
 import type { Parameter, ParameterDefinition } from "./parameter";
 import type { Timeline } from "./timeline";
 
-interface SerializedProject {
-  id: SequencerProject["id"];
+interface SerializedDocument {
+  id: SequencerDocument["id"];
   name: string;
   bpm: number;
   timeline: Timeline;
@@ -14,23 +15,23 @@ interface SerializedProject {
   parameters: Parameter[];
 }
 
-export function serializeProject(project: SequencerProject): string {
-  const serialized: SerializedProject = {
-    id: project.id,
-    name: project.name,
-    bpm: project.bpm,
-    timeline: project.timeline,
-    tracks: project.tracks.values(),
-    patterns: project.patterns.values(),
-    parameterDefinitions: project.parameterDefinitions.values(),
-    parameters: project.parameters.values()
+export function serializeDocument(document: SequencerDocument): string {
+  const serialized: SerializedDocument = {
+    id: document.id,
+    name: document.name,
+    bpm: document.bpm,
+    timeline: document.timeline,
+    tracks: document.tracks.values(),
+    patterns: document.patterns.values(),
+    parameterDefinitions: document.parameterDefinitions.values(),
+    parameters: document.parameters.values()
   };
 
   return JSON.stringify(serialized, null, 2);
 }
 
-export function deserializeProject(json: string): SequencerProject {
-  const serialized = JSON.parse(json) as SerializedProject;
+export function deserializeDocument(json: string): SequencerDocument {
+  const serialized = JSON.parse(json) as SerializedDocument;
   const tracks = new Registry<Track>();
   const patterns = new Registry<Pattern>();
   const parameterDefinitions = new Registry<ParameterDefinition>();
@@ -62,4 +63,12 @@ export function deserializeProject(json: string): SequencerProject {
     parameterDefinitions,
     parameters
   };
+}
+
+export function serializeProject(project: SequencerDocument): string {
+  return serializeDocument(project);
+}
+
+export function deserializeProject(json: string): SequencerDocument {
+  return deserializeDocument(json);
 }

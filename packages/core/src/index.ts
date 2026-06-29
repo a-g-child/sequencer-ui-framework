@@ -1,4 +1,6 @@
 export * from "./entity";
+export * from "./document";
+export * from "./document-store";
 export * from "./events";
 export * from "./project";
 export * from "./reference";
@@ -12,3 +14,6 @@ export * from "./timeline";
 export * from "./parameter";
 export * from "./parameter-owner";
 export * from "./default-parameters";
+export * from "./command";
+export * from "./history";
+export * from "./commands";
