@@ -11,13 +11,11 @@ import type {
 import type { SequencerDocument } from "./document";
 import type { Track } from "./project";
 
-interface DefaultParameterDefinition<
-  T extends ParameterValue = ParameterValue
-> {
+interface DefaultParameterDefinition {
   key: string;
   name: string;
   kind: ParameterKind;
-  defaultValue: T;
+  defaultValue: ParameterValue;
   min?: number;
   max?: number;
   step?: number;
@@ -46,16 +44,16 @@ export function addDefaultTrackParameters(
   }
 }
 
-function getOrCreateParameterDefinition<T extends ParameterValue>(
+function getOrCreateParameterDefinition(
   document: SequencerDocument,
-  defaultDefinition: DefaultParameterDefinition<T>
-): ParameterDefinition<T> {
+  defaultDefinition: DefaultParameterDefinition
+): ParameterDefinition {
   const existing = document.parameterDefinitions.findByKey(
     defaultDefinition.key
   );
 
   if (existing) {
-    return existing as ParameterDefinition<T>;
+    return existing;
   }
 
   const { key, name, kind, defaultValue, ...options } = defaultDefinition;

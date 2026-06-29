@@ -72,6 +72,14 @@ export class DocumentStore {
     this.events.emit({ type: "clipboard:changed", items: [] });
   }
 
+  previewParameterValue(parameterId: string, value: unknown): void {
+    this.events.emit({
+      type: "parameter-preview",
+      parameterId,
+      value
+    });
+  }
+
   addObserver(observer: DocumentObserver): void {
     this.observers.add(observer);
   }

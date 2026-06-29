@@ -6,14 +6,23 @@ export type DocumentEventType =
   | "operation:undone"
   | "operation:redone"
   | "selection:changed"
-  | "clipboard:changed";
+  | "clipboard:changed"
+  | "parameter-preview";
 
-export interface DocumentEvent {
-  type: DocumentEventType;
+export interface ParameterPreviewEvent {
+  type: "parameter-preview";
+  parameterId: string;
+  value: unknown;
+}
+
+export interface BaseDocumentEvent {
+  type: Exclude<DocumentEventType, "parameter-preview">;
   operation?: Operation;
   entityIds?: EntityId[];
   items?: Entity[];
 }
+
+export type DocumentEvent = BaseDocumentEvent | ParameterPreviewEvent;
 
 export type DocumentEventListener = (event: DocumentEvent) => void;
 
