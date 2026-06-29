@@ -33,6 +33,10 @@ export class SelectionModel {
     return [...this.items.values()];
   }
 
+  current(): SelectionItem | undefined {
+    return this.values()[0];
+  }
+
   clear(): void {
     this.items.clear();
   }

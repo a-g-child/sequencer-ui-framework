@@ -8,7 +8,6 @@
     SetPatternPlacementLoopCountOperation,
     SetParameterValueOperation,
     SequencerApplication,
-    getPlacement,
     validateDocument,
     type BeatTime,
     type SelectionItem,
@@ -18,12 +17,10 @@
     type ParameterValue,
     type Track
   } from '@sequencer/core'
-
-  interface PropertyRow {
-    parameter: Parameter
-    definition?: ParameterDefinition
-    value: ParameterValue
-  }
+  import {
+    buildInspectorView,
+    type InspectorView
+  } from './lib/inspector/inspector-model'
 
   interface TimelinePlacementView {
     id: string
@@ -35,18 +32,13 @@
     length: number
   }
 
-  interface SelectedPlacementView {
-    id: string
-    trackId: string
-    start: number
-    length: number
-    loopCount: number
-    target: string
-    targetName: string
-  }
-
   const app = new SequencerApplication()
   const store = app.documentStore
+  const initialTrack = store.document.tracks.values()[0]
+
+  if (initialTrack) {
+    store.setSelection({ type: 'track', id: initialTrack.id })
+  }
 
   onMount(() => {
     const unsubscribe = app.serviceEvents.subscribe(handleServiceEvent)
@@ -59,17 +51,12 @@
   })
 
   let tracks = store.document.tracks.values()
-  let selected: SelectionItem | undefined = tracks[0]
-    ? { type: 'track', id: tracks[0].id }
-    : undefined
+  let selected: SelectionItem | undefined = store.selection.current()
   let selectedTrackId = selected?.type === 'track' ? selected.id : ''
-  let selectedTrack: Track | undefined = tracks[0]
-  let selectedPlacement: SelectedPlacementView | undefined
-  let selectedTitle = selectedTrack ? 'Track' : ''
-  let selectedProperties = buildPropertyRows(selectedTrack)
+  let inspector: InspectorView = buildInspectorView(store)
   let timelinePlacements = buildTimelinePlacements()
   let timelineLength = calculateTimelineLength(timelinePlacements)
-  let draftName = selectedTrack?.name ?? ''
+  let draftName = inspector.type === 'track' ? inspector.title : ''
   let numberDrafts: Record<string, number> = {}
   let transportPlaying = app.editorTransport.playing
   let transportBpm = app.editorTransport.bpm
@@ -80,26 +67,6 @@
   let issues = validateDocument(store.document)
   let canUndo = store.history.canUndo()
   let canRedo = store.history.canRedo()
-
-  function buildPropertyRows(track: Track | undefined): PropertyRow[] {
-    if (!track) return []
-
-    return track.parameters.flatMap((parameterId) => {
-      const parameter = store.document.parameters.find(parameterId)
-
-      if (!parameter) return []
-
-      return [
-        {
-          parameter,
-          definition: store.document.parameterDefinitions.find(
-            parameter.definitionId
-          ),
-          value: parameter.value
-        }
-      ]
-    })
-  }
 
   function buildTimelinePlacements(): TimelinePlacementView[] {
     const placements: TimelinePlacementView[] = []
@@ -137,71 +104,18 @@
     return timelinePlacements.filter((placement) => placement.trackId === trackId)
   }
 
-  function rebuildSelectionView() {
-    selectedTrack = undefined
-    selectedTrackId = ''
-    selectedPlacement = undefined
-    selectedProperties = []
-    selectedTitle = ''
-    draftName = ''
-
-    if (!selected) {
-      selected = tracks[0] ? { type: 'track', id: tracks[0].id } : undefined
-    }
-
-    if (selected?.type === 'track') {
-      const track = store.document.tracks.find(selected.id)
-
-      if (track) {
-        selectedTrack = track
-        selectedTrackId = track.id
-        selectedTitle = 'Track'
-        selectedProperties = buildPropertyRows(track)
-        draftName = track.name
-        return
-      }
-    }
-
-    if (selected?.type === 'placement' && selected.parentId) {
-      try {
-        const placement = getPlacement(
-          store.document,
-          selected.parentId,
-          selected.id
-        )
-        const pattern = store.document.patterns.get(placement.target)
-
-        selectedTitle = 'Pattern Placement'
-        selectedPlacement = {
-          id: placement.id,
-          trackId: selected.parentId,
-          start: placement.start,
-          length: placement.length ?? pattern.length,
-          loopCount: placement.loopCount ?? 1,
-          target: placement.target,
-          targetName: pattern.name
-        }
-        return
-      } catch {
-        selected = undefined
-      }
-    }
-
-    if (tracks[0]) {
-      selected = { type: 'track', id: tracks[0].id }
-      selectedTrack = tracks[0]
-      selectedTrackId = tracks[0].id
-      selectedTitle = 'Track'
-      selectedProperties = buildPropertyRows(tracks[0])
-      draftName = tracks[0].name
-    }
+  function rebuildInspector() {
+    selected = store.selection.current()
+    selectedTrackId = selected?.type === 'track' ? selected.id : ''
+    inspector = buildInspectorView(store)
+    draftName = inspector.type === 'track' ? inspector.title : ''
   }
 
   function syncView() {
     tracks = store.document.tracks.values()
     timelinePlacements = buildTimelinePlacements()
     timelineLength = calculateTimelineLength(timelinePlacements)
-    rebuildSelectionView()
+    rebuildInspector()
     issues = validateDocument(store.document)
     canUndo = store.history.canUndo()
     canRedo = store.history.canRedo()
@@ -265,7 +179,7 @@
   function selectTrack(track: Track) {
     selected = { type: 'track', id: track.id }
     store.setSelection(selected)
-    rebuildSelectionView()
+    rebuildInspector()
   }
 
   function selectPlacement(placement: TimelinePlacementView) {
@@ -275,7 +189,7 @@
       parentId: placement.trackId
     }
     store.setSelection(selected)
-    rebuildSelectionView()
+    rebuildInspector()
   }
 
   function addTrack() {
@@ -294,13 +208,18 @@
   function renameSelectedTrack() {
     const nextName = draftName.trim()
 
-    if (!selectedTrack || !nextName || nextName === selectedTrack.name) {
-      draftName = selectedTrack?.name ?? ''
+    if (
+      inspector.type !== 'track' ||
+      selected?.type !== 'track' ||
+      !nextName ||
+      nextName === inspector.title
+    ) {
+      draftName = inspector.type === 'track' ? inspector.title : ''
       return
     }
 
     store.execute(
-      new RenameEntityOperation(store.document.tracks, selectedTrack.id, nextName)
+      new RenameEntityOperation(store.document.tracks, selected.id, nextName)
     )
     syncView()
   }
@@ -345,11 +264,14 @@
       ...numberDrafts,
       [parameterId]: value
     }
-    selectedProperties = selectedProperties.map((property) =>
-      property.parameter.id === parameterId
-        ? { ...property, value }
-        : property
-    )
+    inspector = {
+      ...inspector,
+      properties: inspector.properties.map((property) =>
+        property.parameter.id === parameterId
+          ? { ...property, value }
+          : property
+      )
+    }
     store.previewParameterValue(parameterId, value)
   }
 
@@ -369,16 +291,18 @@
   }
 
   function commitPlacementStart(nextStart: number) {
-    if (!selectedPlacement || !Number.isFinite(nextStart)) return
+    const placement = inspector.placement
+
+    if (!placement || !Number.isFinite(nextStart)) return
 
     const clampedStart = Math.max(0, nextStart)
 
-    if (clampedStart === selectedPlacement.start) return
+    if (clampedStart === placement.start) return
 
     store.execute(
       new MovePatternPlacementOperation(
-        selectedPlacement.trackId,
-        selectedPlacement.id,
+        placement.trackId,
+        placement.id,
         clampedStart
       )
     )
@@ -386,16 +310,18 @@
   }
 
   function commitPlacementLength(nextLength: number) {
-    if (!selectedPlacement || !Number.isFinite(nextLength)) return
+    const placement = inspector.placement
+
+    if (!placement || !Number.isFinite(nextLength)) return
 
     const clampedLength = Math.max(0.25, nextLength)
 
-    if (clampedLength === selectedPlacement.length) return
+    if (clampedLength === placement.length) return
 
     store.execute(
       new ResizePatternPlacementOperation(
-        selectedPlacement.trackId,
-        selectedPlacement.id,
+        placement.trackId,
+        placement.id,
         clampedLength
       )
     )
@@ -403,16 +329,18 @@
   }
 
   function commitPlacementLoopCount(nextLoopCount: number) {
-    if (!selectedPlacement || !Number.isFinite(nextLoopCount)) return
+    const placement = inspector.placement
+
+    if (!placement || !Number.isFinite(nextLoopCount)) return
 
     const clampedLoopCount = Math.max(1, Math.floor(nextLoopCount))
 
-    if (clampedLoopCount === selectedPlacement.loopCount) return
+    if (clampedLoopCount === placement.loopCount) return
 
     store.execute(
       new SetPatternPlacementLoopCountOperation(
-        selectedPlacement.trackId,
-        selectedPlacement.id,
+        placement.trackId,
+        placement.id,
         clampedLoopCount
       )
     )
@@ -601,10 +529,10 @@
         </div>
       </section>
 
-      {#if selectedTrack}
+      {#if inspector.type === 'track'}
         <div class="pane-heading">
-          <h2>{selectedTitle}</h2>
-          <span>{selectedTrack.key ?? 'track'}</span>
+          <h2>{inspector.title}</h2>
+          <span>{selected?.type ?? 'track'}</span>
         </div>
 
         <form class="rename-form" on:submit|preventDefault={renameSelectedTrack}>
@@ -616,89 +544,85 @@
         </form>
 
         <div class="property-list">
-          {#each selectedProperties as property (property.parameter.id)}
+          {#each inspector.properties as property (property.parameter.id)}
             <div class="property-row">
               <label for={`property-${property.parameter.id}`}>
-                {property.definition?.name ?? 'Missing property'}
+                {property.definition.name}
               </label>
 
-              {#if property.definition}
-                {#if property.definition.kind === 'number' && typeof property.value === 'number'}
-                  <div class="number-property">
-                    <input
-                      id={`property-${property.parameter.id}`}
-                      type="range"
-                      min={property.definition.min}
-                      max={property.definition.max}
-                      step={property.definition.step}
-                      value={property.value}
-                      on:input={(event) =>
-                        setNumberPreview(property.parameter.id, readNumberValue(event))}
-                      on:change={(event) =>
-                        commitNumberValue(property.parameter.id, readNumberValue(event))}
-                    />
-                    <input
-                      aria-label={`${property.definition.name} value`}
-                      type="number"
-                      min={property.definition.min}
-                      max={property.definition.max}
-                      step={property.definition.step}
-                      value={property.value}
-                      on:input={(event) =>
-                        setNumberPreview(property.parameter.id, readNumberValue(event))}
-                      on:change={(event) =>
-                        commitNumberValue(property.parameter.id, readNumberValue(event))}
-                    />
-                  </div>
-                {:else if property.definition.kind === 'boolean' && typeof property.value === 'boolean'}
+              {#if property.definition.kind === 'number' && typeof property.value === 'number'}
+                <div class="number-property">
                   <input
                     id={`property-${property.parameter.id}`}
-                    class="checkbox-property"
-                    type="checkbox"
-                    checked={property.value}
-                    on:change={(event) =>
-                      setParameterValue(property.parameter.id, readBooleanValue(event))}
-                  />
-                {:else if property.definition.kind === 'choice'}
-                  <select
-                    id={`property-${property.parameter.id}`}
-                    value={String(property.value)}
-                    on:change={(event) =>
-                      setParameterValue(
-                        property.parameter.id,
-                        readChoiceValue(event, property.definition)
-                      )}
-                  >
-                    {#each property.definition.options ?? [] as option}
-                      <option value={String(option.value)}>{option.label}</option>
-                    {/each}
-                  </select>
-                {:else if property.definition.kind === 'text' && typeof property.value === 'string'}
-                  <input
-                    id={`property-${property.parameter.id}`}
+                    type="range"
+                    min={property.definition.min}
+                    max={property.definition.max}
+                    step={property.definition.step}
                     value={property.value}
                     on:input={(event) =>
-                      setParameterValue(property.parameter.id, readTextValue(event))}
+                      setNumberPreview(property.parameter.id, readNumberValue(event))}
+                    on:change={(event) =>
+                      commitNumberValue(property.parameter.id, readNumberValue(event))}
                   />
-                {:else}
-                  <strong>{formatParameterValue(property.parameter)}</strong>
-                {/if}
+                  <input
+                    aria-label={`${property.definition.name} value`}
+                    type="number"
+                    min={property.definition.min}
+                    max={property.definition.max}
+                    step={property.definition.step}
+                    value={property.value}
+                    on:input={(event) =>
+                      setNumberPreview(property.parameter.id, readNumberValue(event))}
+                    on:change={(event) =>
+                      commitNumberValue(property.parameter.id, readNumberValue(event))}
+                  />
+                </div>
+              {:else if property.definition.kind === 'boolean' && typeof property.value === 'boolean'}
+                <input
+                  id={`property-${property.parameter.id}`}
+                  class="checkbox-property"
+                  type="checkbox"
+                  checked={property.value}
+                  on:change={(event) =>
+                    setParameterValue(property.parameter.id, readBooleanValue(event))}
+                />
+              {:else if property.definition.kind === 'choice'}
+                <select
+                  id={`property-${property.parameter.id}`}
+                  value={String(property.value)}
+                  on:change={(event) =>
+                    setParameterValue(
+                      property.parameter.id,
+                      readChoiceValue(event, property.definition)
+                    )}
+                >
+                  {#each property.definition.options ?? [] as option}
+                    <option value={String(option.value)}>{option.label}</option>
+                  {/each}
+                </select>
+              {:else if property.definition.kind === 'text' && typeof property.value === 'string'}
+                <input
+                  id={`property-${property.parameter.id}`}
+                  value={property.value}
+                  on:input={(event) =>
+                    setParameterValue(property.parameter.id, readTextValue(event))}
+                />
               {:else}
-                <strong>Missing</strong>
+                <strong>{formatParameterValue(property.parameter)}</strong>
               {/if}
             </div>
           {/each}
         </div>
-      {:else if selectedPlacement}
+      {:else if inspector.type === 'placement' && inspector.placement}
         <div class="pane-heading">
-          <h2>{selectedTitle}</h2>
-          <span>{selectedPlacement.id}</span>
+          <h2>{inspector.title}</h2>
+          <span>{inspector.placement.id}</span>
         </div>
 
         <div class="placement-inspector">
           <label>
             <span>Target Pattern</span>
-            <input value={selectedPlacement.targetName} readonly />
+            <input value={inspector.placement.targetPatternName} readonly />
           </label>
 
           <label>
@@ -707,7 +631,7 @@
               type="number"
               step="0.25"
               min="0"
-              value={selectedPlacement.start}
+              value={inspector.placement.start}
               on:change={(event) =>
                 commitPlacementStart(readNumberValue(event))}
             />
@@ -719,7 +643,7 @@
               type="number"
               step="0.25"
               min="0.25"
-              value={selectedPlacement.length}
+              value={inspector.placement.length}
               on:change={(event) =>
                 commitPlacementLength(readNumberValue(event))}
             />
@@ -731,7 +655,7 @@
               type="number"
               step="1"
               min="1"
-              value={selectedPlacement.loopCount}
+              value={inspector.placement.loopCount}
               on:change={(event) =>
                 commitPlacementLoopCount(readNumberValue(event))}
             />
