@@ -39,6 +39,16 @@ Document
 
 The document should not own history, UI stores, audio engine state, or observers. Those are runtime services around the document.
 
+## Timeline Events
+
+`TimelineEvent` is a generic document concept. It represents something that happens at a beat time inside a pattern, but it is not inherently audio, MIDI, or parameter automation.
+
+Music events may not target parameters. A note event, for example, can carry pitch, duration, and velocity as musical data without pretending to reference a parameter.
+
+Automation and control events should target parameters. If an event represents setting, ramping, or triggering an entity property, its `target` should reference the parameter being controlled.
+
+This keeps core timeline storage general while allowing domain packages, such as `@sequencer/music`, to define musical event shapes above core.
+
 ## Entities
 
 Every durable object is an entity:
