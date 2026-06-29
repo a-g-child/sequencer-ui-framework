@@ -1,3 +1,4 @@
+import { createId } from "./entity";
 import type { Entity } from "./entity";
 
 export type ParameterValue = number | string | boolean;
@@ -30,4 +31,34 @@ export interface Parameter<
 > extends Entity {
   definitionId: string;
   value: T;
+}
+
+export function createParameterDefinition<T extends ParameterValue>(
+  name: string,
+  kind: ParameterKind,
+  defaultValue: T,
+  options?: Partial<
+    Omit<ParameterDefinition<T>, "id" | "name" | "kind" | "defaultValue">
+  >
+): ParameterDefinition<T> {
+  return {
+    id: createId("paramdef"),
+    name,
+    kind,
+    defaultValue,
+    ...options
+  };
+}
+
+export function createParameter<T extends ParameterValue>(
+  name: string,
+  definitionId: string,
+  value: T
+): Parameter<T> {
+  return {
+    id: createId("param"),
+    name,
+    definitionId,
+    value
+  };
 }

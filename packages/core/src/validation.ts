@@ -36,6 +36,16 @@ export function validateProject(project: SequencerProject): ValidationIssue[] {
   }
 
   for (const track of project.tracks.values()) {
+    for (const parameterId of track.parameters) {
+      if (!project.parameters.has(parameterId)) {
+        issues.push({
+          level: "error",
+          message: `Track references missing parameter: ${parameterId}`,
+          entityId: track.id
+        });
+      }
+    }
+
     for (const placement of track.placements) {
       if (!project.patterns.has(placement.target)) {
         issues.push({

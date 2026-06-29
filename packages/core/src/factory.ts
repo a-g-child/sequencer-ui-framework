@@ -9,6 +9,7 @@ import type { Timeline } from "./timeline";
 import { createId } from "./entity";
 import { Registry } from "./registry";
 import type { Parameter, ParameterDefinition } from "./parameter";
+import { addDefaultTrackParameters } from "./default-parameters";
 
 export function createPattern(name = "Pattern A", length = 4): Pattern {
   return {
@@ -24,6 +25,7 @@ export function createTrack(name = "Track 1", target?: string): Track {
     id: createId("track"),
     name,
     placements: [],
+    parameters: [],
     target
   };
 }
@@ -66,7 +68,7 @@ export function createProject(name = "Sequencer"): SequencerProject {
   patterns.add(pattern);
   tracks.add(track);
 
-  return {
+  const project: SequencerProject = {
     id: createId("project"),
     name,
     bpm: 120,
@@ -76,4 +78,8 @@ export function createProject(name = "Sequencer"): SequencerProject {
     parameterDefinitions: new Registry<ParameterDefinition>(),
     parameters: new Registry<Parameter>()
   };
+
+  addDefaultTrackParameters(project, track);
+
+  return project;
 }
