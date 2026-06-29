@@ -21,16 +21,11 @@
     buildInspectorView,
     type InspectorView
   } from './lib/inspector/inspector-model'
-
-  interface TimelinePlacementView {
-    id: string
-    trackId: string
-    trackName: string
-    patternId: string
-    patternName: string
-    start: number
-    length: number
-  }
+  import {
+    buildTimelineView,
+    type TimelinePlacementView,
+    type TimelineView
+  } from './lib/timeline/timeline-model'
 
   const app = new SequencerApplication()
   const store = app.documentStore
@@ -54,8 +49,7 @@
   let selected: SelectionItem | undefined = store.selection.current()
   let selectedTrackId = selected?.type === 'track' ? selected.id : ''
   let inspector: InspectorView = buildInspectorView(store)
-  let timelinePlacements = buildTimelinePlacements()
-  let timelineLength = calculateTimelineLength(timelinePlacements)
+  let timeline: TimelineView = buildTimelineView(store)
   let draftName = inspector.type === 'track' ? inspector.title : ''
   let numberDrafts: Record<string, number> = {}
   let transportPlaying = app.editorTransport.playing
@@ -68,42 +62,6 @@
   let canUndo = store.history.canUndo()
   let canRedo = store.history.canRedo()
 
-  function buildTimelinePlacements(): TimelinePlacementView[] {
-    const placements: TimelinePlacementView[] = []
-
-    for (const track of store.document.tracks.values()) {
-      for (const placement of track.placements) {
-        const pattern = store.document.patterns.get(placement.target)
-
-        placements.push({
-          id: placement.id,
-          trackId: track.id,
-          trackName: track.name,
-          patternId: pattern.id,
-          patternName: pattern.name,
-          start: placement.start,
-          length: placement.length ?? pattern.length
-        })
-      }
-    }
-
-    return placements
-  }
-
-  function calculateTimelineLength(placements: TimelinePlacementView[]): BeatTime {
-    const lastBeat = placements.reduce(
-      (maximum, placement) =>
-        Math.max(maximum, placement.start + placement.length),
-      0
-    )
-
-    return Math.max(16, Math.ceil(lastBeat + 4))
-  }
-
-  function placementsForTrack(trackId: string): TimelinePlacementView[] {
-    return timelinePlacements.filter((placement) => placement.trackId === trackId)
-  }
-
   function rebuildInspector() {
     selected = store.selection.current()
     selectedTrackId = selected?.type === 'track' ? selected.id : ''
@@ -113,8 +71,7 @@
 
   function syncView() {
     tracks = store.document.tracks.values()
-    timelinePlacements = buildTimelinePlacements()
-    timelineLength = calculateTimelineLength(timelinePlacements)
+    timeline = buildTimelineView(store)
     rebuildInspector()
     issues = validateDocument(store.document)
     canUndo = store.history.canUndo()
@@ -455,28 +412,28 @@
       <section class="timeline-panel" aria-label="Timeline">
         <div class="pane-heading">
           <h2>Timeline</h2>
-          <span>{timelineLength} beats</span>
+          <span>{timeline.length} beats</span>
         </div>
 
         <div class="beat-ruler" aria-hidden="true">
           <span>0</span>
-          <span>{Math.floor(timelineLength / 2)}</span>
-          <span>{timelineLength}</span>
+          <span>{Math.floor(timeline.length / 2)}</span>
+          <span>{timeline.length}</span>
         </div>
 
         <div class="timeline-rows">
-          {#each tracks as track (track.id)}
+          {#each timeline.tracks as track (track.id)}
             <div class="timeline-row">
               <div class="track-label">
                 <strong>{track.name}</strong>
-                <span>{placementsForTrack(track.id).length} placements</span>
+                <span>{track.placementCount} placements</span>
               </div>
 
               <div class="track-lane">
-                {#each placementsForTrack(track.id) as placement (placement.id)}
+                {#each track.placements as placement (placement.id)}
                   <div
                     class="placement"
-                    style={`left: ${(placement.start / timelineLength) * 100}%; width: ${(placement.length / timelineLength) * 100}%;`}
+                    style={`left: ${(placement.start / timeline.length) * 100}%; width: ${(placement.length / timeline.length) * 100}%;`}
                   >
                     <button
                       type="button"
