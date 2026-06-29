@@ -382,7 +382,7 @@ h2 {
   height: 18px;
   min-width: 34px;
   min-height: 18px;
-  padding: 0 6px;
+  padding: 0 12px 0 6px;
   border: 1px solid rgba(49, 79, 127, 0.48);
   border-radius: 4px;
   background: #d9e4f6;
@@ -391,6 +391,21 @@ h2 {
   font-weight: 800;
   line-height: 1;
   overflow: hidden;
+}
+
+.note-resize-handle {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  width: 8px;
+  border-left: 1px solid rgba(49, 79, 127, 0.3);
+  cursor: ew-resize;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(49, 79, 127, 0.18)
+  );
 }
 
 .note.selected {
