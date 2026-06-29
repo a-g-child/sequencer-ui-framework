@@ -5,8 +5,9 @@ import {
   type ParameterDefinition,
   type ParameterValue
 } from '@sequencer/core'
+import { getNote } from '@sequencer/music'
 
-export type InspectorTargetType = 'none' | 'track' | 'placement'
+export type InspectorTargetType = 'none' | 'track' | 'placement' | 'note'
 
 export type InspectorPropertyView = {
   parameter: Parameter
@@ -24,11 +25,21 @@ export type PlacementInspectorView = {
   targetPatternName: string
 }
 
+export type NoteInspectorView = {
+  id: string
+  patternId: string
+  time: number
+  duration: number
+  pitch: number
+  velocity: number
+}
+
 export type InspectorView = {
   type: InspectorTargetType
   title: string
   properties: InspectorPropertyView[]
   placement?: PlacementInspectorView
+  note?: NoteInspectorView
 }
 
 export function buildInspectorView(store: DocumentStore): InspectorView {
@@ -91,6 +102,24 @@ export function buildInspectorView(store: DocumentStore): InspectorView {
         loopCount: placement.loopCount ?? 1,
         targetPatternId: pattern.id,
         targetPatternName: pattern.name
+      }
+    }
+  }
+
+  if (selection.type === 'note' && selection.parentId) {
+    const note = getNote(store.document, selection.parentId, selection.id)
+
+    return {
+      type: 'note',
+      title: 'Note',
+      properties: [],
+      note: {
+        id: note.id,
+        patternId: selection.parentId,
+        time: note.time,
+        duration: note.duration,
+        pitch: note.value.pitch,
+        velocity: note.value.velocity
       }
     }
   }

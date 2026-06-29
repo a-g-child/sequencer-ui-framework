@@ -8,6 +8,7 @@
     type Parameter,
     type ParameterDefinition,
     type ParameterValue,
+    type Pattern,
     type Track
   } from '@sequencer/core'
   import { AppController } from './lib/app-controller'
@@ -20,6 +21,11 @@
     type TimelinePlacementView,
     type TimelineView
   } from './lib/timeline/timeline-model'
+  import {
+    buildPianoRollView,
+    type PianoRollNoteView,
+    type PianoRollView
+  } from './lib/editors/piano-roll/piano-roll-model'
 
   const app = new SequencerApplication()
   const controller = new AppController(app)
@@ -41,6 +47,10 @@
   let selectedTrackId = selected?.type === 'track' ? selected.id : ''
   let inspector: InspectorView = buildInspectorView(store)
   let timeline: TimelineView = buildTimelineView(store)
+  let activePattern: Pattern | undefined = store.document.patterns.values()[0]
+  let pianoRoll: PianoRollView | undefined = activePattern
+    ? buildPianoRollView(activePattern)
+    : undefined
   let draftName = inspector.type === 'track' ? inspector.title : ''
   let numberDrafts: Record<string, number> = {}
   let transportPlaying = app.editorTransport.playing
@@ -63,6 +73,10 @@
   function syncView() {
     tracks = store.document.tracks.values()
     timeline = buildTimelineView(store)
+    activePattern = activePattern
+      ? store.document.patterns.find(activePattern.id)
+      : store.document.patterns.values()[0]
+    pianoRoll = activePattern ? buildPianoRollView(activePattern) : undefined
     rebuildInspector()
     issues = validateDocument(store.document)
     canUndo = store.history.canUndo()
@@ -129,6 +143,11 @@
 
   function selectPlacement(placement: TimelinePlacementView) {
     controller.selectPlacement(placement)
+    rebuildInspector()
+  }
+
+  function selectNote(note: PianoRollNoteView) {
+    controller.selectNote(note)
     rebuildInspector()
   }
 
@@ -206,6 +225,37 @@
     if (!controller.setPlacementLoopCount(inspector.placement, nextLoopCount)) {
       return
     }
+
+    syncView()
+  }
+
+  function addC4Note() {
+    if (!pianoRoll) return
+
+    controller.createNote(pianoRoll.patternId, 0, 1, 60)
+    syncView()
+  }
+
+  function commitNoteTime(nextTime: number) {
+    if (!controller.setNoteTime(inspector.note, nextTime)) return
+
+    syncView()
+  }
+
+  function commitNotePitch(nextPitch: number) {
+    if (!controller.setNotePitch(inspector.note, nextPitch)) return
+
+    syncView()
+  }
+
+  function commitNoteDuration(nextDuration: number) {
+    if (!controller.setNoteDuration(inspector.note, nextDuration)) return
+
+    syncView()
+  }
+
+  function deleteSelectedNote() {
+    if (!controller.deleteNote(inspector.note)) return
 
     syncView()
   }
@@ -392,6 +442,78 @@
         </div>
       </section>
 
+      {#if pianoRoll}
+        <section class="piano-roll-panel" aria-label="Piano roll">
+          <div class="pane-heading">
+            <h2>Piano Roll</h2>
+            <span>{pianoRoll.patternName}</span>
+          </div>
+
+          <div class="piano-roll-toolbar">
+            <button type="button" on:click={addC4Note}>Add C4</button>
+          </div>
+
+          <div
+            class="piano-roll-frame"
+          >
+            <div class="piano-roll-ruler" aria-hidden="true">
+              <span>Beat</span>
+              <div class="piano-roll-ruler-track">
+                {#each pianoRoll.beatMarkers as marker}
+                  <span style={`left: ${marker.position}%`}>
+                    {marker.label}
+                  </span>
+                {/each}
+              </div>
+            </div>
+
+            <div class="piano-roll-body">
+              <div
+                class="pitch-ruler"
+                style={`height: ${pianoRoll.pitchCount * 20}px;`}
+                aria-hidden="true"
+              >
+                <span>{pianoRoll.highestPitch}</span>
+                <span>{pianoRoll.lowestPitch}</span>
+              </div>
+
+              <div
+                class="piano-roll"
+                style={`height: ${pianoRoll.pitchCount * 20}px;`}
+              >
+                <div class="piano-roll-grid" aria-hidden="true">
+                  {#each pianoRoll.subdivisionLines as line}
+                    <span
+                      class:beat-line={line.isBeat}
+                      style={`left: ${line.position}%`}
+                    ></span>
+                  {/each}
+
+                  {#each pianoRoll.pitchRows as pitch}
+                    <span
+                      class="pitch-line"
+                      style={`top: ${(pianoRoll.highestPitch - pitch) * 20}px`}
+                    ></span>
+                  {/each}
+                </div>
+
+                {#each pianoRoll.notes as note (note.id)}
+                  <button
+                    type="button"
+                    class="note"
+                    class:selected={selected?.type === 'note' && selected.id === note.id}
+                    style={`left: ${(note.time / pianoRoll.length) * 100}%; width: ${(note.duration / pianoRoll.length) * 100}%; top: ${(pianoRoll.highestPitch - note.pitch) * 20 + 1}px;`}
+                    on:click={() => selectNote(note)}
+                  >
+                    {note.pitch}
+                  </button>
+                {/each}
+              </div>
+            </div>
+          </div>
+        </section>
+      {/if}
+
       {#if inspector.type === 'track'}
         <div class="pane-heading">
           <h2>{inspector.title}</h2>
@@ -523,6 +645,59 @@
                 commitPlacementLoopCount(readNumberValue(event))}
             />
           </label>
+        </div>
+      {:else if inspector.type === 'note' && inspector.note}
+        <div class="pane-heading">
+          <h2>{inspector.title}</h2>
+          <span>{inspector.note.id}</span>
+        </div>
+
+        <div class="placement-inspector">
+          <label>
+            <span>Pitch</span>
+            <input
+              type="number"
+              step="1"
+              min="0"
+              max="127"
+              value={inspector.note.pitch}
+              on:change={(event) =>
+                commitNotePitch(readNumberValue(event))}
+            />
+          </label>
+
+          <label>
+            <span>Start</span>
+            <input
+              type="number"
+              step="0.25"
+              min="0"
+              value={inspector.note.time}
+              on:change={(event) =>
+                commitNoteTime(readNumberValue(event))}
+            />
+          </label>
+
+          <label>
+            <span>Length</span>
+            <input
+              type="number"
+              step="0.25"
+              min="0.25"
+              value={inspector.note.duration}
+              on:change={(event) =>
+                commitNoteDuration(readNumberValue(event))}
+            />
+          </label>
+
+          <label>
+            <span>Velocity</span>
+            <input value={inspector.note.velocity} readonly />
+          </label>
+        </div>
+
+        <div class="inspector-actions">
+          <button type="button" on:click={deleteSelectedNote}>Delete Note</button>
         </div>
       {:else}
         <div class="empty-state">

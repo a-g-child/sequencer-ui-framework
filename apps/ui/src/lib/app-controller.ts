@@ -10,7 +10,15 @@ import {
   type SequencerApplication,
   type Track
 } from '@sequencer/core'
+import {
+  CreateNoteOperation,
+  DeleteNoteOperation,
+  MoveNoteOperation,
+  ResizeNoteOperation
+} from '@sequencer/music'
 import type { PlacementInspectorView } from './inspector/inspector-model'
+import type { NoteInspectorView } from './inspector/inspector-model'
+import type { PianoRollNoteView } from './editors/piano-roll/piano-roll-model'
 import type { TimelinePlacementView } from './timeline/timeline-model'
 
 export class AppController {
@@ -48,6 +56,14 @@ export class AppController {
       type: 'placement',
       id: placement.id,
       parentId: placement.trackId
+    })
+  }
+
+  selectNote(note: PianoRollNoteView): void {
+    this.app.documentStore.setSelection({
+      type: 'note',
+      id: note.id,
+      parentId: note.patternId
     })
   }
 
@@ -188,6 +204,74 @@ export class AppController {
         clampedLoopCount
       )
     )
+    return true
+  }
+
+  createNote(
+    patternId: string,
+    time: BeatTime,
+    duration: BeatTime,
+    pitch: number
+  ): void {
+    const operation = new CreateNoteOperation(patternId, time, duration, pitch)
+
+    this.app.documentStore.execute(operation)
+    this.app.documentStore.setSelection({
+      type: 'note',
+      id: operation.note.id,
+      parentId: patternId
+    })
+  }
+
+  setNoteTime(note: NoteInspectorView | undefined, nextTime: number): boolean {
+    if (!note || !Number.isFinite(nextTime)) return false
+
+    const clampedTime = Math.max(0, nextTime)
+
+    if (clampedTime === note.time) return false
+
+    this.app.documentStore.execute(
+      new MoveNoteOperation(note.patternId, note.id, clampedTime, note.pitch)
+    )
+    return true
+  }
+
+  setNotePitch(note: NoteInspectorView | undefined, nextPitch: number): boolean {
+    if (!note || !Number.isFinite(nextPitch)) return false
+
+    const clampedPitch = Math.min(127, Math.max(0, Math.round(nextPitch)))
+
+    if (clampedPitch === note.pitch) return false
+
+    this.app.documentStore.execute(
+      new MoveNoteOperation(note.patternId, note.id, note.time, clampedPitch)
+    )
+    return true
+  }
+
+  setNoteDuration(
+    note: NoteInspectorView | undefined,
+    nextDuration: number
+  ): boolean {
+    if (!note || !Number.isFinite(nextDuration)) return false
+
+    const clampedDuration = Math.max(0.25, nextDuration)
+
+    if (clampedDuration === note.duration) return false
+
+    this.app.documentStore.execute(
+      new ResizeNoteOperation(note.patternId, note.id, clampedDuration)
+    )
+    return true
+  }
+
+  deleteNote(note: NoteInspectorView | undefined): boolean {
+    if (!note) return false
+
+    this.app.documentStore.execute(
+      new DeleteNoteOperation(note.patternId, note.id)
+    )
+    this.app.documentStore.clearSelection()
     return true
   }
 

@@ -86,7 +86,7 @@ export function validateDocument(document: SequencerDocument): ValidationIssue[]
 
   for (const pattern of document.patterns.values()) {
     for (const event of pattern.events) {
-      if (!document.parameters.has(event.target)) {
+      if (event.target && !document.parameters.has(event.target)) {
         issues.push({
           level: "error",
           message: `Timeline event references missing parameter: ${event.target}`,
