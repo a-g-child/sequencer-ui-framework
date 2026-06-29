@@ -1,10 +1,10 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import {
     AddTrackOperation,
-    DocumentStore,
     RenameEntityOperation,
     SetParameterValueOperation,
-    createDocument,
+    SequencerApplication,
     validateDocument,
     type Parameter,
     type ParameterDefinition,
@@ -18,7 +18,16 @@
     value: ParameterValue
   }
 
-  const store = new DocumentStore(createDocument())
+  const app = new SequencerApplication()
+  const store = app.documentStore
+
+  onMount(() => {
+    void app.initialise()
+
+    return () => {
+      void app.shutdown()
+    }
+  })
 
   let tracks = store.document.tracks.values()
   let selectedTrackId = tracks[0]?.id ?? ''

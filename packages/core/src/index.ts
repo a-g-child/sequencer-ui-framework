@@ -1,4 +1,5 @@
 export * from "./entity";
+export * from "./application";
 export * from "./clipboard";
 export * from "./document";
 export * from "./document-event-bus";
@@ -8,6 +9,8 @@ export * from "./project";
 export * from "./reference";
 export * from "./registry";
 export * from "./selection";
+export * from "./service";
+export * from "./runtime-preview-service";
 export * from "./transport";
 export * from "./factory";
 export * from "./serialization";
