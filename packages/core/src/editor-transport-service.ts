@@ -20,6 +20,12 @@ export class EditorTransportService implements Service {
 
   initialise(context: ServiceContext): void {
     this.context = context;
+    this.emit("transport:playing-changed", { playing: this.state.playing });
+    this.emit("transport:tempo-changed", { bpm: this.state.bpm });
+    this.emit("transport:beat-changed", {
+      currentBeat: this.state.currentBeat,
+      currentStep: this.state.currentStep
+    });
   }
 
   get playing(): boolean {

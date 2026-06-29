@@ -22,6 +22,7 @@ export * from "./serialization";
 export * from "./relationship";
 export * from "./validation";
 export * from "./timeline";
+export * from "./timeline-lookup";
 export * from "./parameter";
 export * from "./parameter-owner";
 export * from "./default-parameter-definitions";

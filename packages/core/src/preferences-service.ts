@@ -9,6 +9,11 @@ export class PreferencesService implements Service {
 
   initialise(context: ServiceContext): void {
     this.context = context;
+    this.context.events.emit({
+      type: "preferences:loaded",
+      serviceId: this.id,
+      payload: { status: "loaded" }
+    });
   }
 
   set<T>(key: string, value: T): void {

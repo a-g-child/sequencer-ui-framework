@@ -72,6 +72,7 @@ select:focus-visible {
 
 .topbar,
 .workspace,
+.runtime-status,
 .statusbar {
   border: 1px solid var(--border);
   background: var(--surface);
@@ -258,6 +259,115 @@ h2 {
   gap: 18px;
 }
 
+.timeline-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.beat-ruler {
+  min-height: 22px;
+  margin-left: 132px;
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.timeline-rows {
+  display: grid;
+  gap: 8px;
+}
+
+.timeline-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.track-label {
+  min-width: 0;
+  min-height: 76px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  display: grid;
+  align-content: center;
+  gap: 3px;
+}
+
+.track-label strong,
+.placement-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-label span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.track-lane {
+  position: relative;
+  min-width: 0;
+  min-height: 76px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background:
+    linear-gradient(to right, rgba(49, 79, 127, 0.14) 1px, transparent 1px),
+    var(--surface);
+  background-size: 25% 100%;
+}
+
+.placement {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  min-width: 92px;
+  padding: 8px;
+  border: 1px solid rgba(37, 111, 104, 0.45);
+  border-radius: 6px;
+  background: #d8ece7;
+  box-shadow: 0 8px 18px rgba(24, 32, 28, 0.08);
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 3px;
+}
+
+.placement-title {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.placement-meta {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.placement-controls {
+  display: grid;
+  grid-template-columns: repeat(4, 24px);
+  gap: 4px;
+  align-content: end;
+}
+
+.placement-controls button {
+  width: 24px;
+  min-height: 22px;
+  padding: 0;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
 .rename-form {
   display: grid;
   gap: 8px;
@@ -348,6 +458,38 @@ select {
   color: var(--muted);
 }
 
+.runtime-status {
+  min-height: 58px;
+  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.runtime-status div {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  display: grid;
+  gap: 2px;
+}
+
+.runtime-status span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.runtime-status strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
 .statusbar {
   min-height: 44px;
   padding: 0 14px;
@@ -400,6 +542,10 @@ select {
 
   .workspace {
     grid-template-columns: 1fr;
+  }
+
+  .runtime-status {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .track-pane {

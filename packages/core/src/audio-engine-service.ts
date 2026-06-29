@@ -9,6 +9,11 @@ export class AudioEngineService implements Service {
 
   initialise(context: ServiceContext): void {
     this.context = context;
+    this.context.events.emit({
+      type: "audio-engine:status-changed",
+      serviceId: this.id,
+      payload: { status: "idle" }
+    });
   }
 
   play(): void {
