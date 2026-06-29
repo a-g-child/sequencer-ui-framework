@@ -394,12 +394,27 @@ h2 {
 
 .beat-ruler {
   min-height: 22px;
-  margin-left: 132px;
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 12px;
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
+}
+
+.beat-ruler > span {
+  justify-self: end;
+}
+
+.timeline-ruler-track {
+  position: relative;
+  min-width: 0;
+}
+
+.timeline-ruler-track span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-1px);
 }
 
 .timeline-rows {
@@ -447,14 +462,31 @@ h2 {
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
-  background:
-    linear-gradient(to right, rgba(49, 79, 127, 0.14) 1px, transparent 1px),
-    var(--surface);
-  background-size: 25% 100%;
+  background: var(--surface);
+}
+
+.track-lane-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.track-lane-grid span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(103, 115, 109, 0.12);
+}
+
+.track-lane-grid .beat-line {
+  background: rgba(49, 79, 127, 0.24);
 }
 
 .placement {
   position: absolute;
+  z-index: 2;
   top: 8px;
   bottom: 8px;
   min-width: 92px;

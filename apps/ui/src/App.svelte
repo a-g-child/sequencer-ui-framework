@@ -372,9 +372,14 @@
         </div>
 
         <div class="beat-ruler" aria-hidden="true">
-          <span>0</span>
-          <span>{Math.floor(timeline.length / 2)}</span>
-          <span>{timeline.length}</span>
+          <span>Beat</span>
+          <div class="timeline-ruler-track">
+            {#each timeline.beatMarkers as marker}
+              <span style={`left: ${marker.position}%`}>
+                {marker.label}
+              </span>
+            {/each}
+          </div>
         </div>
 
         <div class="timeline-rows">
@@ -386,6 +391,15 @@
               </div>
 
               <div class="track-lane">
+                <div class="track-lane-grid" aria-hidden="true">
+                  {#each timeline.subdivisionLines as line}
+                    <span
+                      class:beat-line={line.isBeat}
+                      style={`left: ${line.position}%`}
+                    ></span>
+                  {/each}
+                </div>
+
                 {#each track.placements as placement (placement.id)}
                   <div
                     class="placement"
