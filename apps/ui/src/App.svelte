@@ -26,11 +26,33 @@
     type PianoRollNoteView,
     type PianoRollView
   } from './lib/editors/piano-roll/piano-roll-model'
+  import { EDITORS } from './lib/editors/editor-registry';
+  import type { EditorKind } from './lib/editors/editor-types';
+  import { DrawNoteTool } from './lib/editors/pattern/tools/draw-note-tool';
+  import { EraseNoteTool } from './lib/editors/pattern/tools/erase-note-tool';
+  import { MoveNoteTool } from './lib/editors/pattern/tools/move-note-tool';
+  import { SelectTool } from './lib/editors/pattern/tools/select-tool';
+  import type {
+    PatternInteractionContext,
+    PatternOverlayNote,
+    PatternTool
+  } from './lib/editors/pattern/pattern-tool';
+
+  
 
   const app = new SequencerApplication()
   const controller = new AppController(app)
   const store = app.documentStore
   controller.selectInitialTrack()
+  const patternTools: PatternTool[] = [
+    new SelectTool(),
+    new DrawNoteTool(),
+    new EraseNoteTool(),
+    new MoveNoteTool()
+  ];
+  const pianoRollRowHeight = 20;
+  const middleCPitch = 60;
+  const snap = 0.25;
 
   onMount(() => {
     const unsubscribe = app.serviceEvents.subscribe(handleServiceEvent)
@@ -62,6 +84,9 @@
   let issues = validateDocument(store.document)
   let canUndo = store.history.canUndo()
   let canRedo = store.history.canRedo()
+  let activeEditor: EditorKind = 'piano-roll';
+  let activePatternTool = patternTools[0];
+  let patternInteractionContext: PatternInteractionContext | undefined;
 
   function rebuildInspector() {
     selected = store.selection.current()
@@ -182,6 +207,180 @@
     if (!controller.resizePlacement(placement, delta)) return
 
     syncView()
+  }
+
+  function setActivePatternTool(tool: PatternTool) {
+    activePatternTool.cancel?.();
+    activePatternTool = tool;
+    refreshPatternOverlay();
+  }
+
+  function selectedPianoRollNotes(): PianoRollNoteView[] {
+    if (!pianoRoll) return [];
+
+    if (selected?.type !== 'note') return [];
+    const selectedNoteId = selected.id;
+
+    return pianoRoll.notes.filter((note) => note.id === selectedNoteId);
+  }
+
+  function buildPatternInteractionContext(
+    event: PointerEvent,
+    hoveredNote?: PianoRollNoteView
+  ): PatternInteractionContext | undefined {
+    if (!pianoRoll) return undefined;
+
+    const eventTarget = event.currentTarget as HTMLElement;
+    const target = eventTarget.classList.contains('piano-roll')
+      ? eventTarget
+      : eventTarget.closest<HTMLElement>('.piano-roll');
+
+    if (!target) return undefined;
+
+    const rect = target.getBoundingClientRect();
+
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top - target.clientTop;
+    const rowHeight = target.clientHeight / pianoRoll.pitchCount;
+
+    const timeRaw = (x / rect.width) * pianoRoll.length;
+    const time = Math.floor(timeRaw / snap) * snap;
+
+    const pitch = Math.max(
+      pianoRoll.lowestPitch,
+      Math.min(
+        pianoRoll.highestPitch,
+        pianoRoll.highestPitch - Math.floor(y / rowHeight)
+      )
+    );
+
+    return {
+      controller,
+      patternId: pianoRoll.patternId,
+      pointer: { x, y },
+      musical: {
+        beat: time,
+        pitch,
+        snap
+      },
+      hoveredNote,
+      selectedNotes: selectedPianoRollNotes()
+    };
+  }
+
+  function refreshPatternOverlay() {
+    patternInteractionContext = patternInteractionContext
+      ? { ...patternInteractionContext }
+      : undefined;
+  }
+
+  function patternOverlayNotes(): PatternOverlayNote[] {
+    if (!patternInteractionContext) return [];
+
+    return activePatternTool.drawOverlay?.(patternInteractionContext)?.notes ?? [];
+  }
+
+  function handlePianoRollPointerEnter(event: PointerEvent) {
+    const context = buildPatternInteractionContext(event);
+
+    if (!context) return;
+
+    patternInteractionContext = context;
+    activePatternTool.pointerEnter?.(context);
+    refreshPatternOverlay();
+  }
+
+  function handlePianoRollPointerDown(event: PointerEvent) {
+    const context = buildPatternInteractionContext(event);
+
+    if (!context) return;
+
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    patternInteractionContext = context;
+    activePatternTool.pointerDown(context);
+
+    syncView();
+    refreshPatternOverlay();
+  }
+
+  function handlePianoRollPointerMove(event: PointerEvent) {
+    const context = buildPatternInteractionContext(event);
+
+    if (!context) return;
+
+    patternInteractionContext = context;
+    activePatternTool.pointerMove?.(context);
+    refreshPatternOverlay();
+  }
+
+  function handlePianoRollPointerUp(event: PointerEvent) {
+    const context = buildPatternInteractionContext(event);
+
+    if (!context) return;
+
+    patternInteractionContext = context;
+    activePatternTool.pointerUp?.(context);
+    syncView();
+    refreshPatternOverlay();
+  }
+
+  function handlePianoRollPointerLeave(event: PointerEvent) {
+    const context = buildPatternInteractionContext(event);
+
+    if (!context) return;
+
+    patternInteractionContext = context;
+    activePatternTool.pointerLeave?.(context);
+
+    if (activePatternTool.id !== 'move-note') {
+      patternInteractionContext = undefined;
+    }
+
+    refreshPatternOverlay();
+  }
+
+  function handleNotePointerDown(event: PointerEvent, note: PianoRollNoteView) {
+    const context = buildPatternInteractionContext(event, note);
+
+    if (!context) return;
+
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    patternInteractionContext = context;
+    activePatternTool.pointerDown(context);
+    refreshPatternOverlay();
+
+    if (activePatternTool.id !== 'move-note') {
+      syncView();
+      refreshPatternOverlay();
+    }
+  }
+
+  function handleNotePointerMove(event: PointerEvent, note: PianoRollNoteView) {
+    const context = buildPatternInteractionContext(event, note);
+
+    if (!context) return;
+
+    patternInteractionContext = context;
+    activePatternTool.pointerMove?.(context);
+    refreshPatternOverlay();
+  }
+
+  function handleNotePointerUp(event: PointerEvent, note: PianoRollNoteView) {
+    const context = buildPatternInteractionContext(event, note);
+
+    if (!context) return;
+
+    patternInteractionContext = context;
+    activePatternTool.pointerUp?.(context);
+    syncView();
+    refreshPatternOverlay();
+  }
+
+  function centerPianoRollOnMiddleC(node: HTMLDivElement) {
+    const middleCOffset =
+      (127 - middleCPitch) * pianoRollRowHeight - node.clientHeight / 2;
+
+    node.scrollTop = Math.max(0, middleCOffset);
   }
 
   function setNumberPreview(parameterId: string, value: number) {
@@ -371,163 +570,147 @@
           <span>{timeline.length} beats</span>
         </div>
 
-        <div class="beat-ruler" aria-hidden="true">
-          <span>Beat</span>
-          <div class="timeline-ruler-track">
-            {#each timeline.beatMarkers as marker}
-              <span style={`left: ${marker.position}%`}>
-                {marker.label}
-              </span>
-            {/each}
-          </div>
-        </div>
+    
 
-        <div class="timeline-rows">
-          {#each timeline.tracks as track (track.id)}
-            <div class="timeline-row">
-              <div class="track-label">
-                <strong>{track.name}</strong>
-                <span>{track.placementCount} placements</span>
-              </div>
-
-              <div class="track-lane">
-                <div class="track-lane-grid" aria-hidden="true">
-                  {#each timeline.subdivisionLines as line}
-                    <span
-                      class:beat-line={line.isBeat}
-                      style={`left: ${line.position}%`}
-                    ></span>
-                  {/each}
-                </div>
-
-                {#each track.placements as placement (placement.id)}
-                  <div
-                    class="placement"
-                    style={`left: ${(placement.start / timeline.length) * 100}%; width: ${(placement.length / timeline.length) * 100}%;`}
-                  >
-                    <button
-                      type="button"
-                      class="placement-select"
-                      class:selected={selected?.type === 'placement' && selected.id === placement.id}
-                      on:click={() => selectPlacement(placement)}
-                    >
-                      <span class="placement-title">{placement.patternName}</span>
-                      <span class="placement-meta">
-                        {placement.start} / {placement.length}
-                      </span>
-                    </button>
-                    <div class="placement-controls" aria-label={`${placement.patternName} placement controls`}>
-                      <button
-                        type="button"
-                        aria-label={`Move ${placement.patternName} left`}
-                        disabled={placement.start <= 0}
-                        on:click={() => movePlacement(placement, -1)}
-                      >
-                        &lt;
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Move ${placement.patternName} right`}
-                        on:click={() => movePlacement(placement, 1)}
-                      >
-                        &gt;
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Shorten ${placement.patternName}`}
-                        disabled={placement.length <= 1}
-                        on:click={() => resizePlacement(placement, -1)}
-                      >
-                        -
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Lengthen ${placement.patternName}`}
-                        on:click={() => resizePlacement(placement, 1)}
-                      >
-                        +
-                      </button>
-                    </div>
-                  </div>
-                {/each}
-              </div>
-            </div>
-          {/each}
-        </div>
+        
       </section>
-
-      {#if pianoRoll}
-        <section class="piano-roll-panel" aria-label="Piano roll">
-          <div class="pane-heading">
-            <h2>Piano Roll</h2>
-            <span>{pianoRoll.patternName}</span>
-          </div>
-
-          <div class="piano-roll-toolbar">
-            <button type="button" on:click={addC4Note}>Add C4</button>
-          </div>
-
-          <div
-            class="piano-roll-frame"
+      <div class="editor-tabs">
+        {#each EDITORS as editor}
+          <button
+            class:active={activeEditor === editor.id}
+            on:click={() => activeEditor = editor.id}
           >
-            <div class="piano-roll-ruler" aria-hidden="true">
-              <span>Beat</span>
-              <div class="piano-roll-ruler-track">
-                {#each pianoRoll.beatMarkers as marker}
-                  <span style={`left: ${marker.position}%`}>
-                    {marker.label}
-                  </span>
-                {/each}
+            {editor.name}
+          </button>
+        {/each}
+      </div>
+      {#if activeEditor === 'piano-roll'}
+          {#if pianoRoll}
+            <section class="piano-roll-panel" aria-label="Piano roll">
+              <div class="pane-heading">
+                <h2>Piano Roll</h2>
+                <span>{pianoRoll.patternName}</span>
               </div>
-            </div>
 
-            <div class="piano-roll-body">
-              <div
-                class="pitch-ruler"
-                style={`height: ${pianoRoll.pitchCount * 20}px;`}
-                aria-hidden="true"
-              >
-                <span>{pianoRoll.highestPitch}</span>
-                <span>{pianoRoll.lowestPitch}</span>
+              <div class="piano-roll-toolbar">
+                <button type="button" on:click={addC4Note}>Add C4</button>
               </div>
 
               <div
-                class="piano-roll"
-                style={`height: ${pianoRoll.pitchCount * 20}px;`}
+                class="piano-roll-frame"
               >
-                <div class="piano-roll-grid" aria-hidden="true">
-                  {#each pianoRoll.subdivisionLines as line}
-                    <span
-                      class:beat-line={line.isBeat}
-                      style={`left: ${line.position}%`}
-                    ></span>
-                  {/each}
-
-                  {#each pianoRoll.pitchRows as pitch}
-                    <span
-                      class="pitch-line"
-                      style={`top: ${(pianoRoll.highestPitch - pitch) * 20}px`}
-                    ></span>
-                  {/each}
+                <div class="piano-roll-ruler" aria-hidden="true">
+                  <span>Beat</span>
+                  <div class="piano-roll-ruler-track">
+                    {#each pianoRoll.beatMarkers as marker}
+                      <span style={`left: ${marker.position}%`}>
+                        {marker.label}
+                      </span>
+                    {/each}
+                  </div>
                 </div>
 
-                {#each pianoRoll.notes as note (note.id)}
-                  <button
-                    type="button"
-                    class="note"
-                    class:selected={selected?.type === 'note' && selected.id === note.id}
-                    style={`left: ${(note.time / pianoRoll.length) * 100}%; width: ${(note.duration / pianoRoll.length) * 100}%; top: ${(pianoRoll.highestPitch - note.pitch) * 20 + 1}px;`}
-                    on:click={() => selectNote(note)}
+                <div
+                  class="piano-roll-scroll"
+                  use:centerPianoRollOnMiddleC
+                >
+                <div class="piano-roll-body">
+                  <div
+                    class="pitch-ruler"
+                    style={`height: ${pianoRoll.pitchCount * pianoRollRowHeight}px;`}
+                    aria-hidden="true"
                   >
-                    {note.pitch}
-                  </button>
-                {/each}
-              </div>
-            </div>
-          </div>
-        </section>
-      {/if}
+                    <span>{pianoRoll.highestPitch}</span>
+                    <span>{pianoRoll.lowestPitch}</span>
+                  </div>
 
+                <div
+                  class="piano-roll"
+                  role="application"
+                  aria-label="Piano roll notes"
+                  style={`height: ${pianoRoll.pitchCount * pianoRollRowHeight}px;`}
+                  on:pointerenter={handlePianoRollPointerEnter}
+                  on:pointerdown={handlePianoRollPointerDown}
+                  on:pointermove={handlePianoRollPointerMove}
+                  on:pointerup={handlePianoRollPointerUp}
+                  on:pointerleave={handlePianoRollPointerLeave}
+                >
+                    <div class="piano-roll-grid" aria-hidden="true">
+                      {#each pianoRoll.subdivisionLines as line}
+                        <span
+                          class:beat-line={line.isBeat}
+                          style={`left: ${line.position}%`}
+                        ></span>
+                      {/each}
+
+                      {#each pianoRoll.pitchRows as pitch}
+                        <span
+                          class="pitch-line"
+                          style={`top: ${(pianoRoll.highestPitch - pitch) * pianoRollRowHeight}px`}
+                        ></span>
+                      {/each}
+                    </div>
+
+                    {#each pianoRoll.notes as note (note.id)}
+                      <button
+                        type="button"
+                        class="note"
+                        class:selected={selected?.type === 'note' && selected.id === note.id}
+                        style={`left: ${(note.time / pianoRoll.length) * 100}%; width: ${(note.duration / pianoRoll.length) * 100}%; top: ${(pianoRoll.highestPitch - note.pitch) * pianoRollRowHeight + 1}px;`}
+                        on:pointerdown|stopPropagation={(event) =>
+                          handleNotePointerDown(event, note)}
+                        on:pointermove|stopPropagation={(event) =>
+                          handleNotePointerMove(event, note)}
+                        on:pointerup|stopPropagation={(event) =>
+                          handleNotePointerUp(event, note)}
+                      >
+                        {note.pitch}
+                      </button>
+                    {/each}
+
+                    {#each patternOverlayNotes() as overlayNote (overlayNote.id)}
+                      <div
+                        class="note-overlay"
+                        class:ghost={overlayNote.variant === 'ghost'}
+                        style={`left: ${(overlayNote.time / pianoRoll.length) * 100}%; width: ${(overlayNote.duration / pianoRoll.length) * 100}%; top: ${(pianoRoll.highestPitch - overlayNote.pitch) * pianoRollRowHeight + 1}px;`}
+                      >
+                        {overlayNote.label ?? overlayNote.pitch}
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+                </div>
+              </div>
+            </section>
+          {/if}
+        {:else if activeEditor === 'drum-rack'}
+          <section class="panel">
+            <h2>Drum Rack</h2>
+            <p>Fixed-lane percussion editor placeholder.</p>
+          </section>
+        {:else if activeEditor === 'pattern-grid'}
+          <section class="panel">
+            <h2>Pattern Grid</h2>
+            <p>Mono step sequencer with per-slot pitch placeholder.</p>
+          </section>
+        {:else if activeEditor === 'audio-graph'}
+          <section class="panel">
+            <h2>Audio Graph</h2>
+            <p>Node-based routing and modulation placeholder.</p>
+          </section>
+        {/if}
+
+      
+      <div class="tool-tabs">
+        {#each patternTools as tool}
+          <button
+            class:active={activePatternTool.id === tool.id}
+            on:click={() => setActivePatternTool(tool)}
+          >
+            {tool.name}
+          </button>
+        {/each}
+      </div>
       {#if inspector.type === 'track'}
         <div class="pane-heading">
           <h2>{inspector.title}</h2>
@@ -755,3 +938,15 @@
     <span class:ok={issues.length === 0}>{issues.length} issues</span>
   </footer>
 </main>
+
+<style>
+  .editor-tabs {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .editor-tabs button.active {
+    font-weight: 700;
+  }
+</style>

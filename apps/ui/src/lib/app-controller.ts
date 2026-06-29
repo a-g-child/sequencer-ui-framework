@@ -6,6 +6,7 @@ import {
   SetParameterValueOperation,
   SetPatternPlacementLoopCountOperation,
   type BeatTime,
+  type Operation,
   type ParameterValue,
   type SequencerApplication,
   type Track
@@ -67,6 +68,14 @@ export class AppController {
     })
   }
 
+  selectNoteById(patternId: string, noteId: string): void {
+    this.app.documentStore.setSelection({
+      type: 'note',
+      id: noteId,
+      parentId: patternId
+    })
+  }
+
   addTrack(): void {
     const store = this.app.documentStore
     const nextNumber = store.document.tracks.values().length + 1
@@ -80,6 +89,10 @@ export class AppController {
     if (nextTrack) {
       this.selectTrack(nextTrack)
     }
+  }
+
+  execute(operation: Operation): void {
+    this.app.documentStore.execute(operation)
   }
 
   renameSelectedTrack(nextName: string): boolean {
