@@ -524,6 +524,12 @@
       return;
     }
 
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+      event.preventDefault();
+      deleteSelectedNotes();
+      return;
+    }
+
     if (event.key === 'Home') {
       event.preventDefault();
       resetPatternViewport();
@@ -558,6 +564,12 @@
     if (!pianoRoll) return;
 
     if (controller.duplicateNotes(pianoRoll.patternId, selectedPianoRollNotes())) {
+      syncView();
+    }
+  }
+
+  function deleteSelectedNotes() {
+    if (controller.deleteSelectedNotes()) {
       syncView();
     }
   }

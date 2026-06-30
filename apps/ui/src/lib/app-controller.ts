@@ -15,6 +15,7 @@ import {
   CreateNoteOperation,
   CreateNotesOperation,
   DeleteNoteOperation,
+  DeleteNotesOperation,
   MoveNoteOperation,
   ResizeNoteOperation,
   type CreateNoteInput,
@@ -346,6 +347,21 @@ export class AppController {
       new DeleteNoteOperation(note.patternId, note.id)
     )
     this.app.documentStore.clearSelection()
+    return true
+  }
+
+  deleteSelectedNotes(): boolean {
+    const store = this.app.documentStore
+    const selection = store.selection.current()
+
+    if (!selection || selection.type !== 'note' || !selection.parentId) {
+      return false
+    }
+
+    const noteIds = selection.ids?.length ? selection.ids : [selection.id]
+
+    store.execute(new DeleteNotesOperation(selection.parentId, noteIds))
+    store.clearSelection()
     return true
   }
 
