@@ -1,37 +1,51 @@
-import { ResizeNoteOperation } from '@sequencer/music';
+import { ResizeNotesOperation } from '@sequencer/music';
 import type {
   PatternInteractionContext,
   PatternOverlay,
   PatternTool
 } from '../pattern-tool';
 
-type CapturedNote = {
-  patternId: string;
-  noteId: string;
+type CapturedResizingNote = {
+  id: string;
   time: number;
   pitch: number;
   startDuration: number;
+};
+
+type CapturedResize = {
+  patternId: string;
+  notes: CapturedResizingNote[];
   pointerBeat: number;
-  previewDuration: number;
+  deltaDuration: number;
+  minDuration: number;
 };
 
 export class ResizeNoteTool implements PatternTool {
   readonly id = 'resize-note';
   readonly name = 'Resize';
 
-  private capturedNote?: CapturedNote;
+  private capturedResize?: CapturedResize;
 
   pointerDown(context: PatternInteractionContext): void {
     if (!context.hoveredNote) return;
 
-    this.capturedNote = {
+    const selectedIds = context.selectedNotes.map((note) => note.id);
+    const resizingNotes =
+      selectedIds.includes(context.hoveredNote.id)
+        ? context.selectedNotes
+        : [context.hoveredNote];
+
+    this.capturedResize = {
       patternId: context.patternId,
-      noteId: context.hoveredNote.id,
-      time: context.hoveredNote.time,
-      pitch: context.hoveredNote.pitch,
-      startDuration: context.hoveredNote.duration,
+      notes: resizingNotes.map((note) => ({
+        id: note.id,
+        time: note.time,
+        pitch: note.pitch,
+        startDuration: note.duration
+      })),
       pointerBeat: context.musical.beat,
-      previewDuration: context.hoveredNote.duration
+      deltaDuration: 0,
+      minDuration: context.musical.snap
     };
   }
 
@@ -40,23 +54,24 @@ export class ResizeNoteTool implements PatternTool {
   }
 
   pointerUp(context: PatternInteractionContext): void {
-    if (!this.capturedNote) return;
+    if (!this.capturedResize) return;
 
     this.updatePreview(context);
 
-    const note = this.capturedNote;
+    const resize = this.capturedResize;
 
-    if (note.previewDuration !== note.startDuration) {
+    if (resize.deltaDuration !== 0) {
       context.controller.execute(
-        new ResizeNoteOperation(
-          note.patternId,
-          note.noteId,
-          note.previewDuration
+        new ResizeNotesOperation(
+          resize.patternId,
+          resize.notes.map((note) => note.id),
+          resize.deltaDuration,
+          resize.minDuration
         )
       );
     }
 
-    this.capturedNote = undefined;
+    this.capturedResize = undefined;
   }
 
   pointerLeave(context: PatternInteractionContext): void {
@@ -64,32 +79,40 @@ export class ResizeNoteTool implements PatternTool {
   }
 
   cancel(): void {
-    this.capturedNote = undefined;
+    this.capturedResize = undefined;
   }
 
   drawOverlay(): PatternOverlay[] {
-    if (!this.capturedNote) return [];
+    if (!this.capturedResize) return [];
 
-    return [
-      {
-        type: 'note',
-        id: `resize-preview-${this.capturedNote.noteId}`,
-        time: this.capturedNote.time,
-        duration: this.capturedNote.previewDuration,
-        pitch: this.capturedNote.pitch,
-        variant: 'ghost'
-      }
-    ];
+    return this.capturedResize.notes.map((note) => ({
+      type: 'note',
+      id: `resize-preview-${note.id}`,
+      time: note.time,
+      duration: Math.max(
+        this.capturedResize!.minDuration,
+        note.startDuration + this.capturedResize!.deltaDuration
+      ),
+      pitch: note.pitch,
+      variant: 'ghost'
+    }));
   }
 
   private updatePreview(context: PatternInteractionContext): void {
-    if (!this.capturedNote) return;
+    if (!this.capturedResize) return;
 
-    const beatDelta = context.musical.beat - this.capturedNote.pointerBeat;
+    const beatDelta = context.musical.beat - this.capturedResize.pointerBeat;
 
-    this.capturedNote.previewDuration = Math.max(
-      context.musical.snap,
-      this.capturedNote.startDuration + beatDelta
+    this.capturedResize.deltaDuration = this.clampDurationDelta(beatDelta);
+  }
+
+  private clampDurationDelta(delta: number): number {
+    if (!this.capturedResize) return delta;
+
+    const shortestDuration = Math.min(
+      ...this.capturedResize.notes.map((note) => note.startDuration)
     );
+
+    return Math.max(this.capturedResize.minDuration - shortestDuration, delta);
   }
 }
