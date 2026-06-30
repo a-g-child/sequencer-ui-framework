@@ -3,48 +3,17 @@
   import type { AppController } from '../../app-controller';
   import { EDITORS } from '../editor-registry';
   import type { EditorKind } from '../editor-types';
-  import type {
-    PianoRollNoteView,
-    PianoRollView
-  } from '../piano-roll/piano-roll-model';
-  import {
-    buildPatternGridLines,
-    createGridDefinition
-  } from './pattern-grid';
-  import { buildPatternInteractionContext as createPatternInteractionContext } from './pattern-interaction-builder';
-  import { PatternInputState } from './pattern-input-state';
-  import {
-    clampViewport,
-    panViewportX,
-    panViewportY,
-    resetViewport,
-    zoomViewportX,
-    type PatternNavigationBounds
-  } from './pattern-navigation';
-  import { handlePatternShortcut } from './pattern-shortcuts';
-  import { buildPatternSelection } from './pattern-selection';
-  import type {
-    PatternInteractionContext,
-    PatternOverlay,
-    PatternNoteOverlay,
-    PatternRectangleOverlay,
-    PatternTool
-  } from './pattern-tool';
+  import type { PianoRollNoteView, PianoRollView } from '../piano-roll/piano-roll-model';
+  import { PatternEditorSession } from './PatternEditorSession';
+  import type { PatternPointerResult } from './PatternEditorSession';
   import {
     beatToScreenX,
-    createPatternViewport,
     durationToScreenWidth,
     patternLengthToScreenWidth,
     pitchRangeToScreenHeight,
-    pitchToScreenY,
-    type PatternViewport
+    pitchToScreenY
   } from './pattern-viewport';
   import PatternToolbar from './PatternToolbar.svelte';
-  import { DrawNoteTool } from './tools/draw-note-tool';
-  import { EraseNoteTool } from './tools/erase-note-tool';
-  import { MoveNoteTool } from './tools/move-note-tool';
-  import { ResizeNoteTool } from './tools/resize-note-tool';
-  import { SelectTool } from './tools/select-tool';
 
   export let controller: AppController;
   export let pianoRoll: PianoRollView | undefined;
@@ -52,41 +21,21 @@
   export let onEditorChange: (editor: EditorKind) => void;
   export let syncView: () => void;
 
-  const resizeNoteTool = new ResizeNoteTool();
-  const beatsPerBar = 4;
-  const minimumVisibleBars = 4;
-  const minimumVisibleBeats = beatsPerBar * minimumVisibleBars;
-  const patternGrid = createGridDefinition({ majorEvery: beatsPerBar });
-  const patternInput = new PatternInputState();
-  const patternTools: PatternTool[] = [
-    new SelectTool(),
-    new DrawNoteTool(),
-    new EraseNoteTool(),
-    new MoveNoteTool(),
-    resizeNoteTool
-  ];
   const middleCPitch = 60;
   const viewportZoomStep = 1.25;
   const viewportBeatScrollStep = 1;
   const viewportPitchScrollStep = 6;
-  const minViewportZoom = 0.5;
-  const maxViewportZoom = 4;
 
-  let activePatternTool = patternTools[0];
-  let patternViewport: PatternViewport = resetViewport();
-  let patternInteractionContext: PatternInteractionContext | undefined;
+  let session: PatternEditorSession;
   let pianoRollScrollElement: HTMLDivElement | undefined;
-  let isPanningPattern = false;
-  let lastPanX = 0;
-  let lastPanY = 0;
-  let hoveredNoteId: string | undefined;
-  let ghostBeat = 0;
-  let ghostPitch = middleCPitch;
-  let showGhost = false;
 
-  $: visiblePatternGridLines = pianoRoll
-    ? buildPatternGridLines(visiblePianoRollLength(), patternGrid)
-    : [];
+  $: if (controller && (!session || session.controller !== controller)) {
+    session = new PatternEditorSession({ controller });
+  }
+
+  $: renderModel = session && pianoRoll
+    ? session.buildRenderModel(pianoRoll)
+    : undefined;
 
   onMount(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -96,90 +45,6 @@
     };
   });
 
-  function setActivePatternTool(tool: PatternTool) {
-    activePatternTool.cancel?.();
-    activePatternTool = tool;
-    refreshPatternOverlay();
-  }
-
-  function setPatternViewport(next: {
-    zoomX?: number;
-    zoomY?: number;
-    scrollX?: number;
-    scrollY?: number;
-  }) {
-    applyPatternViewport(createPatternViewport({
-      zoomX: next.zoomX ?? patternViewport.zoomX,
-      zoomY: next.zoomY ?? patternViewport.zoomY,
-      scrollX: next.scrollX ?? patternViewport.scrollX,
-      scrollY: next.scrollY ?? patternViewport.scrollY
-    }));
-  }
-
-  function applyPatternViewport(next: PatternViewport) {
-    patternViewport = clampViewport(next, patternNavigationBounds());
-    refreshPatternOverlay();
-  }
-
-  function patternNavigationBounds(): PatternNavigationBounds {
-    const scrollLimit = pianoRollScrollLimit();
-
-    return {
-      maxScrollX: visiblePianoRollLength(),
-      minScrollY: -scrollLimit,
-      maxScrollY: scrollLimit
-    };
-  }
-
-  function visiblePianoRollLength(): number {
-    return Math.max(pianoRoll?.length ?? 0, minimumVisibleBeats);
-  }
-
-  function zoomPatternViewportX(multiplier: number) {
-    applyPatternViewport(
-      zoomViewportX(patternViewport, multiplier, patternNavigationBounds())
-    );
-  }
-
-  function zoomPatternViewportY(multiplier: number) {
-    setPatternViewport({
-      zoomY: clampNumber(
-        patternViewport.zoomY * multiplier,
-        minViewportZoom,
-        maxViewportZoom
-      )
-    });
-  }
-
-  function scrollPatternViewport(deltaBeats: number) {
-    applyPatternViewport(
-      panViewportX(patternViewport, deltaBeats, patternNavigationBounds())
-    );
-  }
-
-  function scrollPatternPitch(deltaSemitones: number) {
-    applyPatternViewport(
-      panViewportY(patternViewport, deltaSemitones, patternNavigationBounds())
-    );
-  }
-
-  function resetPatternViewport() {
-    applyPatternViewport(resetViewport());
-    void tick().then(() => centerPianoRollScroll());
-  }
-
-  function pianoRollScrollLimit(): number {
-    return pianoRoll ? pianoRoll.pitchCount : 0;
-  }
-
-  function clampNumber(value: number, min: number, max: number): number {
-    return Math.min(max, Math.max(min, value));
-  }
-
-  function noteHeight(): number {
-    return Math.max(6, patternViewport.pixelsPerSemitone - 2);
-  }
-
   function noteName(pitch: number): string {
     const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
     const octave = Math.floor(pitch / 12) - 1;
@@ -187,325 +52,73 @@
     return `${names[pitch % 12]}${octave}`;
   }
 
-  function selectedPianoRollNotes(): PianoRollNoteView[] {
-    if (!pianoRoll) return [];
+  function handleKeyDown(event: KeyboardEvent) {
+    if (activeEditor !== 'piano-roll') return;
 
-    const selected = controller.store.selection.current();
-
-    if (selected?.type !== 'note') return [];
-    const selectedNoteIds = selected.ids ?? [selected.id];
-
-    return pianoRoll.notes.filter((note) => selectedNoteIds.includes(note.id));
+    session.handleKeyDown(event, { pianoRoll, syncView });
+    invalidateSession();
   }
 
-  function isPianoRollNoteSelected(noteId: string): boolean {
-    return selectedPianoRollNotes().some((note) => note.id === noteId);
+  function invalidateSession() {
+    session = session;
   }
 
-  function patternSelection() {
-    return buildPatternSelection(selectedPianoRollNotes());
+  function applyPointerResult(result: PatternPointerResult) {
+    if (result.syncView) {
+      syncView();
+    }
+
+    invalidateSession();
   }
 
-  function buildPatternInteractionContext(
-    event: PointerEvent,
-    hoveredNote?: PianoRollNoteView
-  ): PatternInteractionContext | undefined {
-    if (!pianoRoll) return undefined;
-
-    const selection = patternSelection();
-
-    return createPatternInteractionContext({
-      event,
-      element: event.currentTarget as HTMLElement,
-      controller,
-      patternId: pianoRoll.patternId,
-      input: patternInput,
-      viewport: patternViewport,
-      grid: patternGrid,
-      pianoRoll,
-      selectedNotes: [
-        ...(selection.primary ? [selection.primary] : []),
-        ...selection.secondary
-      ],
-      hoveredNote
-    });
+  function addC4Note() {
+    if (session.createC4Note(pianoRoll)) {
+      syncView();
+      invalidateSession();
+    }
   }
 
-  function updatePatternHover(context: PatternInteractionContext) {
-    hoveredNoteId = context.hoveredNote?.id;
-    ghostBeat = context.musical.beat;
-    ghostPitch = context.musical.pitch;
-    showGhost = !context.hoveredNote;
-  }
-
-  function clearPatternHover() {
-    hoveredNoteId = undefined;
-    showGhost = false;
-  }
-
-  function refreshPatternOverlay() {
-    patternInteractionContext = patternInteractionContext
-      ? { ...patternInteractionContext }
-      : undefined;
-  }
-
-  function patternOverlays(): PatternOverlay[] {
-    if (!patternInteractionContext) return [];
-    if (activePatternTool.id === 'draw-note') return [];
-
-    return activePatternTool.drawOverlay?.(patternInteractionContext) ?? [];
-  }
-
-  function patternOverlayNotes(): PatternNoteOverlay[] {
-    return patternOverlays().filter(
-      (overlay): overlay is PatternNoteOverlay => overlay.type === 'note'
-    );
-  }
-
-  function patternOverlayRectangles(): PatternRectangleOverlay[] {
-    return patternOverlays().filter(
-      (overlay): overlay is PatternRectangleOverlay =>
-        overlay.type === 'rectangle'
-    );
+  function resetPatternViewport() {
+    session.resetViewport(pianoRoll);
+    invalidateSession();
+    void tick().then(() => centerPianoRollScroll());
   }
 
   function handlePatternWheel(event: WheelEvent) {
-    event.preventDefault();
-    patternInput.setKeyboardModifiers(event);
-
-    if (patternInput.modifiers.primary) {
-      applyPatternViewport(
-        zoomViewportX(
-          patternViewport,
-          event.deltaY < 0 ? 1.1 : 0.9,
-          patternNavigationBounds()
-        )
-      );
-      return;
-    }
-
-    if (patternInput.modifiers.shift) {
-      applyPatternViewport(
-        panViewportY(
-          patternViewport,
-          event.deltaY > 0 ? 2 : -2,
-          patternNavigationBounds()
-        )
-      );
-      return;
-    }
-
-    applyPatternViewport(
-      panViewportX(
-        patternViewport,
-        event.deltaY / patternViewport.pixelsPerBeat,
-        patternNavigationBounds()
-      )
-    );
-  }
-
-  function handleKeyDown(event: KeyboardEvent) {
-    if (activeEditor !== 'piano-roll' || isEditableEventTarget(event.target)) return;
-
-    patternInput.setKeyboardModifiers(event);
-
-    const handled = handlePatternShortcut(event, {
-      controller,
-      viewport: patternViewport,
-      navigationBounds: patternNavigationBounds(),
-      patternId: pianoRoll?.patternId,
-      selectedNotes: selectedPianoRollNotes(),
-      pasteTargetBeat: pasteTargetBeat(),
-      applyViewport: applyPatternViewport,
-      resetViewport: resetPatternViewport,
-      syncView
-    });
-
-    if (handled) {
-      event.preventDefault();
-    }
-  }
-
-  function pasteTargetBeat(): number {
-    return showGhost ? ghostBeat : controller.transportBeat;
-  }
-
-  function isEditableEventTarget(target: EventTarget | null): boolean {
-    if (!(target instanceof HTMLElement)) return false;
-
-    return Boolean(
-      target.closest('input, textarea, select, [contenteditable="true"]')
-    );
-  }
-
-  function beginPatternPan(event: PointerEvent): boolean {
-    if (event.button !== 1) return false;
-
-    event.preventDefault();
-    clearPatternHover();
-    isPanningPattern = true;
-    lastPanX = event.clientX;
-    lastPanY = event.clientY;
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-
-    return true;
-  }
-
-  function movePatternPan(event: PointerEvent): boolean {
-    if (!isPanningPattern) return false;
-
-    const dx = event.clientX - lastPanX;
-    const dy = event.clientY - lastPanY;
-
-    let nextViewport = panViewportX(
-      patternViewport,
-      -dx / patternViewport.pixelsPerBeat,
-      patternNavigationBounds()
-    );
-    nextViewport = panViewportY(
-      nextViewport,
-      dy / patternViewport.pixelsPerSemitone,
-      patternNavigationBounds()
-    );
-    applyPatternViewport(nextViewport);
-
-    lastPanX = event.clientX;
-    lastPanY = event.clientY;
-
-    return true;
-  }
-
-  function endPatternPan(): boolean {
-    if (!isPanningPattern) return false;
-
-    isPanningPattern = false;
-    return true;
+    session.handleWheel(event, pianoRoll);
+    invalidateSession();
   }
 
   function handlePianoRollPointerEnter(event: PointerEvent) {
-    patternInput.setKeyboardModifiers(event);
-    const context = buildPatternInteractionContext(event);
-
-    if (!context) return;
-
-    patternInteractionContext = context;
-    updatePatternHover(context);
-    activePatternTool.pointerEnter?.(context);
-    refreshPatternOverlay();
+    applyPointerResult(session.handlePointerEnter(event, pianoRoll));
   }
 
   function handlePianoRollPointerDown(event: PointerEvent) {
-    patternInput.setKeyboardModifiers(event);
-    if (beginPatternPan(event)) return;
-
-    const context = buildPatternInteractionContext(event);
-
-    if (!context) return;
-
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-    patternInteractionContext = context;
-    updatePatternHover(context);
-    activePatternTool.pointerDown(context);
-
-    syncView();
-    refreshPatternOverlay();
+    applyPointerResult(session.handlePointerDown(event, pianoRoll));
   }
 
   function handlePianoRollPointerMove(event: PointerEvent) {
-    patternInput.setKeyboardModifiers(event);
-    if (movePatternPan(event)) return;
-
-    const context = buildPatternInteractionContext(event);
-
-    if (!context) return;
-
-    patternInteractionContext = context;
-    updatePatternHover(context);
-    activePatternTool.pointerMove?.(context);
-    refreshPatternOverlay();
+    applyPointerResult(session.handlePointerMove(event, pianoRoll));
   }
 
   function handlePianoRollPointerUp(event: PointerEvent) {
-    patternInput.setKeyboardModifiers(event);
-    if (endPatternPan()) return;
-
-    const context = buildPatternInteractionContext(event);
-
-    if (!context) return;
-
-    patternInteractionContext = context;
-    updatePatternHover(context);
-    activePatternTool.pointerUp?.(context);
-    syncView();
-    refreshPatternOverlay();
+    applyPointerResult(session.handlePointerUp(event, pianoRoll));
   }
 
   function handlePianoRollPointerLeave(event: PointerEvent) {
-    patternInput.setKeyboardModifiers(event);
-    if (isPanningPattern) return;
-
-    const context = buildPatternInteractionContext(event);
-
-    if (!context) return;
-
-    patternInteractionContext = context;
-    clearPatternHover();
-    activePatternTool.pointerLeave?.(context);
-
-    if (!['move-note', 'resize-note'].includes(activePatternTool.id)) {
-      patternInteractionContext = undefined;
-    }
-
-    refreshPatternOverlay();
+    applyPointerResult(session.handlePointerLeave(event, pianoRoll));
   }
 
   function handleNotePointerDown(event: PointerEvent, note: PianoRollNoteView) {
-    patternInput.setKeyboardModifiers(event);
-    if (beginPatternPan(event)) return;
-
-    const context = buildPatternInteractionContext(event, note);
-
-    if (!context) return;
-
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-    patternInteractionContext = context;
-    updatePatternHover(context);
-    activePatternTool.pointerDown(context);
-    refreshPatternOverlay();
-
-    if (!['move-note', 'resize-note'].includes(activePatternTool.id)) {
-      syncView();
-      refreshPatternOverlay();
-    }
+    applyPointerResult(session.handleNotePointerDown(event, pianoRoll, note));
   }
 
   function handleNotePointerMove(event: PointerEvent, note: PianoRollNoteView) {
-    patternInput.setKeyboardModifiers(event);
-    if (movePatternPan(event)) return;
-
-    const context = buildPatternInteractionContext(event, note);
-
-    if (!context) return;
-
-    patternInteractionContext = context;
-    updatePatternHover(context);
-    activePatternTool.pointerMove?.(context);
-    refreshPatternOverlay();
+    applyPointerResult(session.handleNotePointerMove(event, pianoRoll, note));
   }
 
   function handleNotePointerUp(event: PointerEvent, note: PianoRollNoteView) {
-    patternInput.setKeyboardModifiers(event);
-    if (endPatternPan()) return;
-
-    const context = buildPatternInteractionContext(event, note);
-
-    if (!context) return;
-
-    patternInteractionContext = context;
-    updatePatternHover(context);
-    activePatternTool.pointerUp?.(context);
-    syncView();
-    refreshPatternOverlay();
+    applyPointerResult(session.handleNotePointerUp(event, pianoRoll, note));
   }
 
   function centerPianoRollOnMiddleC(node: HTMLDivElement) {
@@ -514,50 +127,72 @@
   }
 
   function centerPianoRollScroll() {
-    if (!pianoRollScrollElement) return;
+    if (!pianoRollScrollElement || !session) return;
 
     const middleCOffset =
-      pitchToScreenY(middleCPitch, patternViewport, 127) -
+      pitchToScreenY(middleCPitch, session.viewport, 127) -
       pianoRollScrollElement.clientHeight / 2;
 
     pianoRollScrollElement.scrollTop = Math.max(0, middleCOffset);
   }
-
-  function addC4Note() {
-    if (!pianoRoll) return;
-
-    controller.createNote(pianoRoll.patternId, 0, 1, 60);
-    syncView();
-  }
 </script>
 
-<PatternToolbar
-  editors={EDITORS}
-  activeEditor={activeEditor}
-  tools={patternTools}
-  activeToolId={activePatternTool.id}
-  onEditorChange={(editor) => {
-    onEditorChange(editor);
-  }}
-  onToolChange={setActivePatternTool}
-  onAddNote={addC4Note}
-  onZoomIn={() => zoomPatternViewportX(viewportZoomStep)}
-  onZoomOut={() => zoomPatternViewportX(1 / viewportZoomStep)}
-  onZoomPitchIn={() => zoomPatternViewportY(viewportZoomStep)}
-  onZoomPitchOut={() => zoomPatternViewportY(1 / viewportZoomStep)}
-  onPanLeft={() => scrollPatternViewport(-viewportBeatScrollStep)}
-  onPanRight={() => scrollPatternViewport(viewportBeatScrollStep)}
-  onPitchUp={() => scrollPatternPitch(-viewportPitchScrollStep)}
-  onPitchDown={() => scrollPatternPitch(viewportPitchScrollStep)}
-  onResetView={resetPatternViewport}
-/>
+{#if session}
+  <PatternToolbar
+    editors={EDITORS}
+    activeEditor={activeEditor}
+    tools={session.tools}
+    activeToolId={session.activeTool.id}
+    onEditorChange={(editor) => {
+      onEditorChange(editor);
+    }}
+    onToolChange={(tool) => {
+      session.setActiveTool(tool);
+      invalidateSession();
+    }}
+    onAddNote={addC4Note}
+    onZoomIn={() => {
+      session.zoomViewportX(viewportZoomStep, pianoRoll);
+      invalidateSession();
+    }}
+    onZoomOut={() => {
+      session.zoomViewportX(1 / viewportZoomStep, pianoRoll);
+      invalidateSession();
+    }}
+    onZoomPitchIn={() => {
+      session.zoomViewportY(viewportZoomStep, pianoRoll);
+      invalidateSession();
+    }}
+    onZoomPitchOut={() => {
+      session.zoomViewportY(1 / viewportZoomStep, pianoRoll);
+      invalidateSession();
+    }}
+    onPanLeft={() => {
+      session.scrollViewport(-viewportBeatScrollStep, pianoRoll);
+      invalidateSession();
+    }}
+    onPanRight={() => {
+      session.scrollViewport(viewportBeatScrollStep, pianoRoll);
+      invalidateSession();
+    }}
+    onPitchUp={() => {
+      session.scrollPitch(-viewportPitchScrollStep, pianoRoll);
+      invalidateSession();
+    }}
+    onPitchDown={() => {
+      session.scrollPitch(viewportPitchScrollStep, pianoRoll);
+      invalidateSession();
+    }}
+    onResetView={resetPatternViewport}
+  />
+{/if}
 
-{#if activeEditor === 'piano-roll'}
-  {#if pianoRoll}
+{#if session && activeEditor === 'piano-roll'}
+  {#if renderModel}
     <section class="piano-roll-panel" aria-label="Piano roll">
       <div class="pane-heading">
         <h2>Piano Roll</h2>
-        <span>{pianoRoll.patternName}</span>
+        <span>{renderModel.patternName}</span>
       </div>
 
       <div
@@ -574,10 +209,10 @@
               <span>Note</span>
               <div
                 class="piano-roll-ruler-track"
-                style={`width: ${patternLengthToScreenWidth(visiblePianoRollLength(), patternViewport)}px;`}
+                style={`width: ${patternLengthToScreenWidth(renderModel.visibleLength, renderModel.viewport)}px;`}
               >
-                {#each visiblePatternGridLines.filter((line) => line.label) as marker}
-                  <span style={`left: ${beatToScreenX(marker.beat, patternViewport)}px`}>
+                {#each renderModel.gridLines.filter((line) => line.label) as marker}
+                  <span style={`left: ${beatToScreenX(marker.beat, renderModel.viewport)}px`}>
                     {marker.label}
                   </span>
                 {/each}
@@ -587,13 +222,13 @@
             <div class="piano-roll-body">
               <div
                 class="pitch-ruler"
-                style={`height: ${pitchRangeToScreenHeight(pianoRoll.pitchCount, patternViewport)}px;`}
+                style={`height: ${pitchRangeToScreenHeight(renderModel.pitchCount, renderModel.viewport)}px;`}
                 aria-hidden="true"
               >
-                {#each pianoRoll.pitchRows as pitch}
+                {#each renderModel.pitchRows as pitch}
                   <span
                     class:c-note={pitch % 12 === 0}
-                    style={`top: ${pitchToScreenY(pitch, patternViewport, pianoRoll.highestPitch) + patternViewport.pixelsPerSemitone / 2}px`}
+                    style={`top: ${pitchToScreenY(pitch, renderModel.viewport, renderModel.highestPitch) + renderModel.viewport.pixelsPerSemitone / 2}px`}
                   >
                     {noteName(pitch)}
                   </span>
@@ -602,10 +237,10 @@
 
               <div
                 class="piano-roll"
-                class:panning={isPanningPattern}
+                class:panning={renderModel.isPanning}
                 role="application"
                 aria-label="Piano roll notes"
-                style={`width: ${patternLengthToScreenWidth(visiblePianoRollLength(), patternViewport)}px; height: ${pitchRangeToScreenHeight(pianoRoll.pitchCount, patternViewport)}px;`}
+                style={`width: ${patternLengthToScreenWidth(renderModel.visibleLength, renderModel.viewport)}px; height: ${pitchRangeToScreenHeight(renderModel.pitchCount, renderModel.viewport)}px;`}
                 on:pointerenter={handlePianoRollPointerEnter}
                 on:pointerdown={handlePianoRollPointerDown}
                 on:pointermove={handlePianoRollPointerMove}
@@ -614,44 +249,44 @@
                 on:auxclick|preventDefault
               >
                 <div class="piano-roll-grid" aria-hidden="true">
-                  {#each visiblePatternGridLines as line}
+                  {#each renderModel.gridLines as line}
                     <span
                       class:beat-line={line.isMajor}
-                      style={`left: ${beatToScreenX(line.beat, patternViewport)}px`}
+                      style={`left: ${beatToScreenX(line.beat, renderModel.viewport)}px`}
                     ></span>
                   {/each}
 
-                  {#each pianoRoll.pitchRows as pitch}
+                  {#each renderModel.pitchRows as pitch}
                     <span
                       class="pitch-line"
-                      style={`top: ${pitchToScreenY(pitch, patternViewport, pianoRoll.highestPitch)}px`}
+                      style={`top: ${pitchToScreenY(pitch, renderModel.viewport, renderModel.highestPitch)}px`}
                     ></span>
                   {/each}
                 </div>
 
-                {#if showGhost && activePatternTool.id === 'draw-note'}
+                {#if renderModel.ghost && renderModel.activeToolId === 'draw-note'}
                   <div
                     class="note-ghost"
-                    style={`left: ${beatToScreenX(ghostBeat, patternViewport)}px; top: ${pitchToScreenY(ghostPitch, patternViewport, pianoRoll.highestPitch) + 1}px; width: ${durationToScreenWidth(patternGrid.snap, patternViewport)}px; height: ${noteHeight()}px;`}
+                    style={`left: ${beatToScreenX(renderModel.ghost.beat, renderModel.viewport)}px; top: ${pitchToScreenY(renderModel.ghost.pitch, renderModel.viewport, renderModel.highestPitch) + 1}px; width: ${durationToScreenWidth(renderModel.grid.snap, renderModel.viewport)}px; height: ${renderModel.noteHeight}px;`}
                   ></div>
                 {/if}
 
-                {#each patternOverlayRectangles() as overlay (overlay.id)}
+                {#each renderModel.overlayRectangles as overlay (overlay.id)}
                   <div
                     class="marquee-overlay"
                     style={`left: ${overlay.x}px; top: ${overlay.y}px; width: ${overlay.width}px; height: ${overlay.height}px;`}
                   ></div>
                 {/each}
 
-                {#each pianoRoll.notes as note (note.id)}
+                {#each renderModel.notes as note (note.id)}
                   <button
                     type="button"
                     class="note"
-                    class:selected={isPianoRollNoteSelected(note.id)}
-                    class:hovered={hoveredNoteId === note.id}
-                    class:resize-active={activePatternTool.id === 'resize-note'}
+                    class:selected={renderModel.selectedNoteIds.includes(note.id)}
+                    class:hovered={renderModel.hoveredNoteId === note.id}
+                    class:resize-active={renderModel.activeToolId === 'resize-note'}
                     aria-label={`${noteName(note.pitch)} note at beat ${note.time}`}
-                    style={`left: ${beatToScreenX(note.time, patternViewport)}px; width: ${durationToScreenWidth(note.duration, patternViewport)}px; height: ${noteHeight()}px; top: ${pitchToScreenY(note.pitch, patternViewport, pianoRoll.highestPitch) + 1}px;`}
+                    style={`left: ${beatToScreenX(note.time, renderModel.viewport)}px; width: ${durationToScreenWidth(note.duration, renderModel.viewport)}px; height: ${renderModel.noteHeight}px; top: ${pitchToScreenY(note.pitch, renderModel.viewport, renderModel.highestPitch) + 1}px;`}
                     on:pointerdown|stopPropagation={(event) =>
                       handleNotePointerDown(event, note)}
                     on:pointermove|stopPropagation={(event) =>
@@ -660,7 +295,7 @@
                       handleNotePointerUp(event, note)}
                     on:auxclick|preventDefault
                   >
-                    {#if activePatternTool.id === 'resize-note'}
+                    {#if renderModel.activeToolId === 'resize-note'}
                       <span
                         class="note-resize-handle"
                         aria-label={`Resize ${noteName(note.pitch)} note`}
@@ -670,11 +305,11 @@
                   </button>
                 {/each}
 
-                {#each patternOverlayNotes() as overlayNote (overlayNote.id)}
+                {#each renderModel.overlayNotes as overlayNote (overlayNote.id)}
                   <div
                     class="note-overlay"
                     class:ghost={overlayNote.variant === 'ghost'}
-                    style={`left: ${beatToScreenX(overlayNote.time, patternViewport)}px; width: ${durationToScreenWidth(overlayNote.duration, patternViewport)}px; height: ${noteHeight()}px; top: ${pitchToScreenY(overlayNote.pitch, patternViewport, pianoRoll.highestPitch) + 1}px;`}
+                    style={`left: ${beatToScreenX(overlayNote.time, renderModel.viewport)}px; width: ${durationToScreenWidth(overlayNote.duration, renderModel.viewport)}px; height: ${renderModel.noteHeight}px; top: ${pitchToScreenY(overlayNote.pitch, renderModel.viewport, renderModel.highestPitch) + 1}px;`}
                   ></div>
                 {/each}
               </div>
