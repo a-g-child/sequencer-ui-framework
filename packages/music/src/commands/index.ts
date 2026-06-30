@@ -1,4 +1,5 @@
 export * from './create-note'
 export * from './delete-note'
 export * from './move-note'
+export * from './move-notes'
 export * from './resize-note'
