@@ -1,6 +1,7 @@
 import type { BeatTime } from '@sequencer/core';
 import type { AppController } from '../../app-controller';
 import type { PianoRollNoteView } from '../piano-roll/piano-roll-model';
+import type { PatternModifierState } from './pattern-input-state';
 import type { PatternViewport } from './pattern-viewport';
 
 export type PatternNoteView = PianoRollNoteView;
@@ -10,6 +11,7 @@ export type PatternInteractionContext = {
   patternId: string;
   viewport: PatternViewport;
   highestPitch: number;
+  modifiers: PatternModifierState;
   pointer: {
     x: number;
     y: number;

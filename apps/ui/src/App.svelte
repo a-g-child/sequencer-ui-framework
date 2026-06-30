@@ -34,6 +34,7 @@
     type PatternGridLine
   } from './lib/editors/pattern/pattern-grid';
   import { hitTestNote } from './lib/editors/pattern/pattern-hit-testing';
+  import { PatternInputState } from './lib/editors/pattern/pattern-input-state';
   import {
     clampViewport,
     panViewportX,
@@ -42,6 +43,7 @@
     zoomViewportX,
     type PatternNavigationBounds
   } from './lib/editors/pattern/pattern-navigation';
+  import { handlePatternShortcut } from './lib/editors/pattern/pattern-shortcuts';
   import { buildPatternSelection } from './lib/editors/pattern/pattern-selection';
   import {
     beatToScreenX,
@@ -79,6 +81,7 @@
   const minimumVisibleBars = 4;
   const minimumVisibleBeats = beatsPerBar * minimumVisibleBars;
   const patternGrid = createGridDefinition({ majorEvery: beatsPerBar });
+  const patternInput = new PatternInputState();
   const patternTools: PatternTool[] = [
     new SelectTool(),
     new DrawNoteTool(),
@@ -416,6 +419,7 @@
       patternId: pianoRoll.patternId,
       viewport: patternViewport,
       highestPitch: pianoRoll.highestPitch,
+      modifiers: { ...patternInput.modifiers },
       pointer: { x, y },
       musical: {
         beat: time,
@@ -471,8 +475,9 @@
 
   function handlePatternWheel(event: WheelEvent) {
     event.preventDefault();
+    patternInput.setKeyboardModifiers(event);
 
-    if (event.ctrlKey || event.metaKey) {
+    if (patternInput.modifiers.primary) {
       applyPatternViewport(
         zoomViewportX(
           patternViewport,
@@ -483,7 +488,7 @@
       return;
     }
 
-    if (event.shiftKey) {
+    if (patternInput.modifiers.shift) {
       applyPatternViewport(
         panViewportY(
           patternViewport,
@@ -506,71 +511,22 @@
   function handleKeyDown(event: KeyboardEvent) {
     if (activeEditor !== 'piano-roll' || isEditableEventTarget(event.target)) return;
 
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'c') {
+    patternInput.setKeyboardModifiers(event);
+
+    const handled = handlePatternShortcut(event, {
+      controller,
+      viewport: patternViewport,
+      navigationBounds: patternNavigationBounds(),
+      patternId: pianoRoll?.patternId,
+      selectedNotes: selectedPianoRollNotes(),
+      pasteTargetBeat: pasteTargetBeat(),
+      applyViewport: applyPatternViewport,
+      resetViewport: resetPatternViewport,
+      syncView
+    });
+
+    if (handled) {
       event.preventDefault();
-      copySelectedNotes();
-      return;
-    }
-
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'v') {
-      event.preventDefault();
-      pasteCopiedNotes();
-      return;
-    }
-
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'd') {
-      event.preventDefault();
-      duplicateSelectedNotes();
-      return;
-    }
-
-    if (event.key === 'Backspace' || event.key === 'Delete') {
-      event.preventDefault();
-      deleteSelectedNotes();
-      return;
-    }
-
-    if (event.key === 'Home') {
-      event.preventDefault();
-      resetPatternViewport();
-      return;
-    }
-
-    if (event.key === '+' || event.key === '=') {
-      event.preventDefault();
-      zoomPatternViewportX(1.1);
-      return;
-    }
-
-    if (event.key === '-' || event.key === '_') {
-      event.preventDefault();
-      zoomPatternViewportX(0.9);
-    }
-  }
-
-  function copySelectedNotes() {
-    controller.copyNotes(selectedPianoRollNotes());
-  }
-
-  function pasteCopiedNotes() {
-    if (!pianoRoll) return;
-
-    if (controller.pasteNotes(pianoRoll.patternId, { beat: pasteTargetBeat() })) {
-      syncView();
-    }
-  }
-
-  function duplicateSelectedNotes() {
-    if (!pianoRoll) return;
-
-    if (controller.duplicateNotes(pianoRoll.patternId, selectedPianoRollNotes())) {
-      syncView();
-    }
-  }
-
-  function deleteSelectedNotes() {
-    if (controller.deleteSelectedNotes()) {
-      syncView();
     }
   }
 
@@ -631,6 +587,7 @@
   }
 
   function handlePianoRollPointerEnter(event: PointerEvent) {
+    patternInput.setKeyboardModifiers(event);
     const context = buildPatternInteractionContext(event);
 
     if (!context) return;
@@ -642,6 +599,7 @@
   }
 
   function handlePianoRollPointerDown(event: PointerEvent) {
+    patternInput.setKeyboardModifiers(event);
     if (beginPatternPan(event)) return;
 
     const context = buildPatternInteractionContext(event);
@@ -658,6 +616,7 @@
   }
 
   function handlePianoRollPointerMove(event: PointerEvent) {
+    patternInput.setKeyboardModifiers(event);
     if (movePatternPan(event)) return;
 
     const context = buildPatternInteractionContext(event);
@@ -671,6 +630,7 @@
   }
 
   function handlePianoRollPointerUp(event: PointerEvent) {
+    patternInput.setKeyboardModifiers(event);
     if (endPatternPan()) return;
 
     const context = buildPatternInteractionContext(event);
@@ -685,6 +645,7 @@
   }
 
   function handlePianoRollPointerLeave(event: PointerEvent) {
+    patternInput.setKeyboardModifiers(event);
     if (isPanningPattern) return;
 
     const context = buildPatternInteractionContext(event);
@@ -703,6 +664,7 @@
   }
 
   function handleNotePointerDown(event: PointerEvent, note: PianoRollNoteView) {
+    patternInput.setKeyboardModifiers(event);
     if (beginPatternPan(event)) return;
 
     const context = buildPatternInteractionContext(event, note);
@@ -722,6 +684,7 @@
   }
 
   function handleNotePointerMove(event: PointerEvent, note: PianoRollNoteView) {
+    patternInput.setKeyboardModifiers(event);
     if (movePatternPan(event)) return;
 
     const context = buildPatternInteractionContext(event, note);
@@ -735,6 +698,7 @@
   }
 
   function handleNotePointerUp(event: PointerEvent, note: PianoRollNoteView) {
+    patternInput.setKeyboardModifiers(event);
     if (endPatternPan()) return;
 
     const context = buildPatternInteractionContext(event, note);
