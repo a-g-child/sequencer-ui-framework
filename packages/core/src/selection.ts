@@ -4,6 +4,7 @@ export interface SelectionItem {
   type: string;
   id: EntityId;
   parentId?: EntityId;
+  ids?: EntityId[];
 }
 
 export class SelectionModel {

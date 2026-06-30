@@ -72,20 +72,19 @@ export class MoveNoteTool implements PatternTool {
     this.capturedNote = undefined;
   }
 
-  drawOverlay(): PatternOverlay | undefined {
-    if (!this.capturedNote) return undefined;
+  drawOverlay(): PatternOverlay[] {
+    if (!this.capturedNote) return [];
 
-    return {
-      notes: [
-        {
-          id: `move-preview-${this.capturedNote.noteId}`,
-          time: this.capturedNote.previewTime,
-          duration: this.capturedNote.duration,
-          pitch: this.capturedNote.previewPitch,
-          variant: 'ghost'
-        }
-      ]
-    };
+    return [
+      {
+        type: 'note',
+        id: `move-preview-${this.capturedNote.noteId}`,
+        time: this.capturedNote.previewTime,
+        duration: this.capturedNote.duration,
+        pitch: this.capturedNote.previewPitch,
+        variant: 'ghost'
+      }
+    ];
   }
 
   private updatePreview(context: PatternInteractionContext): void {

@@ -62,7 +62,9 @@
   import { SelectTool } from './lib/editors/pattern/tools/select-tool';
   import type {
     PatternInteractionContext,
-    PatternOverlayNote,
+    PatternOverlay,
+    PatternNoteOverlay,
+    PatternRectangleOverlay,
     PatternTool
   } from './lib/editors/pattern/pattern-tool';
 
@@ -358,9 +360,13 @@
     if (!pianoRoll) return [];
 
     if (selected?.type !== 'note') return [];
-    const selectedNoteId = selected.id;
+    const selectedNoteIds = selected.ids ?? [selected.id];
 
-    return pianoRoll.notes.filter((note) => note.id === selectedNoteId);
+    return pianoRoll.notes.filter((note) => selectedNoteIds.includes(note.id));
+  }
+
+  function isPianoRollNoteSelected(noteId: string): boolean {
+    return selectedPianoRollNotes().some((note) => note.id === noteId);
   }
 
   function patternSelection() {
@@ -408,6 +414,8 @@
     return {
       controller,
       patternId: pianoRoll.patternId,
+      viewport: patternViewport,
+      highestPitch: pianoRoll.highestPitch,
       pointer: { x, y },
       musical: {
         beat: time,
@@ -418,7 +426,8 @@
       selectedNotes: [
         ...(selection.primary ? [selection.primary] : []),
         ...selection.secondary
-      ]
+      ],
+      visibleNotes: pianoRoll.notes
     };
   }
 
@@ -440,11 +449,24 @@
       : undefined;
   }
 
-  function patternOverlayNotes(): PatternOverlayNote[] {
+  function patternOverlays(): PatternOverlay[] {
     if (!patternInteractionContext) return [];
     if (activePatternTool.id === 'draw-note') return [];
 
-    return activePatternTool.drawOverlay?.(patternInteractionContext)?.notes ?? [];
+    return activePatternTool.drawOverlay?.(patternInteractionContext) ?? [];
+  }
+
+  function patternOverlayNotes(): PatternNoteOverlay[] {
+    return patternOverlays().filter(
+      (overlay): overlay is PatternNoteOverlay => overlay.type === 'note'
+    );
+  }
+
+  function patternOverlayRectangles(): PatternRectangleOverlay[] {
+    return patternOverlays().filter(
+      (overlay): overlay is PatternRectangleOverlay =>
+        overlay.type === 'rectangle'
+    );
   }
 
   function handlePatternWheel(event: WheelEvent) {
@@ -1041,11 +1063,18 @@
                           ></div>
                         {/if}
 
+                        {#each patternOverlayRectangles() as overlay (overlay.id)}
+                          <div
+                            class="marquee-overlay"
+                            style={`left: ${overlay.x}px; top: ${overlay.y}px; width: ${overlay.width}px; height: ${overlay.height}px;`}
+                          ></div>
+                        {/each}
+
                         {#each pianoRoll.notes as note (note.id)}
                           <button
                             type="button"
                             class="note"
-                            class:selected={selected?.type === 'note' && selected.id === note.id}
+                            class:selected={isPianoRollNoteSelected(note.id)}
                             class:hovered={hoveredNoteId === note.id}
                             class:resize-active={activePatternTool.id === 'resize-note'}
                             aria-label={`${noteName(note.pitch)} note at beat ${note.time}`}

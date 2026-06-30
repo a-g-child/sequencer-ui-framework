@@ -11,6 +11,6 @@ export interface PatternRenderer<TViewModel> {
     viewport: PatternViewport,
     grid: GridDefinition,
     interaction?: PatternInteractionContext,
-    overlay?: PatternOverlay
+    overlay?: PatternOverlay[]
   ): void;
 }

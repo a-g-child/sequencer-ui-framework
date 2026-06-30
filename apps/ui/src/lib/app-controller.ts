@@ -76,6 +76,20 @@ export class AppController {
     })
   }
 
+  selectNotes(patternId: string, noteIds: string[]): void {
+    if (noteIds.length === 0) {
+      this.app.documentStore.clearSelection()
+      return
+    }
+
+    this.app.documentStore.setSelection({
+      type: 'note',
+      id: noteIds[0],
+      parentId: patternId,
+      ids: noteIds
+    })
+  }
+
   addTrack(): void {
     const store = this.app.documentStore
     const nextNumber = store.document.tracks.values().length + 1

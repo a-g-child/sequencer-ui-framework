@@ -1,12 +1,15 @@
 import type { BeatTime } from '@sequencer/core';
 import type { AppController } from '../../app-controller';
 import type { PianoRollNoteView } from '../piano-roll/piano-roll-model';
+import type { PatternViewport } from './pattern-viewport';
 
 export type PatternNoteView = PianoRollNoteView;
 
 export type PatternInteractionContext = {
   controller: AppController;
   patternId: string;
+  viewport: PatternViewport;
+  highestPitch: number;
   pointer: {
     x: number;
     y: number;
@@ -18,6 +21,7 @@ export type PatternInteractionContext = {
   };
   hoveredNote?: PatternNoteView;
   selectedNotes: PatternNoteView[];
+  visibleNotes: PatternNoteView[];
 };
 
 export type PatternPointerContext = PatternInteractionContext;
@@ -29,7 +33,8 @@ export type PatternKeyContext = {
   selectedNotes: PatternNoteView[];
 };
 
-export type PatternOverlayNote = {
+export type PatternNoteOverlay = {
+  type: 'note';
   id: string;
   time: BeatTime;
   duration: BeatTime;
@@ -38,9 +43,16 @@ export type PatternOverlayNote = {
   variant?: 'preview' | 'ghost';
 };
 
-export type PatternOverlay = {
-  notes: PatternOverlayNote[];
+export type PatternRectangleOverlay = {
+  type: 'rectangle';
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 };
+
+export type PatternOverlay = PatternNoteOverlay | PatternRectangleOverlay;
 
 export interface PatternTool {
   readonly id: string;
@@ -53,5 +65,5 @@ export interface PatternTool {
   pointerLeave?(context: PatternInteractionContext): void;
   keyDown?(context: PatternKeyContext): void;
   cancel?(): void;
-  drawOverlay?(context: PatternInteractionContext): PatternOverlay | undefined;
+  drawOverlay?(context: PatternInteractionContext): PatternOverlay[];
 }

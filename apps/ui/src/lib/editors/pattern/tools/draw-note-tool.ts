@@ -20,17 +20,16 @@ export class DrawNoteTool implements PatternTool {
     );
   }
 
-  drawOverlay(context: PatternInteractionContext): PatternOverlay {
-    return {
-      notes: [
-        {
-          id: 'draw-preview',
-          time: context.musical.beat,
-          duration: context.musical.snap,
-          pitch: context.musical.pitch,
-          variant: 'preview'
-        }
-      ]
-    };
+  drawOverlay(context: PatternInteractionContext): PatternOverlay[] {
+    return [
+      {
+        type: 'note',
+        id: 'draw-preview',
+        time: context.musical.beat,
+        duration: context.musical.snap,
+        pitch: context.musical.pitch,
+        variant: 'preview'
+      }
+    ];
   }
 }

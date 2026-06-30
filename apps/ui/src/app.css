@@ -530,6 +530,14 @@ h2 {
   pointer-events: none;
 }
 
+.marquee-overlay {
+  position: absolute;
+  z-index: 4;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  pointer-events: none;
+}
+
 .beat-ruler {
   min-height: 22px;
   display: grid;

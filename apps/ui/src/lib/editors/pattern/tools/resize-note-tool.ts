@@ -67,20 +67,19 @@ export class ResizeNoteTool implements PatternTool {
     this.capturedNote = undefined;
   }
 
-  drawOverlay(): PatternOverlay | undefined {
-    if (!this.capturedNote) return undefined;
+  drawOverlay(): PatternOverlay[] {
+    if (!this.capturedNote) return [];
 
-    return {
-      notes: [
-        {
-          id: `resize-preview-${this.capturedNote.noteId}`,
-          time: this.capturedNote.time,
-          duration: this.capturedNote.previewDuration,
-          pitch: this.capturedNote.pitch,
-          variant: 'ghost'
-        }
-      ]
-    };
+    return [
+      {
+        type: 'note',
+        id: `resize-preview-${this.capturedNote.noteId}`,
+        time: this.capturedNote.time,
+        duration: this.capturedNote.previewDuration,
+        pitch: this.capturedNote.pitch,
+        variant: 'ghost'
+      }
+    ];
   }
 
   private updatePreview(context: PatternInteractionContext): void {
