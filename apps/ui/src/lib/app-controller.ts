@@ -30,6 +30,14 @@ import type { TimelinePlacementView } from './timeline/timeline-model'
 export class AppController {
   constructor(private readonly app: SequencerApplication) {}
 
+  get store() {
+    return this.app.documentStore
+  }
+
+  get transportBeat(): BeatTime {
+    return this.app.editorTransport.currentBeat
+  }
+
   selectInitialTrack(): void {
     const initialTrack = this.app.documentStore.document.tracks.values()[0]
 
