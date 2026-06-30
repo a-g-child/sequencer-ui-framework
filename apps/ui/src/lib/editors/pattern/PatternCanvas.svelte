@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { PianoRollNoteView } from '../piano-roll/piano-roll-model';
   import type { PatternRenderModel } from './pattern-renderer';
+  import PatternGrid from './PatternGrid.svelte';
   import PatternOverlays from './PatternOverlays.svelte';
   import {
     beatToScreenX,
@@ -67,35 +68,10 @@
     on:wheel={onWheel}
   >
     <div class="piano-roll-content">
-      <div class="piano-roll-ruler" aria-hidden="true">
-        <span>Note</span>
-        <div
-          class="piano-roll-ruler-track"
-          style={`width: ${patternLengthToScreenWidth(renderModel.visibleLength, renderModel.viewport)}px;`}
-        >
-          {#each renderModel.gridLines.filter((line) => line.label) as marker}
-            <span style={`left: ${beatToScreenX(marker.beat, renderModel.viewport)}px`}>
-              {marker.label}
-            </span>
-          {/each}
-        </div>
-      </div>
+      <PatternGrid {renderModel} layer="ruler" />
 
       <div class="piano-roll-body">
-        <div
-          class="pitch-ruler"
-          style={`height: ${pitchRangeToScreenHeight(renderModel.pitchCount, renderModel.viewport)}px;`}
-          aria-hidden="true"
-        >
-          {#each renderModel.pitchRows as pitch}
-            <span
-              class:c-note={pitch % 12 === 0}
-              style={`top: ${pitchToScreenY(pitch, renderModel.viewport, renderModel.highestPitch) + renderModel.viewport.pixelsPerSemitone / 2}px`}
-            >
-              {noteName(pitch)}
-            </span>
-          {/each}
-        </div>
+        <PatternGrid {renderModel} layer="pitch-ruler" />
 
         <div
           class="piano-roll"
@@ -110,21 +86,7 @@
           on:pointerleave={onPointerLeave}
           on:auxclick|preventDefault
         >
-          <div class="piano-roll-grid" aria-hidden="true">
-            {#each renderModel.gridLines as line}
-              <span
-                class:beat-line={line.isMajor}
-                style={`left: ${beatToScreenX(line.beat, renderModel.viewport)}px`}
-              ></span>
-            {/each}
-
-            {#each renderModel.pitchRows as pitch}
-              <span
-                class="pitch-line"
-                style={`top: ${pitchToScreenY(pitch, renderModel.viewport, renderModel.highestPitch)}px`}
-              ></span>
-            {/each}
-          </div>
+          <PatternGrid {renderModel} layer="background" />
 
           <PatternOverlays {renderModel} />
 
