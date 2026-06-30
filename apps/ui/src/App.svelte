@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import {
     SequencerApplication,
     validateDocument,
@@ -33,6 +33,14 @@
     createGridDefinition,
     type PatternGridLine
   } from './lib/editors/pattern/pattern-grid';
+  import {
+    clampViewport,
+    panViewportX,
+    panViewportY,
+    resetViewport,
+    zoomViewportX,
+    type PatternNavigationBounds
+  } from './lib/editors/pattern/pattern-navigation';
   import { buildPatternSelection } from './lib/editors/pattern/pattern-selection';
   import {
     beatToScreenX,
@@ -64,8 +72,10 @@
   const store = app.documentStore
   controller.selectInitialTrack()
   const resizeNoteTool = new ResizeNoteTool();
-  const patternGrid = createGridDefinition();
-  const patternViewport: PatternViewport = createPatternViewport();
+  const beatsPerBar = 4;
+  const minimumVisibleBars = 4;
+  const minimumVisibleBeats = beatsPerBar * minimumVisibleBars;
+  const patternGrid = createGridDefinition({ majorEvery: beatsPerBar });
   const patternTools: PatternTool[] = [
     new SelectTool(),
     new DrawNoteTool(),
@@ -74,12 +84,19 @@
     resizeNoteTool
   ];
   const middleCPitch = 60;
+  const viewportZoomStep = 1.25;
+  const viewportBeatScrollStep = 1;
+  const viewportPitchScrollStep = 6;
+  const minViewportZoom = 0.5;
+  const maxViewportZoom = 4;
 
   onMount(() => {
     const unsubscribe = app.serviceEvents.subscribe(handleServiceEvent)
+    window.addEventListener('keydown', handleKeyDown)
     void app.initialise()
 
     return () => {
+      window.removeEventListener('keydown', handleKeyDown)
       unsubscribe()
       void app.shutdown()
     }
@@ -107,9 +124,14 @@
   let canRedo = store.history.canRedo()
   let activeEditor: EditorKind = 'piano-roll';
   let activePatternTool = patternTools[0];
+  let patternViewport: PatternViewport = resetViewport();
   let patternInteractionContext: PatternInteractionContext | undefined;
+  let pianoRollScrollElement: HTMLDivElement | undefined;
+  let isPanningPattern = false;
+  let lastPanX = 0;
+  let lastPanY = 0;
   let visiblePatternGridLines: PatternGridLine[] = pianoRoll
-    ? buildPatternGridLines(pianoRoll.length, patternGrid)
+    ? buildPatternGridLines(visiblePianoRollLength(), patternGrid)
     : [];
 
   function rebuildInspector() {
@@ -127,7 +149,7 @@
       : store.document.patterns.values()[0]
     pianoRoll = activePattern ? buildPianoRollView(activePattern) : undefined
     visiblePatternGridLines = pianoRoll
-      ? buildPatternGridLines(pianoRoll.length, patternGrid)
+      ? buildPatternGridLines(visiblePianoRollLength(), patternGrid)
       : []
     rebuildInspector()
     issues = validateDocument(store.document)
@@ -242,6 +264,91 @@
     refreshPatternOverlay();
   }
 
+  function setPatternViewport(next: {
+    zoomX?: number;
+    zoomY?: number;
+    scrollX?: number;
+    scrollY?: number;
+  }) {
+    applyPatternViewport(createPatternViewport({
+      zoomX: next.zoomX ?? patternViewport.zoomX,
+      zoomY: next.zoomY ?? patternViewport.zoomY,
+      scrollX: next.scrollX ?? patternViewport.scrollX,
+      scrollY: next.scrollY ?? patternViewport.scrollY
+    }));
+  }
+
+  function applyPatternViewport(next: PatternViewport) {
+    patternViewport = clampViewport(next, patternNavigationBounds());
+    refreshPatternOverlay();
+  }
+
+  function patternNavigationBounds(): PatternNavigationBounds {
+    const scrollLimit = pianoRollScrollLimit();
+
+    return {
+      maxScrollX: visiblePianoRollLength(),
+      minScrollY: -scrollLimit,
+      maxScrollY: scrollLimit
+    };
+  }
+
+  function visiblePianoRollLength(): number {
+    return Math.max(pianoRoll?.length ?? 0, minimumVisibleBeats);
+  }
+
+  function zoomPatternViewportX(multiplier: number) {
+    applyPatternViewport(
+      zoomViewportX(patternViewport, multiplier, patternNavigationBounds())
+    );
+  }
+
+  function zoomPatternViewportY(multiplier: number) {
+    setPatternViewport({
+      zoomY: clampNumber(
+        patternViewport.zoomY * multiplier,
+        minViewportZoom,
+        maxViewportZoom
+      )
+    });
+  }
+
+  function scrollPatternViewport(deltaBeats: number) {
+    applyPatternViewport(
+      panViewportX(patternViewport, deltaBeats, patternNavigationBounds())
+    );
+  }
+
+  function scrollPatternPitch(deltaSemitones: number) {
+    applyPatternViewport(
+      panViewportY(patternViewport, deltaSemitones, patternNavigationBounds())
+    );
+  }
+
+  function resetPatternViewport() {
+    applyPatternViewport(resetViewport());
+    void tick().then(() => centerPianoRollScroll());
+  }
+
+  function pianoRollScrollLimit(): number {
+    return pianoRoll ? pianoRoll.pitchCount : 0;
+  }
+
+  function clampNumber(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function noteHeight(): number {
+    return Math.max(6, patternViewport.pixelsPerSemitone - 2);
+  }
+
+  function noteName(pitch: number): string {
+    const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const octave = Math.floor(pitch / 12) - 1;
+
+    return `${names[pitch % 12]}${octave}`;
+  }
+
   function selectedPianoRollNotes(): PianoRollNoteView[] {
     if (!pianoRoll) return [];
 
@@ -313,6 +420,112 @@
     return activePatternTool.drawOverlay?.(patternInteractionContext)?.notes ?? [];
   }
 
+  function handlePatternWheel(event: WheelEvent) {
+    event.preventDefault();
+
+    if (event.ctrlKey || event.metaKey) {
+      applyPatternViewport(
+        zoomViewportX(
+          patternViewport,
+          event.deltaY < 0 ? 1.1 : 0.9,
+          patternNavigationBounds()
+        )
+      );
+      return;
+    }
+
+    if (event.shiftKey) {
+      applyPatternViewport(
+        panViewportY(
+          patternViewport,
+          event.deltaY > 0 ? 2 : -2,
+          patternNavigationBounds()
+        )
+      );
+      return;
+    }
+
+    applyPatternViewport(
+      panViewportX(
+        patternViewport,
+        event.deltaY / patternViewport.pixelsPerBeat,
+        patternNavigationBounds()
+      )
+    );
+  }
+
+  function handleKeyDown(event: KeyboardEvent) {
+    if (activeEditor !== 'piano-roll' || isEditableEventTarget(event.target)) return;
+
+    if (event.key === 'Home') {
+      event.preventDefault();
+      resetPatternViewport();
+      return;
+    }
+
+    if (event.key === '+' || event.key === '=') {
+      event.preventDefault();
+      zoomPatternViewportX(1.1);
+      return;
+    }
+
+    if (event.key === '-' || event.key === '_') {
+      event.preventDefault();
+      zoomPatternViewportX(0.9);
+    }
+  }
+
+  function isEditableEventTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+
+    return Boolean(
+      target.closest('input, textarea, select, [contenteditable="true"]')
+    );
+  }
+
+  function beginPatternPan(event: PointerEvent): boolean {
+    if (event.button !== 1) return false;
+
+    event.preventDefault();
+    isPanningPattern = true;
+    lastPanX = event.clientX;
+    lastPanY = event.clientY;
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+
+    return true;
+  }
+
+  function movePatternPan(event: PointerEvent): boolean {
+    if (!isPanningPattern) return false;
+
+    const dx = event.clientX - lastPanX;
+    const dy = event.clientY - lastPanY;
+
+    let nextViewport = panViewportX(
+      patternViewport,
+      -dx / patternViewport.pixelsPerBeat,
+      patternNavigationBounds()
+    );
+    nextViewport = panViewportY(
+      nextViewport,
+      dy / patternViewport.pixelsPerSemitone,
+      patternNavigationBounds()
+    );
+    applyPatternViewport(nextViewport);
+
+    lastPanX = event.clientX;
+    lastPanY = event.clientY;
+
+    return true;
+  }
+
+  function endPatternPan(): boolean {
+    if (!isPanningPattern) return false;
+
+    isPanningPattern = false;
+    return true;
+  }
+
   function handlePianoRollPointerEnter(event: PointerEvent) {
     const context = buildPatternInteractionContext(event);
 
@@ -324,6 +537,8 @@
   }
 
   function handlePianoRollPointerDown(event: PointerEvent) {
+    if (beginPatternPan(event)) return;
+
     const context = buildPatternInteractionContext(event);
 
     if (!context) return;
@@ -337,6 +552,8 @@
   }
 
   function handlePianoRollPointerMove(event: PointerEvent) {
+    if (movePatternPan(event)) return;
+
     const context = buildPatternInteractionContext(event);
 
     if (!context) return;
@@ -347,6 +564,8 @@
   }
 
   function handlePianoRollPointerUp(event: PointerEvent) {
+    if (endPatternPan()) return;
+
     const context = buildPatternInteractionContext(event);
 
     if (!context) return;
@@ -358,6 +577,8 @@
   }
 
   function handlePianoRollPointerLeave(event: PointerEvent) {
+    if (isPanningPattern) return;
+
     const context = buildPatternInteractionContext(event);
 
     if (!context) return;
@@ -373,6 +594,8 @@
   }
 
   function handleNotePointerDown(event: PointerEvent, note: PianoRollNoteView) {
+    if (beginPatternPan(event)) return;
+
     const context = buildPatternInteractionContext(event, note);
 
     if (!context) return;
@@ -389,6 +612,8 @@
   }
 
   function handleNotePointerMove(event: PointerEvent, note: PianoRollNoteView) {
+    if (movePatternPan(event)) return;
+
     const context = buildPatternInteractionContext(event, note);
 
     if (!context) return;
@@ -399,6 +624,8 @@
   }
 
   function handleNotePointerUp(event: PointerEvent, note: PianoRollNoteView) {
+    if (endPatternPan()) return;
+
     const context = buildPatternInteractionContext(event, note);
 
     if (!context) return;
@@ -409,44 +636,19 @@
     refreshPatternOverlay();
   }
 
-  function handleResizePointerDown(event: PointerEvent, note: PianoRollNoteView) {
-    const context = buildPatternInteractionContext(event, note);
-
-    if (!context) return;
-
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-    setActivePatternTool(resizeNoteTool);
-    patternInteractionContext = context;
-    resizeNoteTool.pointerDown(context);
-    refreshPatternOverlay();
-  }
-
-  function handleResizePointerMove(event: PointerEvent, note: PianoRollNoteView) {
-    const context = buildPatternInteractionContext(event, note);
-
-    if (!context) return;
-
-    patternInteractionContext = context;
-    resizeNoteTool.pointerMove?.(context);
-    refreshPatternOverlay();
-  }
-
-  function handleResizePointerUp(event: PointerEvent, note: PianoRollNoteView) {
-    const context = buildPatternInteractionContext(event, note);
-
-    if (!context) return;
-
-    patternInteractionContext = context;
-    resizeNoteTool.pointerUp?.(context);
-    syncView();
-    refreshPatternOverlay();
-  }
-
   function centerPianoRollOnMiddleC(node: HTMLDivElement) {
-    const middleCOffset =
-      pitchToScreenY(middleCPitch, patternViewport, 127) - node.clientHeight / 2;
+    pianoRollScrollElement = node;
+    centerPianoRollScroll();
+  }
 
-    node.scrollTop = Math.max(0, middleCOffset);
+  function centerPianoRollScroll() {
+    if (!pianoRollScrollElement) return;
+
+    const middleCOffset =
+      pitchToScreenY(middleCPitch, patternViewport, 127) -
+      pianoRollScrollElement.clientHeight / 2;
+
+    pianoRollScrollElement.scrollTop = Math.max(0, middleCOffset);
   }
 
   function setNumberPreview(parameterId: string, value: number) {
@@ -660,105 +862,178 @@
 
               <div class="piano-roll-toolbar">
                 <button type="button" on:click={addC4Note}>Add C4</button>
+                <div class="viewport-controls" aria-label="Pattern viewport controls">
+                  <button
+                    type="button"
+                    aria-label="Zoom time out"
+                    on:click={() => zoomPatternViewportX(1 / viewportZoomStep)}
+                  >
+                    X -
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Zoom time in"
+                    on:click={() => zoomPatternViewportX(viewportZoomStep)}
+                  >
+                    X +
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Zoom pitch out"
+                    on:click={() => zoomPatternViewportY(1 / viewportZoomStep)}
+                  >
+                    Y -
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Zoom pitch in"
+                    on:click={() => zoomPatternViewportY(viewportZoomStep)}
+                  >
+                    Y +
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Scroll left"
+                    on:click={() => scrollPatternViewport(-viewportBeatScrollStep)}
+                  >
+                    Left
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Scroll right"
+                    on:click={() => scrollPatternViewport(viewportBeatScrollStep)}
+                  >
+                    Right
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Pitch up"
+                    on:click={() => scrollPatternPitch(-viewportPitchScrollStep)}
+                  >
+                    Pitch +
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Pitch down"
+                    on:click={() => scrollPatternPitch(viewportPitchScrollStep)}
+                  >
+                    Pitch -
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Reset view"
+                    on:click={resetPatternViewport}
+                  >
+                    Reset
+                  </button>
+                </div>
               </div>
 
               <div
                 class="piano-roll-frame"
               >
-                <div class="piano-roll-ruler" aria-hidden="true">
-                  <span>Beat</span>
-                  <div
-                    class="piano-roll-ruler-track"
-                    style={`width: ${patternLengthToScreenWidth(pianoRoll.length, patternViewport)}px;`}
-                  >
-                    {#each visiblePatternGridLines.filter((line) => line.label) as marker}
-                      <span style={`left: ${beatToScreenX(marker.beat, patternViewport)}px`}>
-                        {marker.label}
-                      </span>
-                    {/each}
-                  </div>
-                </div>
-
                 <div
                   class="piano-roll-scroll"
+                  bind:this={pianoRollScrollElement}
                   use:centerPianoRollOnMiddleC
+                  on:wheel={handlePatternWheel}
                 >
-                <div class="piano-roll-body">
-                  <div
-                    class="pitch-ruler"
-                    style={`height: ${pitchRangeToScreenHeight(pianoRoll.pitchCount, patternViewport)}px;`}
-                    aria-hidden="true"
-                  >
-                    <span>{pianoRoll.highestPitch}</span>
-                    <span>{pianoRoll.lowestPitch}</span>
-                  </div>
-
-                <div
-                  class="piano-roll"
-                  role="application"
-                  aria-label="Piano roll notes"
-                  style={`width: ${patternLengthToScreenWidth(pianoRoll.length, patternViewport)}px; height: ${pitchRangeToScreenHeight(pianoRoll.pitchCount, patternViewport)}px;`}
-                  on:pointerenter={handlePianoRollPointerEnter}
-                  on:pointerdown={handlePianoRollPointerDown}
-                  on:pointermove={handlePianoRollPointerMove}
-                  on:pointerup={handlePianoRollPointerUp}
-                  on:pointerleave={handlePianoRollPointerLeave}
-                >
-                    <div class="piano-roll-grid" aria-hidden="true">
-                      {#each visiblePatternGridLines as line}
-                        <span
-                          class:beat-line={line.isMajor}
-                          style={`left: ${beatToScreenX(line.beat, patternViewport)}px`}
-                        ></span>
-                      {/each}
-
-                      {#each pianoRoll.pitchRows as pitch}
-                        <span
-                          class="pitch-line"
-                          style={`top: ${pitchToScreenY(pitch, patternViewport, pianoRoll.highestPitch)}px`}
-                        ></span>
-                      {/each}
+                  <div class="piano-roll-content">
+                    <div class="piano-roll-ruler" aria-hidden="true">
+                      <span>Note</span>
+                      <div
+                        class="piano-roll-ruler-track"
+                        style={`width: ${patternLengthToScreenWidth(visiblePianoRollLength(), patternViewport)}px;`}
+                      >
+                        {#each visiblePatternGridLines.filter((line) => line.label) as marker}
+                          <span style={`left: ${beatToScreenX(marker.beat, patternViewport)}px`}>
+                            {marker.label}
+                          </span>
+                        {/each}
+                      </div>
                     </div>
 
-                    {#each pianoRoll.notes as note (note.id)}
-                      <button
-                        type="button"
-                        class="note"
-                        class:selected={selected?.type === 'note' && selected.id === note.id}
-                        style={`left: ${beatToScreenX(note.time, patternViewport)}px; width: ${durationToScreenWidth(note.duration, patternViewport)}px; top: ${pitchToScreenY(note.pitch, patternViewport, pianoRoll.highestPitch) + 1}px;`}
-                        on:pointerdown|stopPropagation={(event) =>
-                          handleNotePointerDown(event, note)}
-                        on:pointermove|stopPropagation={(event) =>
-                          handleNotePointerMove(event, note)}
-                        on:pointerup|stopPropagation={(event) =>
-                          handleNotePointerUp(event, note)}
-                      >
-                        {note.pitch}
-                        <span
-                          class="note-resize-handle"
-                          aria-label={`Resize note ${note.pitch}`}
-                          role="presentation"
-                          on:pointerdown|stopPropagation={(event) =>
-                            handleResizePointerDown(event, note)}
-                          on:pointermove|stopPropagation={(event) =>
-                            handleResizePointerMove(event, note)}
-                          on:pointerup|stopPropagation={(event) =>
-                            handleResizePointerUp(event, note)}
-                        ></span>
-                      </button>
-                    {/each}
-
-                    {#each patternOverlayNotes() as overlayNote (overlayNote.id)}
+                    <div class="piano-roll-body">
                       <div
-                        class="note-overlay"
-                        class:ghost={overlayNote.variant === 'ghost'}
-                        style={`left: ${beatToScreenX(overlayNote.time, patternViewport)}px; width: ${durationToScreenWidth(overlayNote.duration, patternViewport)}px; top: ${pitchToScreenY(overlayNote.pitch, patternViewport, pianoRoll.highestPitch) + 1}px;`}
+                        class="pitch-ruler"
+                        style={`height: ${pitchRangeToScreenHeight(pianoRoll.pitchCount, patternViewport)}px;`}
+                        aria-hidden="true"
                       >
-                        {overlayNote.label ?? overlayNote.pitch}
+                        {#each pianoRoll.pitchRows as pitch}
+                          <span
+                            class:c-note={pitch % 12 === 0}
+                            style={`top: ${pitchToScreenY(pitch, patternViewport, pianoRoll.highestPitch) + patternViewport.pixelsPerSemitone / 2}px`}
+                          >
+                            {noteName(pitch)}
+                          </span>
+                        {/each}
                       </div>
-                    {/each}
+
+                      <div
+                        class="piano-roll"
+                        class:panning={isPanningPattern}
+                        role="application"
+                        aria-label="Piano roll notes"
+                        style={`width: ${patternLengthToScreenWidth(visiblePianoRollLength(), patternViewport)}px; height: ${pitchRangeToScreenHeight(pianoRoll.pitchCount, patternViewport)}px;`}
+                        on:pointerenter={handlePianoRollPointerEnter}
+                        on:pointerdown={handlePianoRollPointerDown}
+                        on:pointermove={handlePianoRollPointerMove}
+                        on:pointerup={handlePianoRollPointerUp}
+                        on:pointerleave={handlePianoRollPointerLeave}
+                        on:auxclick|preventDefault
+                      >
+                        <div class="piano-roll-grid" aria-hidden="true">
+                          {#each visiblePatternGridLines as line}
+                            <span
+                              class:beat-line={line.isMajor}
+                              style={`left: ${beatToScreenX(line.beat, patternViewport)}px`}
+                            ></span>
+                          {/each}
+
+                          {#each pianoRoll.pitchRows as pitch}
+                            <span
+                              class="pitch-line"
+                              style={`top: ${pitchToScreenY(pitch, patternViewport, pianoRoll.highestPitch)}px`}
+                            ></span>
+                          {/each}
+                        </div>
+
+                        {#each pianoRoll.notes as note (note.id)}
+                          <button
+                            type="button"
+                            class="note"
+                            class:selected={selected?.type === 'note' && selected.id === note.id}
+                            class:resize-active={activePatternTool.id === 'resize-note'}
+                            aria-label={`${noteName(note.pitch)} note at beat ${note.time}`}
+                            style={`left: ${beatToScreenX(note.time, patternViewport)}px; width: ${durationToScreenWidth(note.duration, patternViewport)}px; height: ${noteHeight()}px; top: ${pitchToScreenY(note.pitch, patternViewport, pianoRoll.highestPitch) + 1}px;`}
+                            on:pointerdown|stopPropagation={(event) =>
+                              handleNotePointerDown(event, note)}
+                            on:pointermove|stopPropagation={(event) =>
+                              handleNotePointerMove(event, note)}
+                            on:pointerup|stopPropagation={(event) =>
+                              handleNotePointerUp(event, note)}
+                            on:auxclick|preventDefault
+                          >
+                            {#if activePatternTool.id === 'resize-note'}
+                              <span
+                                class="note-resize-handle"
+                                aria-label={`Resize ${noteName(note.pitch)} note`}
+                                role="presentation"
+                              ></span>
+                            {/if}
+                          </button>
+                        {/each}
+
+                        {#each patternOverlayNotes() as overlayNote (overlayNote.id)}
+                          <div
+                            class="note-overlay"
+                            class:ghost={overlayNote.variant === 'ghost'}
+                            style={`left: ${beatToScreenX(overlayNote.time, patternViewport)}px; width: ${durationToScreenWidth(overlayNote.duration, patternViewport)}px; height: ${noteHeight()}px; top: ${pitchToScreenY(overlayNote.pitch, patternViewport, pianoRoll.highestPitch) + 1}px;`}
+                          ></div>
+                        {/each}
+                      </div>
+                    </div>
                   </div>
-                </div>
                 </div>
               </div>
             </section>

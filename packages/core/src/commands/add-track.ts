@@ -24,7 +24,7 @@ export class AddTrackCommand implements Command {
   constructor(
     private readonly trackName = "Track 1",
     private readonly patternName = "Pattern A",
-    private readonly patternLength: BeatTime = 4,
+    private readonly patternLength: BeatTime = 16,
     private readonly start: BeatTime = 0
   ) {}
 

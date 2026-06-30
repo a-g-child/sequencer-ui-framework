@@ -11,7 +11,7 @@ import { Registry } from "./registry";
 import type { Parameter, ParameterDefinition } from "./parameter";
 import { addDefaultTrackParameters } from "./default-parameters";
 
-export function createPattern(name = "Pattern A", length = 4): Pattern {
+export function createPattern(name = "Pattern A", length = 16): Pattern {
   return {
     id: createId("pattern"),
     name,
