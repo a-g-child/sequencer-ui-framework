@@ -33,7 +33,7 @@
     createGridDefinition,
     type PatternGridLine
   } from './lib/editors/pattern/pattern-grid';
-  import { hitTestNote } from './lib/editors/pattern/pattern-hit-testing';
+  import { buildPatternInteractionContext as createPatternInteractionContext } from './lib/editors/pattern/pattern-interaction-builder';
   import { PatternInputState } from './lib/editors/pattern/pattern-input-state';
   import {
     clampViewport,
@@ -52,9 +52,6 @@
     patternLengthToScreenWidth,
     pitchRangeToScreenHeight,
     pitchToScreenY,
-    screenXToBeat,
-    screenYToPitch,
-    snapBeat,
     type PatternViewport
   } from './lib/editors/pattern/pattern-viewport';
   import { DrawNoteTool } from './lib/editors/pattern/tools/draw-note-tool';
@@ -69,6 +66,7 @@
     PatternRectangleOverlay,
     PatternTool
   } from './lib/editors/pattern/pattern-tool';
+  import PatternToolbar from './lib/editors/pattern/PatternToolbar.svelte';
 
   
 
@@ -382,57 +380,23 @@
   ): PatternInteractionContext | undefined {
     if (!pianoRoll) return undefined;
 
-    const eventTarget = event.currentTarget as HTMLElement;
-    const target = eventTarget.classList.contains('piano-roll')
-      ? eventTarget
-      : eventTarget.closest<HTMLElement>('.piano-roll');
-
-    if (!target) return undefined;
-
-    const rect = target.getBoundingClientRect();
-
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top - target.clientTop;
-    const time = snapBeat(screenXToBeat(x, patternViewport), patternGrid.snap);
-    const detectedNote =
-      hoveredNote ??
-      hitTestNote(
-        pianoRoll.notes,
-        patternViewport,
-        pianoRoll.highestPitch,
-        x,
-        y
-      );
-
-    const pitch = Math.max(
-      pianoRoll.lowestPitch,
-      Math.min(
-        pianoRoll.highestPitch,
-        screenYToPitch(y, patternViewport, pianoRoll.highestPitch)
-      )
-    );
-
     const selection = patternSelection();
 
-    return {
+    return createPatternInteractionContext({
+      event,
+      element: event.currentTarget as HTMLElement,
       controller,
       patternId: pianoRoll.patternId,
+      input: patternInput,
       viewport: patternViewport,
-      highestPitch: pianoRoll.highestPitch,
-      modifiers: { ...patternInput.modifiers },
-      pointer: { x, y },
-      musical: {
-        beat: time,
-        pitch,
-        snap: patternGrid.snap
-      },
-      hoveredNote: detectedNote,
+      grid: patternGrid,
+      pianoRoll,
       selectedNotes: [
         ...(selection.primary ? [selection.primary] : []),
         ...selection.secondary
       ],
-      visibleNotes: pianoRoll.notes
-    };
+      hoveredNote
+    });
   }
 
   function updatePatternHover(context: PatternInteractionContext) {
@@ -913,96 +877,34 @@
           <h2>Timeline</h2>
           <span>{timeline.length} beats</span>
         </div>
-
-    
-
-        
       </section>
-      <div class="editor-tabs">
-        {#each EDITORS as editor}
-          <button
-            class:active={activeEditor === editor.id}
-            on:click={() => activeEditor = editor.id}
-          >
-            {editor.name}
-          </button>
-        {/each}
-      </div>
+      <PatternToolbar
+        editors={EDITORS}
+        activeEditor={activeEditor}
+        tools={patternTools}
+        activeToolId={activePatternTool.id}
+        onEditorChange={(editor) => {
+          activeEditor = editor;
+        }}
+        onToolChange={setActivePatternTool}
+        onAddNote={addC4Note}
+        onZoomIn={() => zoomPatternViewportX(viewportZoomStep)}
+        onZoomOut={() => zoomPatternViewportX(1 / viewportZoomStep)}
+        onZoomPitchIn={() => zoomPatternViewportY(viewportZoomStep)}
+        onZoomPitchOut={() => zoomPatternViewportY(1 / viewportZoomStep)}
+        onPanLeft={() => scrollPatternViewport(-viewportBeatScrollStep)}
+        onPanRight={() => scrollPatternViewport(viewportBeatScrollStep)}
+        onPitchUp={() => scrollPatternPitch(-viewportPitchScrollStep)}
+        onPitchDown={() => scrollPatternPitch(viewportPitchScrollStep)}
+        onResetView={resetPatternViewport}
+      />
+
       {#if activeEditor === 'piano-roll'}
           {#if pianoRoll}
             <section class="piano-roll-panel" aria-label="Piano roll">
               <div class="pane-heading">
                 <h2>Piano Roll</h2>
                 <span>{pianoRoll.patternName}</span>
-              </div>
-
-              <div class="piano-roll-toolbar">
-                <button type="button" on:click={addC4Note}>Add C4</button>
-                <div class="viewport-controls" aria-label="Pattern viewport controls">
-                  <button
-                    type="button"
-                    aria-label="Zoom time out"
-                    on:click={() => zoomPatternViewportX(1 / viewportZoomStep)}
-                  >
-                    X -
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Zoom time in"
-                    on:click={() => zoomPatternViewportX(viewportZoomStep)}
-                  >
-                    X +
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Zoom pitch out"
-                    on:click={() => zoomPatternViewportY(1 / viewportZoomStep)}
-                  >
-                    Y -
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Zoom pitch in"
-                    on:click={() => zoomPatternViewportY(viewportZoomStep)}
-                  >
-                    Y +
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Scroll left"
-                    on:click={() => scrollPatternViewport(-viewportBeatScrollStep)}
-                  >
-                    Left
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Scroll right"
-                    on:click={() => scrollPatternViewport(viewportBeatScrollStep)}
-                  >
-                    Right
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Pitch up"
-                    on:click={() => scrollPatternPitch(-viewportPitchScrollStep)}
-                  >
-                    Pitch +
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Pitch down"
-                    on:click={() => scrollPatternPitch(viewportPitchScrollStep)}
-                  >
-                    Pitch -
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Reset view"
-                    on:click={resetPatternViewport}
-                  >
-                    Reset
-                  </button>
-                </div>
               </div>
 
               <div
@@ -1145,18 +1047,6 @@
             <p>Node-based routing and modulation placeholder.</p>
           </section>
         {/if}
-
-      
-      <div class="tool-tabs">
-        {#each patternTools as tool}
-          <button
-            class:active={activePatternTool.id === tool.id}
-            on:click={() => setActivePatternTool(tool)}
-          >
-            {tool.name}
-          </button>
-        {/each}
-      </div>
       {#if inspector.type === 'track'}
         <div class="pane-heading">
           <h2>{inspector.title}</h2>
@@ -1384,15 +1274,3 @@
     <span class:ok={issues.length === 0}>{issues.length} issues</span>
   </footer>
 </main>
-
-<style>
-  .editor-tabs {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 0.75rem;
-  }
-
-  .editor-tabs button.active {
-    font-weight: 700;
-  }
-</style>
