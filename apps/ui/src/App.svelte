@@ -33,6 +33,7 @@
     createGridDefinition,
     type PatternGridLine
   } from './lib/editors/pattern/pattern-grid';
+  import { hitTestNote } from './lib/editors/pattern/pattern-hit-testing';
   import {
     clampViewport,
     panViewportX,
@@ -130,6 +131,10 @@
   let isPanningPattern = false;
   let lastPanX = 0;
   let lastPanY = 0;
+  let hoveredNoteId: string | undefined;
+  let ghostBeat = 0;
+  let ghostPitch = middleCPitch;
+  let showGhost = false;
   let visiblePatternGridLines: PatternGridLine[] = pianoRoll
     ? buildPatternGridLines(visiblePianoRollLength(), patternGrid)
     : [];
@@ -380,6 +385,15 @@
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top - target.clientTop;
     const time = snapBeat(screenXToBeat(x, patternViewport), patternGrid.snap);
+    const detectedNote =
+      hoveredNote ??
+      hitTestNote(
+        pianoRoll.notes,
+        patternViewport,
+        pianoRoll.highestPitch,
+        x,
+        y
+      );
 
     const pitch = Math.max(
       pianoRoll.lowestPitch,
@@ -400,12 +414,24 @@
         pitch,
         snap: patternGrid.snap
       },
-      hoveredNote,
+      hoveredNote: detectedNote,
       selectedNotes: [
         ...(selection.primary ? [selection.primary] : []),
         ...selection.secondary
       ]
     };
+  }
+
+  function updatePatternHover(context: PatternInteractionContext) {
+    hoveredNoteId = context.hoveredNote?.id;
+    ghostBeat = context.musical.beat;
+    ghostPitch = context.musical.pitch;
+    showGhost = !context.hoveredNote;
+  }
+
+  function clearPatternHover() {
+    hoveredNoteId = undefined;
+    showGhost = false;
   }
 
   function refreshPatternOverlay() {
@@ -416,6 +442,7 @@
 
   function patternOverlayNotes(): PatternOverlayNote[] {
     if (!patternInteractionContext) return [];
+    if (activePatternTool.id === 'draw-note') return [];
 
     return activePatternTool.drawOverlay?.(patternInteractionContext)?.notes ?? [];
   }
@@ -487,6 +514,7 @@
     if (event.button !== 1) return false;
 
     event.preventDefault();
+    clearPatternHover();
     isPanningPattern = true;
     lastPanX = event.clientX;
     lastPanY = event.clientY;
@@ -532,6 +560,7 @@
     if (!context) return;
 
     patternInteractionContext = context;
+    updatePatternHover(context);
     activePatternTool.pointerEnter?.(context);
     refreshPatternOverlay();
   }
@@ -545,6 +574,7 @@
 
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
     patternInteractionContext = context;
+    updatePatternHover(context);
     activePatternTool.pointerDown(context);
 
     syncView();
@@ -559,6 +589,7 @@
     if (!context) return;
 
     patternInteractionContext = context;
+    updatePatternHover(context);
     activePatternTool.pointerMove?.(context);
     refreshPatternOverlay();
   }
@@ -571,6 +602,7 @@
     if (!context) return;
 
     patternInteractionContext = context;
+    updatePatternHover(context);
     activePatternTool.pointerUp?.(context);
     syncView();
     refreshPatternOverlay();
@@ -584,6 +616,7 @@
     if (!context) return;
 
     patternInteractionContext = context;
+    clearPatternHover();
     activePatternTool.pointerLeave?.(context);
 
     if (!['move-note', 'resize-note'].includes(activePatternTool.id)) {
@@ -602,6 +635,7 @@
 
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
     patternInteractionContext = context;
+    updatePatternHover(context);
     activePatternTool.pointerDown(context);
     refreshPatternOverlay();
 
@@ -619,6 +653,7 @@
     if (!context) return;
 
     patternInteractionContext = context;
+    updatePatternHover(context);
     activePatternTool.pointerMove?.(context);
     refreshPatternOverlay();
   }
@@ -631,6 +666,7 @@
     if (!context) return;
 
     patternInteractionContext = context;
+    updatePatternHover(context);
     activePatternTool.pointerUp?.(context);
     syncView();
     refreshPatternOverlay();
@@ -998,11 +1034,19 @@
                           {/each}
                         </div>
 
+                        {#if showGhost && activePatternTool.id === 'draw-note'}
+                          <div
+                            class="note-ghost"
+                            style={`left: ${beatToScreenX(ghostBeat, patternViewport)}px; top: ${pitchToScreenY(ghostPitch, patternViewport, pianoRoll.highestPitch) + 1}px; width: ${durationToScreenWidth(patternGrid.snap, patternViewport)}px; height: ${noteHeight()}px;`}
+                          ></div>
+                        {/if}
+
                         {#each pianoRoll.notes as note (note.id)}
                           <button
                             type="button"
                             class="note"
                             class:selected={selected?.type === 'note' && selected.id === note.id}
+                            class:hovered={hoveredNoteId === note.id}
                             class:resize-active={activePatternTool.id === 'resize-note'}
                             aria-label={`${noteName(note.pitch)} note at beat ${note.time}`}
                             style={`left: ${beatToScreenX(note.time, patternViewport)}px; width: ${durationToScreenWidth(note.duration, patternViewport)}px; height: ${noteHeight()}px; top: ${pitchToScreenY(note.pitch, patternViewport, pianoRoll.highestPitch) + 1}px;`}

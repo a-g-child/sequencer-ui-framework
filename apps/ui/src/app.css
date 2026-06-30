@@ -472,6 +472,11 @@ h2 {
   cursor: ew-resize;
 }
 
+.note.hovered {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .note-resize-handle {
   position: absolute;
   top: 1px;
@@ -514,6 +519,15 @@ h2 {
 .note-overlay.ghost {
   border-color: rgba(49, 79, 127, 0.7);
   background: rgba(49, 79, 127, 0.18);
+}
+
+.note-ghost {
+  position: absolute;
+  z-index: 2;
+  border-radius: 4px;
+  background: var(--accent);
+  opacity: 0.25;
+  pointer-events: none;
 }
 
 .beat-ruler {

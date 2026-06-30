@@ -90,5 +90,5 @@ export function patternLengthToScreenWidth(
 }
 
 export function snapBeat(beat: BeatTime, snap: BeatTime): BeatTime {
-  return Math.floor(beat / snap) * snap;
+  return Math.max(0, Math.floor(beat / snap) * snap);
 }
