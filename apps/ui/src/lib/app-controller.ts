@@ -13,9 +13,13 @@ import {
 } from '@sequencer/core'
 import {
   CreateNoteOperation,
+  CreateNotesOperation,
   DeleteNoteOperation,
   MoveNoteOperation,
-  ResizeNoteOperation
+  ResizeNoteOperation,
+  type CreateNoteInput,
+  type NoteClipboard,
+  type NoteClipboardItem
 } from '@sequencer/music'
 import type { PlacementInspectorView } from './inspector/inspector-model'
 import type { NoteInspectorView } from './inspector/inspector-model'
@@ -88,6 +92,49 @@ export class AppController {
       parentId: patternId,
       ids: noteIds
     })
+  }
+
+  copyNotes(notes: PianoRollNoteView[]): boolean {
+    if (notes.length === 0) return false
+
+    const originBeat = Math.min(...notes.map((note) => note.time))
+    const payload: NoteClipboard = {
+      type: 'notes',
+      originBeat,
+      items: notes.map((note) => ({
+        time: note.time,
+        duration: note.duration,
+        pitch: note.pitch,
+        velocity: note.velocity
+      }))
+    }
+
+    this.app.documentStore.setClipboardPayload(payload)
+    return true
+  }
+
+  pasteNotes(patternId: string, target: PasteTarget): boolean {
+    const payload =
+      this.app.documentStore.clipboard.getPayload<NoteClipboard>()
+
+    if (!payload || payload.type !== 'notes' || payload.items.length === 0) {
+      return false
+    }
+
+    return this.createNotesFromClipboard(patternId, payload, target.beat)
+  }
+
+  duplicateNotes(patternId: string, notes: PianoRollNoteView[]): boolean {
+    if (!this.copyNotes(notes)) return false
+
+    const originBeat = Math.min(...notes.map((note) => note.time))
+    const duplicateBeat = originBeat + this.duplicateOffset(notes)
+    const payload =
+      this.app.documentStore.clipboard.getPayload<NoteClipboard>()
+
+    if (!payload) return false
+
+    return this.createNotesFromClipboard(patternId, payload, duplicateBeat)
   }
 
   addTrack(): void {
@@ -309,4 +356,49 @@ export class AppController {
   redo(): void {
     this.app.documentStore.redo()
   }
+
+  private createNotesFromClipboard(
+    patternId: string,
+    payload: NoteClipboard,
+    targetBeat: number
+  ): boolean {
+    const offset = Math.max(0, targetBeat) - payload.originBeat
+    const notes = payload.items.map((item) =>
+      this.toCreateNoteInput(item, offset)
+    )
+    const operation = new CreateNotesOperation(patternId, notes)
+
+    this.app.documentStore.execute(operation)
+    this.selectNotes(
+      patternId,
+      operation.notes.map((note) => note.id)
+    )
+    return true
+  }
+
+  private toCreateNoteInput(
+    item: NoteClipboardItem,
+    offset: number
+  ): CreateNoteInput {
+    return {
+      time: Math.max(0, item.time + offset),
+      duration: item.duration,
+      pitch: item.pitch,
+      velocity: item.velocity
+    }
+  }
+
+  private duplicateOffset(notes: PianoRollNoteView[]): number {
+    const earliestBeat = Math.min(...notes.map((note) => note.time))
+    const latestBeat = Math.max(
+      ...notes.map((note) => note.time + note.duration)
+    )
+
+    return Math.max(0.25, latestBeat - earliestBeat)
+  }
+}
+
+export type PasteTarget = {
+  beat: BeatTime
+  pitch?: number
 }

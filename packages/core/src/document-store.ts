@@ -70,9 +70,21 @@ export class DocumentStore {
     });
   }
 
+  setClipboardPayload(payload: unknown): void {
+    this.clipboard.setPayload(payload);
+    this.events.emit({
+      type: "clipboard:changed",
+      payload
+    });
+  }
+
   clearClipboard(): void {
     this.clipboard.clear();
-    this.events.emit({ type: "clipboard:changed", items: [] });
+    this.events.emit({
+      type: "clipboard:changed",
+      items: [],
+      payload: undefined
+    });
   }
 
   previewParameterValue(parameterId: string, value: unknown): void {

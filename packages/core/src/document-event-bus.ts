@@ -22,6 +22,7 @@ export interface BaseDocumentEvent {
   entityIds?: EntityId[];
   selection?: SelectionItem[];
   items?: Entity[];
+  payload?: unknown;
 }
 
 export type DocumentEvent = BaseDocumentEvent | ParameterPreviewEvent;

@@ -506,6 +506,24 @@
   function handleKeyDown(event: KeyboardEvent) {
     if (activeEditor !== 'piano-roll' || isEditableEventTarget(event.target)) return;
 
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'c') {
+      event.preventDefault();
+      copySelectedNotes();
+      return;
+    }
+
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'v') {
+      event.preventDefault();
+      pasteCopiedNotes();
+      return;
+    }
+
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'd') {
+      event.preventDefault();
+      duplicateSelectedNotes();
+      return;
+    }
+
     if (event.key === 'Home') {
       event.preventDefault();
       resetPatternViewport();
@@ -522,6 +540,30 @@
       event.preventDefault();
       zoomPatternViewportX(0.9);
     }
+  }
+
+  function copySelectedNotes() {
+    controller.copyNotes(selectedPianoRollNotes());
+  }
+
+  function pasteCopiedNotes() {
+    if (!pianoRoll) return;
+
+    if (controller.pasteNotes(pianoRoll.patternId, { beat: pasteTargetBeat() })) {
+      syncView();
+    }
+  }
+
+  function duplicateSelectedNotes() {
+    if (!pianoRoll) return;
+
+    if (controller.duplicateNotes(pianoRoll.patternId, selectedPianoRollNotes())) {
+      syncView();
+    }
+  }
+
+  function pasteTargetBeat(): number {
+    return showGhost ? ghostBeat : transportBeat;
   }
 
   function isEditableEventTarget(target: EventTarget | null): boolean {
