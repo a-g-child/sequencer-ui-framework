@@ -1,5 +1,6 @@
 import type { AppController } from '../../app-controller';
-import type { PianoRollNoteView, PianoRollView } from '../piano-roll/piano-roll-model';
+import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model';
+import type { EditorSession } from '../../framework/editor';
 import {
   buildPatternGridLines,
   createGridDefinition
@@ -54,7 +55,7 @@ const middleCPitch = 60;
 const minViewportZoom = 0.5;
 const maxViewportZoom = 4;
 
-export class PatternEditorSession {
+export class PatternEditorSession implements EditorSession {
   readonly controller: AppController;
   readonly grid = createGridDefinition({ majorEvery: beatsPerBar });
   readonly input = new PatternInputState();

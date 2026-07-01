@@ -2,8 +2,8 @@
   import Button from '../../framework/ui/Button.svelte';
   import Toolbar from '../../framework/ui/Toolbar.svelte';
   import ToolbarGroup from '../../framework/ui/ToolbarGroup.svelte';
-  import type { EditorDefinition } from '../editor-types';
-  import type { EditorKind } from '../editor-types';
+  import type { EditorDefinition } from '../../editors/editor-types';
+  import type { EditorKind } from '../../editors/editor-types';
   import type { PatternTool } from './pattern-tool';
 
   export let editors: EditorDefinition[] = [];

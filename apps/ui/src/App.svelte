@@ -24,7 +24,7 @@
     type PianoRollView
   } from './lib/editors/piano-roll/piano-roll-model'
   import type { EditorKind } from './lib/editors/editor-types';
-  import PatternEditor from './lib/editors/pattern/PatternEditor.svelte';
+  import PatternEditor from './lib/music/pattern/PatternEditor.svelte';
   import Workbench from './lib/framework/application/Workbench.svelte';
   import InspectorPanel from './lib/panels/InspectorPanel.svelte';
   import RuntimePanel from './lib/panels/RuntimePanel.svelte';

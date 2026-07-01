@@ -10,7 +10,7 @@
     pitchRangeToScreenHeight,
     pitchToScreenY
   } from './pattern-viewport';
-  import type { PianoRollNoteView } from '../piano-roll/piano-roll-model';
+  import type { PianoRollNoteView } from '../../editors/piano-roll/piano-roll-model';
 
   export let renderModel: PatternRenderModel;
   export let onWheel: (event: WheelEvent) => void;

@@ -9,7 +9,7 @@ import type { PatternRenderer } from './pattern-renderer';
 import type {
   PianoRollNoteView,
   PianoRollView
-} from '../piano-roll/piano-roll-model';
+} from '../../editors/piano-roll/piano-roll-model';
 
 export type BuildPatternInteractionContextOptions = {
   event: PointerEvent;

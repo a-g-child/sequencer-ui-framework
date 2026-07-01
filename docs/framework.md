@@ -122,18 +122,32 @@ framework/
     Panel
     Toolbar
     Splitter
+    Tabs
+    NumberField
+    ScrollArea
+    Menu
+    ContextMenu
   editor/
-    EditorSession
+    Session
     Viewport
     RenderModel
+    RenderModelBuilder
     Renderer
     InteractionBuilder
     Tool
     Overlay
-  workbench/
+  application/
     Workbench
-    PanelDefinition
     Workspace
+    Panel
+    PanelDefinition
+    SessionManager
+  theme/
+    tokens.css
+    dark.css
+    light.css
+    broadcast.css
+    touch.css
 ```
 
 The framework is useful only if it can serve more than the sequencer. A camera
@@ -181,6 +195,37 @@ Avoid upward dependencies. A button should not know about transport. A renderer
 should not know about the application shell. A document operation should not
 know about Svelte.
 
+Nothing inside `framework/` may import application panels, musical editors, or
+domain-specific music modules. Framework is the reusable layer. Application,
+music, panels, and components may depend on framework; framework may not depend
+on them.
+
+```text
+Application
+Panels
+Music
+Components
+  |
+  v
+Framework
+```
+
+Inside the editor stack, dependencies should also move in one direction:
+
+```text
+Component
+  v
+RenderModel
+  v
+Session
+  v
+Document
+```
+
+Never upwards. Components render derived data. Render models are built from
+session and document state. Sessions hold transient state. Documents hold
+persistent state.
+
 The practical rule:
 
 ```text
@@ -212,9 +257,11 @@ Good next moves:
 
 - introduce `framework/editor`
 - identify generic viewport, renderer, tool, overlay, and interaction concepts
+- introduce `framework/application/SessionManager`
 - formalize render model builders
 - introduce a renderer registry
-- add a small workbench scaffold
+- evolve the workbench without adding docking too early
+- split theme into framework-owned theme files
 
 Bad next moves:
 

@@ -1,5 +1,5 @@
 import type { AppController } from '../../app-controller';
-import type { PianoRollNoteView } from '../piano-roll/piano-roll-model';
+import type { PianoRollNoteView } from '../../editors/piano-roll/piano-roll-model';
 import {
   panViewportX,
   panViewportY,

@@ -1,5 +1,5 @@
 <script lang="ts" context="module">
-  import type { PianoRollNoteView } from '../piano-roll/piano-roll-model';
+  import type { PianoRollNoteView } from '../../editors/piano-roll/piano-roll-model';
 
   export type PatternNotePointerEventDetail = {
     pointerEvent: PointerEvent;

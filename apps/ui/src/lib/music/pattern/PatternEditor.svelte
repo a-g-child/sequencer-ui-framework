@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import type { AppController } from '../../app-controller';
-  import { EDITORS } from '../editor-registry';
-  import type { EditorKind } from '../editor-types';
-  import type { PianoRollNoteView, PianoRollView } from '../piano-roll/piano-roll-model';
+  import { EDITORS } from '../../editors/editor-registry';
+  import type { EditorKind } from '../../editors/editor-types';
+  import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model';
   import PatternCanvas from './PatternCanvas.svelte';
   import { PatternEditorSession } from './PatternEditorSession';
   import type { PatternPointerResult } from './PatternEditorSession';

@@ -1,5 +1,6 @@
 import type { BeatTime } from '@sequencer/core';
-import type { PianoRollNoteView, PianoRollView } from '../piano-roll/piano-roll-model';
+import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model';
+import type { RenderModel } from '../../framework/editor';
 import type { GridDefinition, PatternGridLine } from './pattern-grid';
 import { hitTestNote } from './pattern-hit-testing';
 import type { PatternNoteOverlay, PatternRectangleOverlay } from './pattern-tool';
@@ -21,7 +22,7 @@ export type PatternMusicalPoint = {
   snap: BeatTime;
 };
 
-export type PatternRenderModel = {
+export type PatternRenderModel = RenderModel & {
   rendererId: string;
   patternName: string;
   viewport: PatternViewport;
