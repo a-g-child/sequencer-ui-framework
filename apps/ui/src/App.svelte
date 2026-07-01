@@ -25,6 +25,7 @@
   } from './lib/editors/piano-roll/piano-roll-model'
   import type { EditorKind } from './lib/editors/editor-types';
   import PatternEditor from './lib/editors/pattern/PatternEditor.svelte';
+  import Workbench from './lib/framework/application/Workbench.svelte';
   import InspectorPanel from './lib/panels/InspectorPanel.svelte';
   import RuntimePanel from './lib/panels/RuntimePanel.svelte';
   import TimelinePanel from './lib/panels/TimelinePanel.svelte';
@@ -267,8 +268,8 @@
   }
 </script>
 
-<main class="editor-shell">
-  <header class="topbar">
+<Workbench>
+  <svelte:fragment slot="top">
     <div>
       <p class="eyebrow">Sequencer</p>
       <h1>{store.document.name}</h1>
@@ -288,73 +289,76 @@
       <button type="button" on:click={undo} disabled={!canUndo}>Undo</button>
       <button type="button" on:click={redo} disabled={!canRedo}>Redo</button>
     </div>
-  </header>
+  </svelte:fragment>
 
-  <section class="workspace" aria-label="Document workspace">
-    <aside class="track-pane" aria-label="Tracks">
-      <div class="pane-heading">
-        <h2>Tracks</h2>
-        <span>{tracks.length}</span>
-      </div>
+  <svelte:fragment slot="left">
+    <div class="pane-heading">
+      <h2>Tracks</h2>
+      <span>{tracks.length}</span>
+    </div>
 
-      <div class="track-list">
-        {#each tracks as track (track.id)}
-          <button
-            type="button"
-            class:selected={track.id === selectedTrackId}
-            on:click={() => selectTrack(track)}
-          >
-            <span>{track.name}</span>
-            <small>{track.parameters.length} properties</small>
-          </button>
-        {/each}
-      </div>
-    </aside>
+    <div class="track-list">
+      {#each tracks as track (track.id)}
+        <button
+          type="button"
+          class:selected={track.id === selectedTrackId}
+          on:click={() => selectTrack(track)}
+        >
+          <span>{track.name}</span>
+          <small>{track.parameters.length} properties</small>
+        </button>
+      {/each}
+    </div>
+  </svelte:fragment>
 
-    <section class="inspector" aria-label="Inspector">
-      <TimelinePanel {timeline} />
-      <PatternEditor
-        {controller}
-        {pianoRoll}
-        {activeEditor}
-        onEditorChange={(editor) => {
-          activeEditor = editor;
-          syncView();
-        }}
-        {syncView}
-      />
-      <InspectorPanel
-        {inspector}
-        selectedType={selected?.type ?? 'track'}
-        bind:draftName
-        onRenameTrack={renameSelectedTrack}
-        onSetNumberPreview={setNumberPreview}
-        onCommitNumberValue={commitNumberValue}
-        onSetParameterValue={setParameterValue}
-        onCommitPlacementStart={commitPlacementStart}
-        onCommitPlacementLength={commitPlacementLength}
-        onCommitPlacementLoopCount={commitPlacementLoopCount}
-        onCommitNotePitch={commitNotePitch}
-        onCommitNoteTime={commitNoteTime}
-        onCommitNoteDuration={commitNoteDuration}
-        onDeleteSelectedNote={deleteSelectedNote}
-      />
-    </section>
-  </section>
+  <svelte:fragment slot="center">
+    <TimelinePanel {timeline} />
+    <PatternEditor
+      {controller}
+      {pianoRoll}
+      {activeEditor}
+      onEditorChange={(editor) => {
+        activeEditor = editor;
+        syncView();
+      }}
+      {syncView}
+    />
+  </svelte:fragment>
 
-  <RuntimePanel
-    {transportPlaying}
-    {transportBpm}
-    {transportBeat}
-    {audioEngineStatus}
-    {midiStatus}
-    {preferencesStatus}
-  />
+  <svelte:fragment slot="right">
+    <InspectorPanel
+      {inspector}
+      selectedType={selected?.type ?? 'track'}
+      bind:draftName
+      onRenameTrack={renameSelectedTrack}
+      onSetNumberPreview={setNumberPreview}
+      onCommitNumberValue={commitNumberValue}
+      onSetParameterValue={setParameterValue}
+      onCommitPlacementStart={commitPlacementStart}
+      onCommitPlacementLength={commitPlacementLength}
+      onCommitPlacementLoopCount={commitPlacementLoopCount}
+      onCommitNotePitch={commitNotePitch}
+      onCommitNoteTime={commitNoteTime}
+      onCommitNoteDuration={commitNoteDuration}
+      onDeleteSelectedNote={deleteSelectedNote}
+    />
+  </svelte:fragment>
 
-  <footer class="statusbar">
-    <span>{store.document.patterns.values().length} patterns</span>
-    <span>{store.document.parameterDefinitions.values().length} property types</span>
-    <span>{store.document.parameters.values().length} properties</span>
-    <span class:ok={issues.length === 0}>{issues.length} issues</span>
-  </footer>
-</main>
+  <svelte:fragment slot="bottom">
+    <RuntimePanel
+      {transportPlaying}
+      {transportBpm}
+      {transportBeat}
+      {audioEngineStatus}
+      {midiStatus}
+      {preferencesStatus}
+    />
+
+    <footer class="statusbar">
+      <span>{store.document.patterns.values().length} patterns</span>
+      <span>{store.document.parameterDefinitions.values().length} property types</span>
+      <span>{store.document.parameters.values().length} properties</span>
+      <span class:ok={issues.length === 0}>{issues.length} issues</span>
+    </footer>
+  </svelte:fragment>
+</Workbench>
