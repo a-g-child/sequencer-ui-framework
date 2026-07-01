@@ -5,8 +5,6 @@
     validateDocument,
     type SelectionItem,
     type ServiceEvent,
-    type Parameter,
-    type ParameterDefinition,
     type ParameterValue,
     type Pattern,
     type Track
@@ -27,6 +25,7 @@
   } from './lib/editors/piano-roll/piano-roll-model'
   import type { EditorKind } from './lib/editors/editor-types';
   import PatternEditor from './lib/editors/pattern/PatternEditor.svelte';
+  import InspectorPanel from './lib/panels/InspectorPanel.svelte';
   import RuntimePanel from './lib/panels/RuntimePanel.svelte';
   import TimelinePanel from './lib/panels/TimelinePanel.svelte';
   import TransportPanel from './lib/panels/TransportPanel.svelte';
@@ -257,32 +256,6 @@
     return Number((event.currentTarget as HTMLInputElement).value)
   }
 
-  function readBooleanValue(event: Event): boolean {
-    return (event.currentTarget as HTMLInputElement).checked
-  }
-
-  function readTextValue(event: Event): string {
-    return (event.currentTarget as HTMLInputElement).value
-  }
-
-  function readChoiceValue(
-    event: Event,
-    definition: ParameterDefinition | undefined
-  ): ParameterValue {
-    const value = (event.currentTarget as HTMLSelectElement).value
-    const option = definition?.options?.find((item) => String(item.value) === value)
-
-    return option?.value ?? value
-  }
-
-  function formatParameterValue(parameter: Parameter): string {
-    if (typeof parameter.value === 'boolean') {
-      return parameter.value ? 'On' : 'Off'
-    }
-
-    return String(parameter.value)
-  }
-
   function undo() {
     controller.undo()
     syncView()
@@ -350,196 +323,22 @@
         }}
         {syncView}
       />
-      {#if inspector.type === 'track'}
-        <div class="pane-heading">
-          <h2>{inspector.title}</h2>
-          <span>{selected?.type ?? 'track'}</span>
-        </div>
-
-        <form class="rename-form" on:submit|preventDefault={renameSelectedTrack}>
-          <label for="track-name">Name</label>
-          <div class="rename-row">
-            <input id="track-name" bind:value={draftName} />
-            <button type="submit">Rename</button>
-          </div>
-        </form>
-
-        <div class="property-list">
-          {#each inspector.properties as property (property.parameter.id)}
-            <div class="property-row">
-              <label for={`property-${property.parameter.id}`}>
-                {property.definition.name}
-              </label>
-
-              {#if property.definition.kind === 'number' && typeof property.value === 'number'}
-                <div class="number-property">
-                  <input
-                    id={`property-${property.parameter.id}`}
-                    type="range"
-                    min={property.definition.min}
-                    max={property.definition.max}
-                    step={property.definition.step}
-                    value={property.value}
-                    on:input={(event) =>
-                      setNumberPreview(property.parameter.id, readNumberValue(event))}
-                    on:change={(event) =>
-                      commitNumberValue(property.parameter.id, readNumberValue(event))}
-                  />
-                  <input
-                    aria-label={`${property.definition.name} value`}
-                    type="number"
-                    min={property.definition.min}
-                    max={property.definition.max}
-                    step={property.definition.step}
-                    value={property.value}
-                    on:input={(event) =>
-                      setNumberPreview(property.parameter.id, readNumberValue(event))}
-                    on:change={(event) =>
-                      commitNumberValue(property.parameter.id, readNumberValue(event))}
-                  />
-                </div>
-              {:else if property.definition.kind === 'boolean' && typeof property.value === 'boolean'}
-                <input
-                  id={`property-${property.parameter.id}`}
-                  class="checkbox-property"
-                  type="checkbox"
-                  checked={property.value}
-                  on:change={(event) =>
-                    setParameterValue(property.parameter.id, readBooleanValue(event))}
-                />
-              {:else if property.definition.kind === 'choice'}
-                <select
-                  id={`property-${property.parameter.id}`}
-                  value={String(property.value)}
-                  on:change={(event) =>
-                    setParameterValue(
-                      property.parameter.id,
-                      readChoiceValue(event, property.definition)
-                    )}
-                >
-                  {#each property.definition.options ?? [] as option}
-                    <option value={String(option.value)}>{option.label}</option>
-                  {/each}
-                </select>
-              {:else if property.definition.kind === 'text' && typeof property.value === 'string'}
-                <input
-                  id={`property-${property.parameter.id}`}
-                  value={property.value}
-                  on:input={(event) =>
-                    setParameterValue(property.parameter.id, readTextValue(event))}
-                />
-              {:else}
-                <strong>{formatParameterValue(property.parameter)}</strong>
-              {/if}
-            </div>
-          {/each}
-        </div>
-      {:else if inspector.type === 'placement' && inspector.placement}
-        <div class="pane-heading">
-          <h2>{inspector.title}</h2>
-          <span>{inspector.placement.id}</span>
-        </div>
-
-        <div class="placement-inspector">
-          <label>
-            <span>Target Pattern</span>
-            <input value={inspector.placement.targetPatternName} readonly />
-          </label>
-
-          <label>
-            <span>Start</span>
-            <input
-              type="number"
-              step="0.25"
-              min="0"
-              value={inspector.placement.start}
-              on:change={(event) =>
-                commitPlacementStart(readNumberValue(event))}
-            />
-          </label>
-
-          <label>
-            <span>Length</span>
-            <input
-              type="number"
-              step="0.25"
-              min="0.25"
-              value={inspector.placement.length}
-              on:change={(event) =>
-                commitPlacementLength(readNumberValue(event))}
-            />
-          </label>
-
-          <label>
-            <span>Loop Count</span>
-            <input
-              type="number"
-              step="1"
-              min="1"
-              value={inspector.placement.loopCount}
-              on:change={(event) =>
-                commitPlacementLoopCount(readNumberValue(event))}
-            />
-          </label>
-        </div>
-      {:else if inspector.type === 'note' && inspector.note}
-        <div class="pane-heading">
-          <h2>{inspector.title}</h2>
-          <span>{inspector.note.id}</span>
-        </div>
-
-        <div class="placement-inspector">
-          <label>
-            <span>Pitch</span>
-            <input
-              type="number"
-              step="1"
-              min="0"
-              max="127"
-              value={inspector.note.pitch}
-              on:change={(event) =>
-                commitNotePitch(readNumberValue(event))}
-            />
-          </label>
-
-          <label>
-            <span>Start</span>
-            <input
-              type="number"
-              step="0.25"
-              min="0"
-              value={inspector.note.time}
-              on:change={(event) =>
-                commitNoteTime(readNumberValue(event))}
-            />
-          </label>
-
-          <label>
-            <span>Length</span>
-            <input
-              type="number"
-              step="0.25"
-              min="0.25"
-              value={inspector.note.duration}
-              on:change={(event) =>
-                commitNoteDuration(readNumberValue(event))}
-            />
-          </label>
-
-          <label>
-            <span>Velocity</span>
-            <input value={inspector.note.velocity} readonly />
-          </label>
-        </div>
-
-        <div class="inspector-actions">
-          <button type="button" on:click={deleteSelectedNote}>Delete Note</button>
-        </div>
-      {:else}
-        <div class="empty-state">
-          <h2>No Selection</h2>
-        </div>
-      {/if}
+      <InspectorPanel
+        {inspector}
+        selectedType={selected?.type ?? 'track'}
+        bind:draftName
+        onRenameTrack={renameSelectedTrack}
+        onSetNumberPreview={setNumberPreview}
+        onCommitNumberValue={commitNumberValue}
+        onSetParameterValue={setParameterValue}
+        onCommitPlacementStart={commitPlacementStart}
+        onCommitPlacementLength={commitPlacementLength}
+        onCommitPlacementLoopCount={commitPlacementLoopCount}
+        onCommitNotePitch={commitNotePitch}
+        onCommitNoteTime={commitNoteTime}
+        onCommitNoteDuration={commitNoteDuration}
+        onDeleteSelectedNote={deleteSelectedNote}
+      />
     </section>
   </section>
 
