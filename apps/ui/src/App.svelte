@@ -27,6 +27,7 @@
   } from './lib/editors/piano-roll/piano-roll-model'
   import type { EditorKind } from './lib/editors/editor-types';
   import PatternEditor from './lib/editors/pattern/PatternEditor.svelte';
+  import TransportPanel from './lib/panels/TransportPanel.svelte';
 
   
 
@@ -298,33 +299,14 @@
       <h1>{store.document.name}</h1>
     </div>
 
-    <div class="transport-panel" aria-label="Runtime transport">
-      <div class="transport-buttons">
-        <button type="button" on:click={playTransport} disabled={transportPlaying}>
-          Play
-        </button>
-        <button type="button" on:click={stopTransport} disabled={!transportPlaying}>
-          Stop
-        </button>
-      </div>
-
-      <label class="bpm-control" for="runtime-bpm">
-        <span>BPM</span>
-        <input
-          id="runtime-bpm"
-          type="number"
-          min="1"
-          step="1"
-          value={transportBpm}
-          on:change={setRuntimeBpm}
-        />
-      </label>
-
-      <div class="beat-readout">
-        <span>Beat</span>
-        <strong>{transportBeat.toFixed(2)}</strong>
-      </div>
-    </div>
+    <TransportPanel
+      playing={transportPlaying}
+      bpm={transportBpm}
+      beat={transportBeat}
+      onPlay={playTransport}
+      onStop={stopTransport}
+      onBpmChange={setRuntimeBpm}
+    />
 
     <div class="toolbar" aria-label="Document operations">
       <button type="button" on:click={addTrack}>Add Track</button>

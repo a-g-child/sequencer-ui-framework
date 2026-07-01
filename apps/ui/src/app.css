@@ -84,63 +84,6 @@ select:focus-visible {
   gap: var(--spacing-lg);
 }
 
-.transport-panel {
-  min-height: var(--transport-min-height);
-  padding: var(--spacing-control);
-  border: var(--border-width) solid var(--border);
-  border-radius: var(--radius-md);
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-compact);
-  background: var(--surface-2);
-}
-
-.transport-buttons {
-  display: flex;
-  gap: var(--spacing-sm);
-}
-
-.transport-buttons button {
-  min-height: var(--control-height-md);
-  padding: 0 var(--spacing-md);
-  border-radius: var(--radius-control);
-  font-weight: 700;
-}
-
-.transport-buttons button:first-child {
-  border-color: transparent;
-  background: var(--accent-2);
-  color: var(--text-primary);
-}
-
-.bpm-control,
-.beat-readout {
-  min-height: var(--control-height-md);
-  display: grid;
-  align-items: center;
-  gap: var(--spacing-2xs);
-}
-
-.bpm-control span,
-.beat-readout span {
-  color: var(--muted);
-  font-size: var(--font-size-xs);
-  font-weight: 800;
-  line-height: 1;
-  text-transform: uppercase;
-}
-
-.bpm-control input {
-  width: var(--bpm-control-width);
-  min-height: var(--control-height-sm);
-  padding: 0 var(--spacing-sm);
-}
-
-.beat-readout strong {
-  min-width: var(--beat-readout-width);
-  font-size: var(--font-size-lg);
-}
-
 .eyebrow {
   margin: 0 0 var(--spacing-xs);
   color: var(--accent);
@@ -846,19 +789,6 @@ select {
   .topbar {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .transport-panel {
-    align-items: stretch;
-    flex-wrap: wrap;
-  }
-
-  .transport-buttons {
-    flex: 1 1 var(--mobile-transport-basis);
-  }
-
-  .transport-buttons button {
-    flex: 1 1 0;
   }
 
   .toolbar {

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import Button from '../../ui/Button.svelte';
-  import Toolbar from '../../ui/Toolbar.svelte';
-  import ToolbarGroup from '../../ui/ToolbarGroup.svelte';
+  import Button from '../../framework/ui/Button.svelte';
+  import Toolbar from '../../framework/ui/Toolbar.svelte';
+  import ToolbarGroup from '../../framework/ui/ToolbarGroup.svelte';
   import type { EditorDefinition } from '../editor-types';
   import type { EditorKind } from '../editor-types';
   import type { PatternTool } from './pattern-tool';
