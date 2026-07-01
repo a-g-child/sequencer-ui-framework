@@ -55,6 +55,19 @@ Completed foundation:
 - Panels extracted from `App.svelte`
 - Framework vocabulary documented
 
+### Phase 5.1: Framework Consolidation Close-Out
+
+Status: complete.
+
+Completed in this slice:
+
+- Pattern editor code moved under `music/pattern`
+- `framework/editor` vocabulary introduced
+- `framework/application/SessionManager` introduced
+- `PatternRenderModelBuilder` introduced
+- `RendererRegistry` seam introduced
+- Pattern sessions and render models made explicit framework clients
+
 Consolidation targets:
 
 - `framework/application/SessionManager`
