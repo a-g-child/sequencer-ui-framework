@@ -2,17 +2,16 @@ import type { EditorSession } from './EditorSession';
 import type { RenderModel } from './RenderModel';
 
 export type RenderModelBuilderInput<
-  TDocument,
-  TSession extends EditorSession
+  TDocument = unknown,
+  TSession extends EditorSession = EditorSession
 > = {
   document: TDocument;
   session: TSession;
 };
 
 export interface RenderModelBuilder<
-  TDocument = unknown,
-  TSession extends EditorSession = EditorSession,
+  TInput extends RenderModelBuilderInput = RenderModelBuilderInput,
   TModel extends RenderModel = RenderModel
 > {
-  build(input: RenderModelBuilderInput<TDocument, TSession>): TModel;
+  build(input: TInput): TModel;
 }

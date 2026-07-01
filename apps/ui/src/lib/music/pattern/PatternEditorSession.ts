@@ -1,10 +1,10 @@
 import type { AppController } from '../../app-controller';
 import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model';
-import type { EditorSession } from '../../framework/editor';
 import {
-  buildPatternGridLines,
-  createGridDefinition
-} from './pattern-grid';
+  RendererRegistry,
+  type EditorSession
+} from '../../framework/editor';
+import { createGridDefinition } from './pattern-grid';
 import { buildPatternInteractionContext as createPatternInteractionContext } from './pattern-interaction-builder';
 import { PatternInputState } from './pattern-input-state';
 import {
@@ -20,6 +20,7 @@ import {
   type PatternRenderModel,
   type PatternRenderer
 } from './pattern-renderer';
+import { PatternRenderModelBuilder } from './PatternRenderModelBuilder';
 import { handlePatternShortcut } from './pattern-shortcuts';
 import { buildPatternSelection } from './pattern-selection';
 import type {
@@ -60,10 +61,12 @@ export class PatternEditorSession implements EditorSession {
   readonly grid = createGridDefinition({ majorEvery: beatsPerBar });
   readonly input = new PatternInputState();
   readonly tools: PatternTool[];
-  readonly renderer: PatternRenderer<PianoRollView>;
+  readonly rendererRegistry = new RendererRegistry<PatternRenderer<PianoRollView>>();
+  readonly renderModelBuilder = new PatternRenderModelBuilder();
   readonly middleCPitch = middleCPitch;
 
   activeTool: PatternTool;
+  activeRendererId = 'piano-roll';
   viewport: PatternViewport = resetViewport();
   interactionContext: PatternInteractionContext | undefined;
   isPanning = false;
@@ -78,8 +81,11 @@ export class PatternEditorSession implements EditorSession {
   constructor(options: PatternEditorSessionOptions) {
     const resizeNoteTool = new ResizeNoteTool();
 
+    const renderer = options.renderer ?? new PianoRollRenderer();
+
     this.controller = options.controller;
-    this.renderer = options.renderer ?? new PianoRollRenderer();
+    this.rendererRegistry.register(renderer);
+    this.activeRendererId = renderer.id;
     this.tools = [
       new SelectTool(),
       new DrawNoteTool(),
@@ -88,6 +94,16 @@ export class PatternEditorSession implements EditorSession {
       resizeNoteTool
     ];
     this.activeTool = this.tools[0];
+  }
+
+  get renderer(): PatternRenderer<PianoRollView> {
+    const renderer = this.rendererRegistry.get(this.activeRendererId);
+
+    if (!renderer) {
+      throw new Error(`Missing pattern renderer: ${this.activeRendererId}`);
+    }
+
+    return renderer;
   }
 
   setActiveTool(tool: PatternTool): void {
@@ -213,22 +229,10 @@ export class PatternEditorSession implements EditorSession {
   }
 
   buildRenderModel(pianoRoll: PianoRollView): PatternRenderModel {
-    return this.renderer.render({
-      viewModel: pianoRoll,
-      viewport: this.viewport,
-      grid: this.grid,
-      visibleLength: this.visibleLength(pianoRoll),
-      gridLines: buildPatternGridLines(this.visibleLength(pianoRoll), this.grid),
-      selectedNotes: this.selectedNotes(pianoRoll),
-      hoveredNoteId: this.hoveredNoteId,
-      activeToolId: this.activeTool.id,
-      isPanning: this.isPanning,
-      noteHeight: this.noteHeight(),
-      ghost: this.showGhost
-        ? { beat: this.ghostBeat, pitch: this.ghostPitch }
-        : undefined,
-      overlayNotes: this.overlayNotes(),
-      overlayRectangles: this.overlayRectangles()
+    return this.renderModelBuilder.build({
+      document: pianoRoll,
+      session: this,
+      renderer: this.renderer
     });
   }
 
@@ -565,13 +569,13 @@ export class PatternEditorSession implements EditorSession {
     return this.activeTool.drawOverlay?.(this.interactionContext) ?? [];
   }
 
-  private overlayNotes(): PatternNoteOverlay[] {
+  overlayNotes(): PatternNoteOverlay[] {
     return this.overlays().filter(
       (overlay): overlay is PatternNoteOverlay => overlay.type === 'note'
     );
   }
 
-  private overlayRectangles(): PatternRectangleOverlay[] {
+  overlayRectangles(): PatternRectangleOverlay[] {
     return this.overlays().filter(
       (overlay): overlay is PatternRectangleOverlay =>
         overlay.type === 'rectangle'
