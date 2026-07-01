@@ -1,15 +1,16 @@
 <script lang="ts">
-  import type { PianoRollNoteView } from '../piano-roll/piano-roll-model';
   import type { PatternRenderModel } from './pattern-renderer';
   import PatternGrid from './PatternGrid.svelte';
+  import PatternNotes, {
+    type PatternNotePointerEventDetail
+  } from './PatternNotes.svelte';
   import PatternOverlays from './PatternOverlays.svelte';
   import {
-    beatToScreenX,
-    durationToScreenWidth,
     patternLengthToScreenWidth,
     pitchRangeToScreenHeight,
     pitchToScreenY
   } from './pattern-viewport';
+  import type { PianoRollNoteView } from '../piano-roll/piano-roll-model';
 
   export let renderModel: PatternRenderModel;
   export let onWheel: (event: WheelEvent) => void;
@@ -50,11 +51,22 @@
     centerOnMiddleC();
   }
 
-  function noteName(pitch: number): string {
-    const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-    const octave = Math.floor(pitch / 12) - 1;
+  function handleNotePointerDown(
+    event: CustomEvent<PatternNotePointerEventDetail>
+  ): void {
+    onNotePointerDown(event.detail.pointerEvent, event.detail.note);
+  }
 
-    return `${names[pitch % 12]}${octave}`;
+  function handleNotePointerMove(
+    event: CustomEvent<PatternNotePointerEventDetail>
+  ): void {
+    onNotePointerMove(event.detail.pointerEvent, event.detail.note);
+  }
+
+  function handleNotePointerUp(
+    event: CustomEvent<PatternNotePointerEventDetail>
+  ): void {
+    onNotePointerUp(event.detail.pointerEvent, event.detail.note);
   }
 </script>
 
@@ -88,34 +100,14 @@
         >
           <PatternGrid {renderModel} layer="background" />
 
-          <PatternOverlays {renderModel} />
+          <PatternNotes
+            {renderModel}
+            on:pointerdown={handleNotePointerDown}
+            on:pointermove={handleNotePointerMove}
+            on:pointerup={handleNotePointerUp}
+          />
 
-          {#each renderModel.notes as note (note.id)}
-            <button
-              type="button"
-              class="note"
-              class:selected={renderModel.selectedNoteIds.includes(note.id)}
-              class:hovered={renderModel.hoveredNoteId === note.id}
-              class:resize-active={renderModel.activeToolId === 'resize-note'}
-              aria-label={`${noteName(note.pitch)} note at beat ${note.time}`}
-              style={`left: ${beatToScreenX(note.time, renderModel.viewport)}px; width: ${durationToScreenWidth(note.duration, renderModel.viewport)}px; height: ${renderModel.noteHeight}px; top: ${pitchToScreenY(note.pitch, renderModel.viewport, renderModel.highestPitch) + 1}px;`}
-              on:pointerdown|stopPropagation={(event) =>
-                onNotePointerDown(event, note)}
-              on:pointermove|stopPropagation={(event) =>
-                onNotePointerMove(event, note)}
-              on:pointerup|stopPropagation={(event) =>
-                onNotePointerUp(event, note)}
-              on:auxclick|preventDefault
-            >
-              {#if renderModel.activeToolId === 'resize-note'}
-                <span
-                  class="note-resize-handle"
-                  aria-label={`Resize ${noteName(note.pitch)} note`}
-                  role="presentation"
-                ></span>
-              {/if}
-            </button>
-          {/each}
+          <PatternOverlays {renderModel} />
         </div>
       </div>
     </div>
