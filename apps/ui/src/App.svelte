@@ -28,6 +28,7 @@
   import type { EditorKind } from './lib/editors/editor-types';
   import PatternEditor from './lib/editors/pattern/PatternEditor.svelte';
   import RuntimePanel from './lib/panels/RuntimePanel.svelte';
+  import TimelinePanel from './lib/panels/TimelinePanel.svelte';
   import TransportPanel from './lib/panels/TransportPanel.svelte';
 
   
@@ -338,12 +339,7 @@
     </aside>
 
     <section class="inspector" aria-label="Inspector">
-      <section class="timeline-panel" aria-label="Timeline">
-        <div class="pane-heading">
-          <h2>Timeline</h2>
-          <span>{timeline.length} beats</span>
-        </div>
-      </section>
+      <TimelinePanel {timeline} />
       <PatternEditor
         {controller}
         {pianoRoll}
