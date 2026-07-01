@@ -13,6 +13,9 @@
   import type { PianoRollNoteView } from '../../editors/piano-roll/piano-roll-model';
 
   export let renderModel: PatternRenderModel;
+  export let height: string | number | undefined = undefined;
+  export let width: string | number | undefined = undefined;
+  export let onViewportWidthChange: (width: number) => void;
   export let onWheel: (event: WheelEvent) => void;
   export let onPointerEnter: (event: PointerEvent) => void;
   export let onPointerDown: (event: PointerEvent) => void;
@@ -35,6 +38,7 @@
   const middleCPitch = 60;
 
   let scrollElement: HTMLDivElement | undefined;
+  $: scrollStyle = buildScrollStyle(width, height);
 
   export function centerOnMiddleC() {
     if (!scrollElement) return;
@@ -49,6 +53,57 @@
   function centerOnMount(node: HTMLDivElement) {
     scrollElement = node;
     centerOnMiddleC();
+    measureViewportWidth();
+
+    const observer = new ResizeObserver(measureViewportWidth);
+
+    observer.observe(node);
+
+    return {
+      destroy() {
+        observer.disconnect();
+      }
+    };
+  }
+
+  function toCssSize(value: string | number | undefined): string | undefined {
+    if (value === undefined) return undefined;
+
+    return typeof value === 'number' ? `${value}px` : value;
+  }
+
+  function buildScrollStyle(
+    widthValue: string | number | undefined,
+    heightValue: string | number | undefined
+  ): string | undefined {
+    const nextWidth = toCssSize(widthValue);
+    const nextHeight = toCssSize(heightValue);
+    const declarations: string[] = [];
+
+    if (nextWidth) {
+      declarations.push(`width: ${nextWidth}`);
+    }
+
+    if (nextHeight) {
+      declarations.push(
+        `height: ${nextHeight}`,
+        `min-height: ${nextHeight}`,
+        `max-height: ${nextHeight}`
+      );
+    }
+
+    return declarations.length > 0 ? declarations.join('; ') : undefined;
+  }
+
+  function measureViewportWidth() {
+    if (!scrollElement) return;
+
+    const noteSurface = scrollElement.querySelector('.piano-roll');
+    const scrollBounds = scrollElement.getBoundingClientRect();
+    const noteBounds = noteSurface?.getBoundingClientRect();
+    const noteOffset = noteBounds ? noteBounds.left - scrollBounds.left : 0;
+
+    onViewportWidthChange(Math.max(0, scrollElement.clientWidth - noteOffset));
   }
 
   function handleNotePointerDown(
@@ -77,6 +132,7 @@
     class="piano-roll-scroll"
     bind:this={scrollElement}
     use:centerOnMount
+    style={scrollStyle}
     on:wheel={onWheel}
   >
     <div class="piano-roll-content">

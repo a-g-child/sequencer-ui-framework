@@ -314,6 +314,10 @@
   <svelte:fragment slot="center">
     <TimelinePanel {timeline} />
     <PatternEditor
+      bars={2}
+      beatsPerBar={4}
+      height={360}
+      width={450}
       {controller}
       {pianoRoll}
       {activeEditor}
@@ -322,6 +326,7 @@
         syncView();
       }}
       {syncView}
+    
     />
   </svelte:fragment>
 

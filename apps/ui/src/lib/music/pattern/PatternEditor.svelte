@@ -14,6 +14,12 @@
   export let activeEditor: EditorKind;
   export let onEditorChange: (editor: EditorKind) => void;
   export let syncView: () => void;
+  export let height: string | number | undefined = undefined;
+  export let width: string | number | undefined = undefined;
+  export let bars: number | undefined = undefined;
+  export let totalBars: number | undefined = undefined;
+  export let beatsPerBar: number | undefined = undefined;
+  export let beatDivisions: number | undefined = undefined;
 
   const viewportZoomStep = 1.25;
   const viewportBeatScrollStep = 1;
@@ -21,9 +27,28 @@
 
   let session: PatternEditorSession;
   let patternCanvas: PatternCanvas | undefined;
+  let timelineRevision = '';
 
   $: if (controller && (!session || session.controller !== controller)) {
-    session = new PatternEditorSession({ controller });
+    session = new PatternEditorSession({
+      controller,
+      bars,
+      totalBars,
+      beatsPerBar,
+      beatDivisions
+    });
+  }
+
+  $: nextTimelineRevision =
+    `${totalBars ?? bars ?? ''}:${beatsPerBar ?? ''}:${beatDivisions ?? ''}`;
+
+  $: if (session && nextTimelineRevision !== timelineRevision) {
+    timelineRevision = nextTimelineRevision;
+
+    if (session.configureTimeline({ bars, totalBars, beatsPerBar, beatDivisions })) {
+      session.applyViewport(session.viewport, pianoRoll);
+      invalidateSession();
+    }
   }
 
   $: renderModel = session && pianoRoll
@@ -73,6 +98,12 @@
   function handlePatternWheel(event: WheelEvent) {
     session.handleWheel(event, pianoRoll);
     invalidateSession();
+  }
+
+  function handleViewportWidthChange(width: number) {
+    if (session.setViewportWidth(width, pianoRoll)) {
+      invalidateSession();
+    }
   }
 
   function handlePianoRollPointerEnter(event: PointerEvent) {
@@ -169,6 +200,9 @@
       <PatternCanvas
         bind:this={patternCanvas}
         {renderModel}
+        {height}
+        {width}
+        onViewportWidthChange={handleViewportWidthChange}
         onWheel={handlePatternWheel}
         onPointerEnter={handlePianoRollPointerEnter}
         onPointerDown={handlePianoRollPointerDown}

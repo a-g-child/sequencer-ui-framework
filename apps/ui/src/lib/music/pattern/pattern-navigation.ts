@@ -14,6 +14,8 @@ const MAX_PIXELS_PER_SEMITONE = 80;
 
 export type PatternNavigationBounds = {
   maxScrollX: number;
+  contentLength: number;
+  viewportWidth: number;
   minScrollY: number;
   maxScrollY: number;
 };
@@ -23,16 +25,21 @@ export function zoomViewportX(
   factor: number,
   bounds: PatternNavigationBounds
 ): PatternViewport {
+  const minPixelsPerBeat = minimumPixelsPerBeat(bounds);
   const nextPixelsPerBeat = clampNumber(
     viewport.pixelsPerBeat * factor,
-    MIN_PIXELS_PER_BEAT,
+    minPixelsPerBeat,
     MAX_PIXELS_PER_BEAT
   );
 
   return createPatternViewport({
     zoomX: nextPixelsPerBeat / DEFAULT_PIXELS_PER_BEAT,
     zoomY: viewport.zoomY,
-    scrollX: clampNumber(viewport.scrollX, 0, bounds.maxScrollX),
+    scrollX: clampNumber(
+      viewport.scrollX,
+      0,
+      maxScrollX(bounds, nextPixelsPerBeat)
+    ),
     scrollY: clampNumber(viewport.scrollY, bounds.minScrollY, bounds.maxScrollY)
   });
 }
@@ -45,7 +52,11 @@ export function panViewportX(
   return createPatternViewport({
     zoomX: viewport.zoomX,
     zoomY: viewport.zoomY,
-    scrollX: clampNumber(viewport.scrollX + deltaBeats, 0, bounds.maxScrollX),
+    scrollX: clampNumber(
+      viewport.scrollX + deltaBeats,
+      0,
+      maxScrollX(bounds, viewport.pixelsPerBeat)
+    ),
     scrollY: clampNumber(viewport.scrollY, bounds.minScrollY, bounds.maxScrollY)
   });
 }
@@ -58,7 +69,11 @@ export function panViewportY(
   return createPatternViewport({
     zoomX: viewport.zoomX,
     zoomY: viewport.zoomY,
-    scrollX: clampNumber(viewport.scrollX, 0, bounds.maxScrollX),
+    scrollX: clampNumber(
+      viewport.scrollX,
+      0,
+      maxScrollX(bounds, viewport.pixelsPerBeat)
+    ),
     scrollY: clampNumber(
       viewport.scrollY + deltaPitch,
       bounds.minScrollY,
@@ -78,9 +93,10 @@ export function clampViewport(
   viewport: PatternViewport,
   bounds: PatternNavigationBounds
 ): PatternViewport {
+  const minPixelsPerBeat = minimumPixelsPerBeat(bounds);
   const pixelsPerBeat = clampNumber(
     viewport.pixelsPerBeat,
-    MIN_PIXELS_PER_BEAT,
+    minPixelsPerBeat,
     MAX_PIXELS_PER_BEAT
   );
   const pixelsPerSemitone = clampNumber(
@@ -92,11 +108,35 @@ export function clampViewport(
   return createPatternViewport({
     zoomX: pixelsPerBeat / DEFAULT_PIXELS_PER_BEAT,
     zoomY: pixelsPerSemitone / DEFAULT_PIXELS_PER_SEMITONE,
-    scrollX: clampNumber(viewport.scrollX, 0, bounds.maxScrollX),
+    scrollX: clampNumber(
+      viewport.scrollX,
+      0,
+      maxScrollX(bounds, pixelsPerBeat)
+    ),
     scrollY: clampNumber(viewport.scrollY, bounds.minScrollY, bounds.maxScrollY)
   });
 }
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function minimumPixelsPerBeat(bounds: PatternNavigationBounds): number {
+  if (bounds.contentLength <= 0 || bounds.viewportWidth <= 0) {
+    return MIN_PIXELS_PER_BEAT;
+  }
+
+  return Math.min(
+    MAX_PIXELS_PER_BEAT,
+    Math.max(MIN_PIXELS_PER_BEAT, bounds.viewportWidth / bounds.contentLength)
+  );
+}
+
+function maxScrollX(
+  bounds: PatternNavigationBounds,
+  pixelsPerBeat: number
+): number {
+  if (bounds.viewportWidth <= 0) return bounds.maxScrollX;
+
+  return Math.max(0, bounds.contentLength - bounds.viewportWidth / pixelsPerBeat);
 }

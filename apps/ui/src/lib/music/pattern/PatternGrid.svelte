@@ -25,8 +25,13 @@
       class="piano-roll-ruler-track"
       style={`width: ${patternLengthToScreenWidth(renderModel.visibleLength, renderModel.viewport)}px;`}
     >
-      {#each renderModel.gridLines.filter((line) => line.label) as marker}
-        <span style={`left: ${beatToScreenX(marker.beat, renderModel.viewport)}px`}>
+      {#each renderModel.gridLines as marker}
+        <span
+          class="ruler-marker"
+          class:beat-marker={marker.isBeat}
+          class:bar-marker={marker.isBar}
+          style={`left: ${beatToScreenX(marker.beat, renderModel.viewport)}px`}
+        >
           {marker.label}
         </span>
       {/each}
@@ -51,7 +56,8 @@
   <div class="piano-roll-grid" aria-hidden="true">
     {#each renderModel.gridLines as line}
       <span
-        class:beat-line={line.isMajor}
+        class:beat-line={line.isBeat}
+        class:bar-line={line.isBar}
         style={`left: ${beatToScreenX(line.beat, renderModel.viewport)}px`}
       ></span>
     {/each}

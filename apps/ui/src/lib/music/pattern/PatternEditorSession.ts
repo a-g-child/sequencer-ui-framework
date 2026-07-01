@@ -4,7 +4,10 @@ import {
   RendererRegistry,
   type EditorSession
 } from '../../framework/editor';
-import { createGridDefinition } from './pattern-grid';
+import {
+  createGridDefinition,
+  type GridDefinition
+} from './pattern-grid';
 import { buildPatternInteractionContext as createPatternInteractionContext } from './pattern-interaction-builder';
 import { PatternInputState } from './pattern-input-state';
 import {
@@ -43,22 +46,33 @@ import { SelectTool } from './tools/select-tool';
 export type PatternEditorSessionOptions = {
   controller: AppController;
   renderer?: PatternRenderer<PianoRollView>;
+  bars?: number;
+  totalBars?: number;
+  beatsPerBar?: number;
+  beatDivisions?: number;
+};
+
+export type PatternEditorTimelineOptions = {
+  bars?: number;
+  totalBars?: number;
+  beatsPerBar?: number;
+  beatDivisions?: number;
 };
 
 export type PatternPointerResult = {
   syncView?: boolean;
 };
 
-const beatsPerBar = 4;
-const minimumVisibleBars = 4;
-const minimumVisibleBeats = beatsPerBar * minimumVisibleBars;
+const defaultBeatsPerBar = 4;
+const defaultTotalBars = 4;
+const defaultBeatDivisions = 4;
 const middleCPitch = 60;
 const minViewportZoom = 0.5;
 const maxViewportZoom = 4;
 
 export class PatternEditorSession implements EditorSession {
   readonly controller: AppController;
-  readonly grid = createGridDefinition({ majorEvery: beatsPerBar });
+  grid: GridDefinition = createGridDefinition({ majorEvery: defaultBeatsPerBar });
   readonly input = new PatternInputState();
   readonly tools: PatternTool[];
   readonly rendererRegistry = new RendererRegistry<PatternRenderer<PianoRollView>>();
@@ -77,6 +91,10 @@ export class PatternEditorSession implements EditorSession {
 
   private lastPanX = 0;
   private lastPanY = 0;
+  private totalBars = defaultTotalBars;
+  private beatsPerBar = defaultBeatsPerBar;
+  private beatDivisions = defaultBeatDivisions;
+  private viewportWidth = 0;
 
   constructor(options: PatternEditorSessionOptions) {
     const resizeNoteTool = new ResizeNoteTool();
@@ -84,6 +102,12 @@ export class PatternEditorSession implements EditorSession {
     const renderer = options.renderer ?? new PianoRollRenderer();
 
     this.controller = options.controller;
+    this.configureTimeline({
+      bars: options.bars,
+      totalBars: options.totalBars,
+      beatsPerBar: options.beatsPerBar,
+      beatDivisions: options.beatDivisions
+    });
     this.rendererRegistry.register(renderer);
     this.activeRendererId = renderer.id;
     this.tools = [
@@ -104,6 +128,52 @@ export class PatternEditorSession implements EditorSession {
     }
 
     return renderer;
+  }
+
+  configureTimeline(options: PatternEditorTimelineOptions): boolean {
+    const nextTotalBars = normaliseTimelineUnit(
+      options.totalBars ?? options.bars,
+      defaultTotalBars
+    );
+    const nextBeatsPerBar = normaliseTimelineUnit(
+      options.beatsPerBar,
+      defaultBeatsPerBar
+    );
+    const nextBeatDivisions = normaliseTimelineUnit(
+      options.beatDivisions,
+      defaultBeatDivisions
+    );
+    const changed =
+      nextTotalBars !== this.totalBars ||
+      nextBeatsPerBar !== this.beatsPerBar ||
+      nextBeatDivisions !== this.beatDivisions;
+
+    this.totalBars = nextTotalBars;
+    this.beatsPerBar = nextBeatsPerBar;
+    this.beatDivisions = nextBeatDivisions;
+    this.grid = createGridDefinition({
+      ...this.grid,
+      majorEvery: nextBeatsPerBar,
+      subdivision: nextBeatDivisions,
+      snap: 1 / nextBeatDivisions
+    });
+
+    if (changed) {
+      this.refreshOverlay();
+    }
+
+    return changed;
+  }
+
+  setViewportWidth(width: number, pianoRoll: PianoRollView | undefined): boolean {
+    const nextWidth = Math.max(0, width);
+
+    if (nextWidth === this.viewportWidth) return false;
+
+    this.viewportWidth = nextWidth;
+    this.applyViewport(this.viewport, pianoRoll);
+
+    return true;
   }
 
   setActiveTool(tool: PatternTool): void {
@@ -201,16 +271,21 @@ export class PatternEditorSession implements EditorSession {
 
   navigationBounds(pianoRoll: PianoRollView | undefined): PatternNavigationBounds {
     const scrollLimit = pianoRoll ? pianoRoll.pitchCount : 0;
+    const contentLength = this.visibleLength(pianoRoll);
+    const visibleBeats = this.viewportWidth / this.viewport.pixelsPerBeat;
+    const maxScrollX = Math.max(0, contentLength - visibleBeats);
 
     return {
-      maxScrollX: this.visibleLength(pianoRoll),
+      maxScrollX,
+      contentLength,
+      viewportWidth: this.viewportWidth,
       minScrollY: -scrollLimit,
       maxScrollY: scrollLimit
     };
   }
 
   visibleLength(pianoRoll: PianoRollView | undefined): number {
-    return Math.max(pianoRoll?.length ?? 0, minimumVisibleBeats);
+    return this.totalBars * this.beatsPerBar;
   }
 
   noteHeight(): number {
@@ -589,6 +664,15 @@ export class PatternEditorSession implements EditorSession {
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function normaliseTimelineUnit(
+  value: number | undefined,
+  fallback: number
+): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+
+  return Math.max(1, Math.floor(value));
 }
 
 function isEditableEventTarget(target: EventTarget | null): boolean {

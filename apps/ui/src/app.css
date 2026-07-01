@@ -202,7 +202,23 @@ h2 {
 .piano-roll-ruler-track span {
   position: absolute;
   top: 0;
+  min-width: var(--spacing-lg);
+  height: 7px;
+  padding-left: var(--spacing-2xs);
+  border-left: var(--grid-line-width) solid var(--grid-minor);
   transform: translateX(-1px);
+  color: transparent;
+}
+
+.piano-roll-ruler-track .beat-marker {
+  height: 11px;
+  border-left-color: var(--grid-major);
+}
+
+.piano-roll-ruler-track .bar-marker {
+  height: var(--ruler-track-min-height);
+  border-left-color: var(--accent-strong);
+  color: var(--muted);
 }
 
 .piano-roll-body {
@@ -287,7 +303,14 @@ h2 {
   background: var(--grid-minor);
 }
 
-.piano-roll-grid .beat-line {
+.piano-roll-grid span.beat-line {
+  width: calc(var(--grid-line-width) * 1.1);
+  background: var(--grid-major);
+  transform: translateX(-1px);
+}
+
+.piano-roll-grid span.bar-line {
+  width: calc(var(--grid-line-width) * 1.5);
   background: var(--grid-major);
 }
 
