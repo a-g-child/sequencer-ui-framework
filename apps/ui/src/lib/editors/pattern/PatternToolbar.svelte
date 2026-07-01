@@ -1,4 +1,7 @@
 <script lang="ts">
+  import Button from '../../ui/Button.svelte';
+  import Toolbar from '../../ui/Toolbar.svelte';
+  import ToolbarGroup from '../../ui/ToolbarGroup.svelte';
   import type { EditorDefinition } from '../editor-types';
   import type { EditorKind } from '../editor-types';
   import type { PatternTool } from './pattern-tool';
@@ -24,76 +27,44 @@
   export let onResetView: () => void;
 </script>
 
-<div class="pattern-toolbar">
-  <div class="toolbar-group">
+<Toolbar>
+  <ToolbarGroup>
     {#each editors as editor}
-      <button
-        class:active={activeEditor === editor.id}
+      <Button
+        active={activeEditor === editor.id}
         on:click={() => onEditorChange(editor.id)}
         title={editor.description}
       >
         {editor.name}
-      </button>
+      </Button>
     {/each}
-  </div>
+  </ToolbarGroup>
 
-  <div class="toolbar-group">
+  <ToolbarGroup>
     {#each tools as tool}
-      <button
-        class:active={activeToolId === tool.id}
+      <Button
+        active={activeToolId === tool.id}
         on:click={() => onToolChange(tool)}
       >
         {tool.name}
-      </button>
+      </Button>
     {/each}
-  </div>
+  </ToolbarGroup>
 
-  <div class="toolbar-group">
+  <ToolbarGroup>
     {#if onAddNote}
-      <button type="button" on:click={onAddNote}>Add C4</button>
+      <Button on:click={onAddNote}>Add C4</Button>
     {/if}
-    <button type="button" on:click={onZoomOut}>X -</button>
-    <button type="button" on:click={onZoomIn}>X +</button>
+    <Button on:click={onZoomOut}>X -</Button>
+    <Button on:click={onZoomIn}>X +</Button>
     {#if onZoomPitchOut && onZoomPitchIn}
-      <button type="button" on:click={onZoomPitchOut}>Y -</button>
-      <button type="button" on:click={onZoomPitchIn}>Y +</button>
+      <Button on:click={onZoomPitchOut}>Y -</Button>
+      <Button on:click={onZoomPitchIn}>Y +</Button>
     {/if}
-    <button type="button" on:click={onPanLeft}>Left</button>
-    <button type="button" on:click={onPanRight}>Right</button>
-    <button type="button" on:click={onPitchUp}>Pitch +</button>
-    <button type="button" on:click={onPitchDown}>Pitch -</button>
-    <button type="button" on:click={onResetView}>Reset</button>
-  </div>
-</div>
-
-<style>
-  .pattern-toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-    margin-bottom: 0.75rem;
-  }
-
-  .toolbar-group {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-
-  button {
-    min-height: 34px;
-    padding: 0 12px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--surface);
-    color: var(--text);
-    font-weight: 700;
-  }
-
-  button.active {
-    border-color: transparent;
-    background: var(--accent);
-    color: #fff;
-    font-weight: 700;
-  }
-</style>
+    <Button on:click={onPanLeft}>Left</Button>
+    <Button on:click={onPanRight}>Right</Button>
+    <Button on:click={onPitchUp}>Pitch +</Button>
+    <Button on:click={onPitchDown}>Pitch -</Button>
+    <Button on:click={onResetView}>Reset</Button>
+  </ToolbarGroup>
+</Toolbar>

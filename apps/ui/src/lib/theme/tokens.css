@@ -1,0 +1,121 @@
+:root {
+  /* surfaces */
+  --surface-0: #0f1115;
+  --surface-1: #151821;
+  --surface-2: #1d2230;
+  --surface-3: #252b3a;
+
+  /* text */
+  --text-primary: #f4f7fb;
+  --text-secondary: #aab3c2;
+  --text-muted: #748094;
+
+  /* borders */
+  --border-subtle: #2d3548;
+  --border-strong: #46516a;
+
+  /* accent */
+  --accent: #fcd67d;
+  --accent-soft: rgba(125, 211, 252, 0.18);
+  --accent-strong: #f8b538;
+  --danger: #9b3d35;
+
+  /* editor grid */
+  --grid-minor: #202637;
+  --grid-major: #384155;
+  --grid-ruler: #161b26;
+
+  /* notes */
+  --note-fill: #7dd3fc;
+  --note-hover: #bae6fd;
+  --note-selected: #facc15;
+  --note-preview: rgba(125, 211, 252, 0.35);
+
+  /* typography */
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-md: 13px;
+  --font-size-lg: 14px;
+  --font-size-xl: 15px;
+  --font-size-title: 28px;
+
+  /* elevations */
+  --elevation-1: 0 14px 40px rgba(24, 32, 28, 0.08);
+  --elevation-raised: 0 14px 40px rgba(24, 32, 28, 0.08);
+  --elevation-placement: 0 8px 18px rgba(24, 32, 28, 0.08);
+
+  /* sizing */
+  --radius-sm: 4px;
+  --radius-control: 5px;
+  --radius-md: 8px;
+  --border-width: 1px;
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --grid-line-width: 1px;
+  --spacing-3xs: 3px;
+  --spacing-2xs: 2px;
+  --spacing-xs: 0.25rem;
+  --spacing-control: 6px;
+  --spacing-sm: 0.5rem;
+  --spacing-compact: 10px;
+  --spacing-md: 0.75rem;
+  --spacing-control-lg: 14px;
+  --spacing-lg: 1rem;
+  --spacing-xl: 18px;
+  --spacing-2xl: 20px;
+
+  /* layout sizing */
+  --app-min-width: 320px;
+  --shell-max-width: 1180px;
+  --workspace-min-height: 520px;
+  --sidebar-min-width: 240px;
+  --sidebar-max-width: 320px;
+  --topbar-min-height: 92px;
+  --transport-min-height: 48px;
+  --statusbar-min-height: 44px;
+  --status-grid-min-height: 58px;
+  --empty-state-min-height: 240px;
+
+  /* controls */
+  --control-height-xs: 22px;
+  --control-height-sm: 28px;
+  --control-height-md: 34px;
+  --control-height-lg: 38px;
+  --control-height-xl: 40px;
+  --bpm-control-width: 76px;
+  --beat-readout-width: 54px;
+  --icon-button-size: 24px;
+  --checkbox-size: 22px;
+
+  /* editor dimensions */
+  --pane-heading-min-height: 32px;
+  --track-list-item-min-height: 58px;
+  --piano-roll-scroll-min-height: 180px;
+  --piano-roll-scroll-max-height: 420px;
+  --editor-panel-min-height: 240px;
+  --ruler-label-width: 64px;
+  --ruler-track-min-height: 16px;
+  --pitch-ruler-label-width: 60px;
+  --pitch-ruler-label-height: 14px;
+  --pitch-ruler-tick-width: 7px;
+  --resize-handle-width: 8px;
+  --timeline-label-width: 120px;
+  --timeline-ruler-min-height: 22px;
+  --timeline-track-min-height: 76px;
+  --placement-min-width: 92px;
+  --property-row-min-height: 56px;
+  --property-label-min-width: 100px;
+  --property-label-max-width: 180px;
+  --number-input-width: 92px;
+  --inspector-row-min-height: 64px;
+  --inspector-label-min-width: 120px;
+  --inspector-label-max-width: 180px;
+  --mobile-breakpoint: 760px;
+  --mobile-transport-basis: 140px;
+  --mobile-toolbar-button-basis: 96px;
+
+  --note-height: 10px;
+  --toolbar-gap: 0.5rem;
+}
