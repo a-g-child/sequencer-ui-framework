@@ -27,6 +27,7 @@
   } from './lib/editors/piano-roll/piano-roll-model'
   import type { EditorKind } from './lib/editors/editor-types';
   import PatternEditor from './lib/editors/pattern/PatternEditor.svelte';
+  import RuntimePanel from './lib/panels/RuntimePanel.svelte';
   import TransportPanel from './lib/panels/TransportPanel.svelte';
 
   
@@ -546,32 +547,14 @@
     </section>
   </section>
 
-  <section class="runtime-status" aria-label="Runtime service status">
-    <div>
-      <span>Editor Transport</span>
-      <strong>{transportPlaying ? 'playing' : 'stopped'}</strong>
-    </div>
-    <div>
-      <span>Tempo</span>
-      <strong>{transportBpm}</strong>
-    </div>
-    <div>
-      <span>Beat</span>
-      <strong>{transportBeat.toFixed(2)}</strong>
-    </div>
-    <div>
-      <span>Audio Engine</span>
-      <strong>{audioEngineStatus}</strong>
-    </div>
-    <div>
-      <span>MIDI</span>
-      <strong>{midiStatus}</strong>
-    </div>
-    <div>
-      <span>Preferences</span>
-      <strong>{preferencesStatus}</strong>
-    </div>
-  </section>
+  <RuntimePanel
+    {transportPlaying}
+    {transportBpm}
+    {transportBeat}
+    {audioEngineStatus}
+    {midiStatus}
+    {preferencesStatus}
+  />
 
   <footer class="statusbar">
     <span>{store.document.patterns.values().length} patterns</span>
