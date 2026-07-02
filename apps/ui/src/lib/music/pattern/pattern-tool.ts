@@ -1,6 +1,7 @@
 import type { BeatTime } from '@sequencer/core';
 import type { AppController } from '../../app-controller';
 import type { PianoRollNoteView } from '../../editors/piano-roll/piano-roll-model';
+import type { RenderInteractionItem } from '../../framework/editor';
 import type { PatternModifierState } from './pattern-input-state';
 import type { PatternViewport } from './pattern-viewport';
 
@@ -21,9 +22,9 @@ export type PatternInteractionContext = {
     pitch: number;
     snap: BeatTime;
   };
-  hoveredNote?: PatternNoteView;
-  selectedNotes: PatternNoteView[];
-  visibleNotes: PatternNoteView[];
+  hoveredItem?: RenderInteractionItem<PatternNoteView>;
+  selectedItems: RenderInteractionItem<PatternNoteView>[];
+  visibleItems: RenderInteractionItem<PatternNoteView>[];
 };
 
 export type PatternPointerContext = PatternInteractionContext;

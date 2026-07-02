@@ -2,7 +2,8 @@ import type { AppController } from '../../app-controller';
 import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model';
 import {
   RendererRegistry,
-  type EditorSession
+  type EditorSession,
+  type RenderInteractionItem
 } from '../../framework/editor';
 import {
   createGridDefinition,
@@ -26,7 +27,6 @@ import {
 } from './pattern-renderer';
 import { PatternRenderModelBuilder } from './PatternRenderModelBuilder';
 import { handlePatternShortcut } from './pattern-shortcuts';
-import { buildPatternSelection } from './pattern-selection';
 import type {
   PatternInteractionContext,
   PatternNoteOverlay,
@@ -559,12 +559,12 @@ export class PatternEditorSession implements EditorSession {
   handleNotePointerDown(
     event: PointerEvent,
     pianoRoll: PianoRollView | undefined,
-    note: PianoRollNoteView
+    item: RenderInteractionItem<PianoRollNoteView>
   ): PatternPointerResult {
     this.input.setKeyboardModifiers(event);
     if (this.beginPan(event)) return {};
 
-    const context = this.buildInteractionContext(event, pianoRoll, note);
+    const context = this.buildInteractionContext(event, pianoRoll, item);
 
     if (!context) return {};
 
@@ -582,12 +582,12 @@ export class PatternEditorSession implements EditorSession {
   handleNotePointerMove(
     event: PointerEvent,
     pianoRoll: PianoRollView | undefined,
-    note: PianoRollNoteView
+    item: RenderInteractionItem<PianoRollNoteView>
   ): PatternPointerResult {
     this.input.setKeyboardModifiers(event);
     if (this.movePan(event, pianoRoll)) return {};
 
-    const context = this.buildInteractionContext(event, pianoRoll, note);
+    const context = this.buildInteractionContext(event, pianoRoll, item);
 
     if (!context) return {};
 
@@ -602,12 +602,12 @@ export class PatternEditorSession implements EditorSession {
   handleNotePointerUp(
     event: PointerEvent,
     pianoRoll: PianoRollView | undefined,
-    note: PianoRollNoteView
+    item: RenderInteractionItem<PianoRollNoteView>
   ): PatternPointerResult {
     this.input.setKeyboardModifiers(event);
     if (this.endPan()) return {};
 
-    const context = this.buildInteractionContext(event, pianoRoll, note);
+    const context = this.buildInteractionContext(event, pianoRoll, item);
 
     if (!context) return {};
 
@@ -629,11 +629,11 @@ export class PatternEditorSession implements EditorSession {
   private buildInteractionContext(
     event: PointerEvent,
     pianoRoll: PianoRollView | undefined,
-    hoveredNote?: PianoRollNoteView
+    hoveredItem?: RenderInteractionItem<PianoRollNoteView>
   ): PatternInteractionContext | undefined {
     if (!pianoRoll) return undefined;
 
-    const selection = buildPatternSelection(this.selectedNotes(pianoRoll));
+    const renderModel = this.buildRenderModel(pianoRoll);
 
     return createPatternInteractionContext({
       event,
@@ -645,20 +645,16 @@ export class PatternEditorSession implements EditorSession {
       grid: this.grid,
       pianoRoll,
       renderer: this.renderer,
-      renderModel: this.buildRenderModel(pianoRoll),
-      selectedNotes: [
-        ...(selection.primary ? [selection.primary] : []),
-        ...selection.secondary
-      ],
-      hoveredNote
+      renderModel,
+      hoveredItem
     });
   }
 
   private updateHover(context: PatternInteractionContext): void {
-    this.hoveredNoteId = context.hoveredNote?.id;
+    this.hoveredNoteId = context.hoveredItem?.source.id;
     this.ghostBeat = context.musical.beat;
     this.ghostPitch = context.musical.pitch;
-    this.showGhost = !context.hoveredNote;
+    this.showGhost = !context.hoveredItem;
   }
 
   private clearHover(): void {

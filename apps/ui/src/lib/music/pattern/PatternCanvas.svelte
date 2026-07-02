@@ -4,6 +4,7 @@
   import PatternNotes, {
     type PatternNotePointerEventDetail
   } from './PatternNotes.svelte';
+  import type { RenderInteractionItem } from '../../framework/editor';
   import PatternOverlays from './PatternOverlays.svelte';
   import {
     patternLengthToScreenWidth,
@@ -24,15 +25,15 @@
   export let onPointerLeave: (event: PointerEvent) => void;
   export let onNotePointerDown: (
     event: PointerEvent,
-    note: PianoRollNoteView
+    item: RenderInteractionItem<PianoRollNoteView>
   ) => void;
   export let onNotePointerMove: (
     event: PointerEvent,
-    note: PianoRollNoteView
+    item: RenderInteractionItem<PianoRollNoteView>
   ) => void;
   export let onNotePointerUp: (
     event: PointerEvent,
-    note: PianoRollNoteView
+    item: RenderInteractionItem<PianoRollNoteView>
   ) => void;
 
   const middleCPitch = 60;
@@ -109,19 +110,19 @@
   function handleNotePointerDown(
     event: CustomEvent<PatternNotePointerEventDetail>
   ): void {
-    onNotePointerDown(event.detail.pointerEvent, event.detail.note);
+    onNotePointerDown(event.detail.pointerEvent, event.detail.item);
   }
 
   function handleNotePointerMove(
     event: CustomEvent<PatternNotePointerEventDetail>
   ): void {
-    onNotePointerMove(event.detail.pointerEvent, event.detail.note);
+    onNotePointerMove(event.detail.pointerEvent, event.detail.item);
   }
 
   function handleNotePointerUp(
     event: CustomEvent<PatternNotePointerEventDetail>
   ): void {
-    onNotePointerUp(event.detail.pointerEvent, event.detail.note);
+    onNotePointerUp(event.detail.pointerEvent, event.detail.item);
   }
 </script>
 

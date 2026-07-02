@@ -27,13 +27,16 @@ export class ResizeNoteTool implements PatternTool {
   private capturedResize?: CapturedResize;
 
   pointerDown(context: PatternInteractionContext): void {
-    if (!context.hoveredNote) return;
+    const hoveredNote = context.hoveredItem?.source;
 
-    const selectedIds = context.selectedNotes.map((note) => note.id);
+    if (!hoveredNote) return;
+
+    const selectedNotes = context.selectedItems.map((item) => item.source);
+    const selectedIds = selectedNotes.map((note) => note.id);
     const resizingNotes =
-      selectedIds.includes(context.hoveredNote.id)
-        ? context.selectedNotes
-        : [context.hoveredNote];
+      selectedIds.includes(hoveredNote.id)
+        ? selectedNotes
+        : [hoveredNote];
 
     this.capturedResize = {
       patternId: context.patternId,

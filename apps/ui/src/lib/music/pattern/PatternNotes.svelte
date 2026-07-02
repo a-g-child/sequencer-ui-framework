@@ -1,16 +1,16 @@
 <script lang="ts" context="module">
   import type { PianoRollNoteView } from '../../editors/piano-roll/piano-roll-model';
+  import type { RenderInteractionItem } from '../../framework/editor';
 
   export type PatternNotePointerEventDetail = {
     pointerEvent: PointerEvent;
-    note: PianoRollNoteView;
+    item: RenderInteractionItem<PianoRollNoteView>;
   };
 </script>
 
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import type { PatternRenderModel } from './pattern-renderer';
-  import type { RenderItem } from './pattern-render-items';
 
   export let renderModel: PatternRenderModel;
 
@@ -23,9 +23,9 @@
   function dispatchNotePointerEvent(
     type: 'pointerdown' | 'pointermove' | 'pointerup',
     pointerEvent: PointerEvent,
-    item: RenderItem<PianoRollNoteView>
+    item: RenderInteractionItem<PianoRollNoteView>
   ): void {
-    dispatch(type, { pointerEvent, note: item.source });
+    dispatch(type, { pointerEvent, item });
   }
 </script>
 

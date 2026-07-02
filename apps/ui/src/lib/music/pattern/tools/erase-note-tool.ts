@@ -6,10 +6,12 @@ export class EraseNoteTool implements PatternTool {
   readonly name = 'Erase';
 
   pointerDown(context: PatternInteractionContext): void {
-    if (!context.hoveredNote) return;
+    const hoveredNote = context.hoveredItem?.source;
+
+    if (!hoveredNote) return;
 
     context.controller.execute(
-      new DeleteNoteOperation(context.patternId, context.hoveredNote.id)
+      new DeleteNoteOperation(context.patternId, hoveredNote.id)
     );
   }
 }

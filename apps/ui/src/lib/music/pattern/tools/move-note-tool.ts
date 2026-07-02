@@ -28,13 +28,16 @@ export class MoveNoteTool implements PatternTool {
   private capturedMove?: CapturedMove;
 
   pointerDown(context: PatternInteractionContext): void {
-    if (!context.hoveredNote) return;
+    const hoveredNote = context.hoveredItem?.source;
 
-    const selectedIds = context.selectedNotes.map((note) => note.id);
+    if (!hoveredNote) return;
+
+    const selectedNotes = context.selectedItems.map((item) => item.source);
+    const selectedIds = selectedNotes.map((note) => note.id);
     const movingNotes =
-      selectedIds.includes(context.hoveredNote.id)
-        ? context.selectedNotes
-        : [context.hoveredNote];
+      selectedIds.includes(hoveredNote.id)
+        ? selectedNotes
+        : [hoveredNote];
 
     this.capturedMove = {
       patternId: context.patternId,

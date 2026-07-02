@@ -1,7 +1,3 @@
-import {
-  beatToScreenX,
-  pitchToScreenY
-} from '../pattern-viewport';
 import type {
   PatternInteractionContext,
   PatternOverlay,
@@ -16,8 +12,10 @@ export class SelectTool implements PatternTool {
   private current?: { x: number; y: number };
 
   pointerDown(context: PatternInteractionContext): void {
-    if (context.hoveredNote) {
-      context.controller.selectNoteById(context.patternId, context.hoveredNote.id);
+    const hoveredNote = context.hoveredItem?.source;
+
+    if (hoveredNote) {
+      context.controller.selectNoteById(context.patternId, hoveredNote.id);
       this.cancel();
       return;
     }
@@ -40,27 +38,23 @@ export class SelectTool implements PatternTool {
     const minY = Math.min(this.start.y, this.current.y);
     const maxY = Math.max(this.start.y, this.current.y);
 
-    const selected = context.visibleNotes.filter((note) => {
-      const noteLeft = beatToScreenX(note.time, context.viewport);
-      const noteRight = beatToScreenX(note.time + note.duration, context.viewport);
-      const noteTop = pitchToScreenY(
-        note.pitch,
-        context.viewport,
-        context.highestPitch
-      );
-      const noteBottom = noteTop + context.viewport.pixelsPerSemitone;
+    const selected = context.visibleItems.filter((item) => {
+      const itemLeft = item.x;
+      const itemRight = item.x + item.width;
+      const itemTop = item.y;
+      const itemBottom = item.y + item.height;
 
       return (
-        noteRight >= minX &&
-        noteLeft <= maxX &&
-        noteBottom >= minY &&
-        noteTop <= maxY
+        itemRight >= minX &&
+        itemLeft <= maxX &&
+        itemBottom >= minY &&
+        itemTop <= maxY
       );
     });
 
     context.controller.selectNotes(
       context.patternId,
-      selected.map((note) => note.id)
+      selected.map((item) => item.source.id)
     );
 
     this.cancel();

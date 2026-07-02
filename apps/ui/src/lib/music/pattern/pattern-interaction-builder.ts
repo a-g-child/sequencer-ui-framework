@@ -3,6 +3,7 @@ import type { PatternInputState } from './pattern-input-state';
 import type {
   PatternInteractionContext
 } from './pattern-tool';
+import type { RenderInteractionItem } from '../../framework/editor';
 import { hitTestRenderItem } from './pattern-hit-testing';
 import type { PatternViewport } from './pattern-viewport';
 import type { GridDefinition } from './pattern-grid';
@@ -26,8 +27,7 @@ export type BuildPatternInteractionContextOptions = {
   pianoRoll: PianoRollView;
   renderer: PatternRenderer<PianoRollView>;
   renderModel: PatternRenderModel;
-  selectedNotes: PianoRollView['notes'];
-  hoveredNote?: PianoRollNoteView;
+  hoveredItem?: RenderInteractionItem<PianoRollNoteView>;
 };
 
 export function buildPatternInteractionContext(
@@ -47,21 +47,20 @@ export function buildPatternInteractionContext(
     y
   );
 
-  const hoveredItem = hitTestRenderItem<PianoRollNoteView>(
+  const hoveredItem = options.hoveredItem ?? hitTestRenderItem<PianoRollNoteView>(
     options.renderModel.items,
     x,
     y
   );
-  const hoveredNote = options.hoveredNote ?? hoveredItem?.source;
 
   return {
     controller: options.controller,
     patternId: options.patternId,
     pointer: { x, y },
     musical,
-    hoveredNote,
-    selectedNotes: options.selectedNotes,
-    visibleNotes: options.pianoRoll.notes,
+    hoveredItem,
+    selectedItems: options.renderModel.items.filter((item) => item.selected),
+    visibleItems: options.renderModel.items,
     viewport: options.viewport,
     highestPitch: options.pianoRoll.highestPitch,
     modifiers: { ...options.input.modifiers }

@@ -3,6 +3,7 @@
   import type { AppController } from '../../app-controller';
   import type { EditorKind } from '../../editors/editor-types';
   import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model';
+  import type { RenderInteractionItem } from '../../framework/editor';
   import PatternCanvas from './PatternCanvas.svelte';
   import { PatternEditorSession } from './PatternEditorSession';
   import type {
@@ -138,16 +139,25 @@
     applyPointerResult(session.handlePointerLeave(event, pianoRoll));
   }
 
-  function handleNotePointerDown(event: PointerEvent, note: PianoRollNoteView) {
-    applyPointerResult(session.handleNotePointerDown(event, pianoRoll, note));
+  function handleNotePointerDown(
+    event: PointerEvent,
+    item: RenderInteractionItem<PianoRollNoteView>
+  ) {
+    applyPointerResult(session.handleNotePointerDown(event, pianoRoll, item));
   }
 
-  function handleNotePointerMove(event: PointerEvent, note: PianoRollNoteView) {
-    applyPointerResult(session.handleNotePointerMove(event, pianoRoll, note));
+  function handleNotePointerMove(
+    event: PointerEvent,
+    item: RenderInteractionItem<PianoRollNoteView>
+  ) {
+    applyPointerResult(session.handleNotePointerMove(event, pianoRoll, item));
   }
 
-  function handleNotePointerUp(event: PointerEvent, note: PianoRollNoteView) {
-    applyPointerResult(session.handleNotePointerUp(event, pianoRoll, note));
+  function handleNotePointerUp(
+    event: PointerEvent,
+    item: RenderInteractionItem<PianoRollNoteView>
+  ) {
+    applyPointerResult(session.handleNotePointerUp(event, pianoRoll, item));
   }
 
   function isRendererEditor(editor: EditorKind): editor is PatternRendererId {
