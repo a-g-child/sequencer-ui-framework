@@ -8,6 +8,7 @@
   import { PatternEditorSession } from './PatternEditorSession';
   import type { PatternPointerResult } from './PatternEditorSession';
   import PatternToolbar from './PatternToolbar.svelte';
+  import PatternViewControls from './PatternViewControls.svelte';
 
   export let controller: AppController;
   export let pianoRoll: PianoRollView | undefined;
@@ -140,58 +141,22 @@
 </script>
 
 {#if session}
-  <PatternToolbar
-    editors={EDITORS}
-    activeEditor={activeEditor}
-    tools={session.tools}
-    activeToolId={session.activeTool.id}
-    onEditorChange={(editor) => {
-      onEditorChange(editor);
-    }}
-    onToolChange={(tool) => {
-      session.setActiveTool(tool);
-      invalidateSession();
-    }}
-    onAddNote={addC4Note}
-    onZoomIn={() => {
-      session.zoomViewportX(viewportZoomStep, pianoRoll);
-      invalidateSession();
-    }}
-    onZoomOut={() => {
-      session.zoomViewportX(1 / viewportZoomStep, pianoRoll);
-      invalidateSession();
-    }}
-    onZoomPitchIn={() => {
-      session.zoomViewportY(viewportZoomStep, pianoRoll);
-      invalidateSession();
-    }}
-    onZoomPitchOut={() => {
-      session.zoomViewportY(1 / viewportZoomStep, pianoRoll);
-      invalidateSession();
-    }}
-    onPanLeft={() => {
-      session.scrollViewport(-viewportBeatScrollStep, pianoRoll);
-      invalidateSession();
-    }}
-    onPanRight={() => {
-      session.scrollViewport(viewportBeatScrollStep, pianoRoll);
-      invalidateSession();
-    }}
-    onPitchUp={() => {
-      session.scrollPitch(-viewportPitchScrollStep, pianoRoll);
-      invalidateSession();
-    }}
-    onPitchDown={() => {
-      session.scrollPitch(viewportPitchScrollStep, pianoRoll);
-      invalidateSession();
-    }}
-    onResetView={resetPatternViewport}
-  />
-{/if}
+  <section class="pattern-editor-panel" aria-label="Pattern editor">
+    <PatternToolbar
+      editors={EDITORS}
+      activeEditor={activeEditor}
+      tools={session.tools}
+      activeToolId={session.activeTool.id}
+      onEditorChange={(editor) => {
+        onEditorChange(editor);
+      }}
+      onToolChange={(tool) => {
+        session.setActiveTool(tool);
+        invalidateSession();
+      }}
+    />
 
-{#if session && activeEditor === 'piano-roll'}
-  {#if renderModel}
-    <section class="piano-roll-panel" aria-label="Piano roll">
+    {#if activeEditor === 'piano-roll' && renderModel}
       <div class="pane-heading">
         <h2>Piano Roll</h2>
         <span>{renderModel.patternName}</span>
@@ -213,21 +178,58 @@
         onNotePointerMove={handleNotePointerMove}
         onNotePointerUp={handleNotePointerUp}
       />
-    </section>
-  {/if}
-{:else if activeEditor === 'drum-rack'}
-  <section class="panel">
-    <h2>Drum Rack</h2>
-    <p>Fixed-lane percussion editor placeholder.</p>
-  </section>
-{:else if activeEditor === 'pattern-grid'}
-  <section class="panel">
-    <h2>Pattern Grid</h2>
-    <p>Mono step sequencer with per-slot pitch placeholder.</p>
-  </section>
-{:else if activeEditor === 'audio-graph'}
-  <section class="panel">
-    <h2>Audio Graph</h2>
-    <p>Node-based routing and modulation placeholder.</p>
+
+      <PatternViewControls
+        onAddNote={addC4Note}
+        onZoomIn={() => {
+          session.zoomViewportX(viewportZoomStep, pianoRoll);
+          invalidateSession();
+        }}
+        onZoomOut={() => {
+          session.zoomViewportX(1 / viewportZoomStep, pianoRoll);
+          invalidateSession();
+        }}
+        onZoomPitchIn={() => {
+          session.zoomViewportY(viewportZoomStep, pianoRoll);
+          invalidateSession();
+        }}
+        onZoomPitchOut={() => {
+          session.zoomViewportY(1 / viewportZoomStep, pianoRoll);
+          invalidateSession();
+        }}
+        onPanLeft={() => {
+          session.scrollViewport(-viewportBeatScrollStep, pianoRoll);
+          invalidateSession();
+        }}
+        onPanRight={() => {
+          session.scrollViewport(viewportBeatScrollStep, pianoRoll);
+          invalidateSession();
+        }}
+        onPitchUp={() => {
+          session.scrollPitch(-viewportPitchScrollStep, pianoRoll);
+          invalidateSession();
+        }}
+        onPitchDown={() => {
+          session.scrollPitch(viewportPitchScrollStep, pianoRoll);
+          invalidateSession();
+        }}
+        onResetView={resetPatternViewport}
+      />
+    {:else if activeEditor === 'drum-rack'}
+      <section class="panel">
+        <h2>Drum Rack</h2>
+        <p>Fixed-lane percussion editor placeholder.</p>
+      </section>
+    {:else if activeEditor === 'pattern-grid'}
+      <section class="panel">
+        <h2>Pattern Grid</h2>
+        <p>Mono step sequencer with per-slot pitch placeholder.</p>
+      </section>
+    {:else if activeEditor === 'audio-graph'}
+      <section class="panel">
+        <h2>Audio Graph</h2>
+        <p>Node-based routing and modulation placeholder.</p>
+      </section>
+    {/if}
   </section>
 {/if}
