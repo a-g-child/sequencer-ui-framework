@@ -2,7 +2,6 @@ import type { BeatTime } from '@sequencer/core';
 import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model';
 import type { RenderModel } from '../../framework/editor';
 import type { GridDefinition, PatternGridLine } from './pattern-grid';
-import { hitTestNote } from './pattern-hit-testing';
 import type { RenderItem, RenderLane } from './pattern-render-items';
 import type { PatternNoteOverlay, PatternRectangleOverlay } from './pattern-tool';
 import {
@@ -76,12 +75,6 @@ export interface PatternRenderer<TViewModel> {
   readonly id: string;
 
   render(input: PatternRenderInput<TViewModel>): PatternRenderModel;
-  hitTest(
-    viewModel: TViewModel,
-    viewport: PatternViewport,
-    x: number,
-    y: number
-  ): PianoRollNoteView | undefined;
   pointerToMusical(
     viewModel: TViewModel,
     viewport: PatternViewport,
@@ -147,21 +140,6 @@ export class PianoRollRenderer implements PatternRenderer<PianoRollView> {
       overlayNotes: input.overlayNotes,
       overlayRectangles: input.overlayRectangles
     };
-  }
-
-  hitTest(
-    viewModel: PianoRollView,
-    viewport: PatternViewport,
-    x: number,
-    y: number
-  ): PianoRollNoteView | undefined {
-    return hitTestNote(
-      viewModel.notes,
-      viewport,
-      viewModel.highestPitch,
-      x,
-      y
-    );
   }
 
   pointerToMusical(
@@ -250,32 +228,6 @@ export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
       overlayNotes: [],
       overlayRectangles: input.overlayRectangles
     };
-  }
-
-  hitTest(
-    viewModel: PianoRollView,
-    viewport: PatternViewport,
-    x: number,
-    y: number
-  ): PianoRollNoteView | undefined {
-    const lanes = buildDrumLanes(viewModel);
-    const laneByPitch = new Map(
-      lanes.map((lane) => [lane.pitch, lane.lanePitch])
-    );
-    const renderedNotes = viewModel.notes.map((note) => ({
-      ...note,
-      pitch: laneByPitch.get(note.pitch) ?? 0
-    }));
-
-    const hit = hitTestNote(
-      renderedNotes,
-      viewport,
-      lanes[0]?.lanePitch ?? 0,
-      x,
-      y
-    );
-
-    return hit ? viewModel.notes.find((note) => note.id === hit.id) : undefined;
   }
 
   pointerToMusical(

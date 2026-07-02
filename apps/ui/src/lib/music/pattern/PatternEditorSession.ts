@@ -645,6 +645,7 @@ export class PatternEditorSession implements EditorSession {
       grid: this.grid,
       pianoRoll,
       renderer: this.renderer,
+      renderModel: this.buildRenderModel(pianoRoll),
       selectedNotes: [
         ...(selection.primary ? [selection.primary] : []),
         ...selection.secondary

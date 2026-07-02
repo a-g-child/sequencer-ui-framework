@@ -3,9 +3,13 @@ import type { PatternInputState } from './pattern-input-state';
 import type {
   PatternInteractionContext
 } from './pattern-tool';
+import { hitTestRenderItem } from './pattern-hit-testing';
 import type { PatternViewport } from './pattern-viewport';
 import type { GridDefinition } from './pattern-grid';
-import type { PatternRenderer } from './pattern-renderer';
+import type {
+  PatternRenderer,
+  PatternRenderModel
+} from './pattern-renderer';
 import type {
   PianoRollNoteView,
   PianoRollView
@@ -21,6 +25,7 @@ export type BuildPatternInteractionContextOptions = {
   grid: GridDefinition;
   pianoRoll: PianoRollView;
   renderer: PatternRenderer<PianoRollView>;
+  renderModel: PatternRenderModel;
   selectedNotes: PianoRollView['notes'];
   hoveredNote?: PianoRollNoteView;
 };
@@ -42,14 +47,12 @@ export function buildPatternInteractionContext(
     y
   );
 
-  const hoveredNote =
-    options.hoveredNote ??
-    options.renderer.hitTest(
-      options.pianoRoll,
-      options.viewport,
-      x,
-      y
-    );
+  const hoveredItem = hitTestRenderItem<PianoRollNoteView>(
+    options.renderModel.items,
+    x,
+    y
+  );
+  const hoveredNote = options.hoveredNote ?? hoveredItem?.source;
 
   return {
     controller: options.controller,

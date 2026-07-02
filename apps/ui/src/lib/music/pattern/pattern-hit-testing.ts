@@ -1,22 +1,15 @@
-import type { PianoRollNoteView } from '../../editors/piano-roll/piano-roll-model';
-import type { PatternViewport } from './pattern-viewport';
-import {
-  beatToScreenX,
-  pitchToScreenY
-} from './pattern-viewport';
+import type { RenderItem } from './pattern-render-items';
 
-export function hitTestNote(
-  notes: PianoRollNoteView[],
-  viewport: PatternViewport,
-  highestPitch: number,
+export function hitTestRenderItem<TSource>(
+  items: RenderItem<TSource>[],
   x: number,
   y: number
-): PianoRollNoteView | undefined {
-  return notes.find((note) => {
-    const left = beatToScreenX(note.time, viewport);
-    const right = beatToScreenX(note.time + note.duration, viewport);
-    const top = pitchToScreenY(note.pitch, viewport, highestPitch);
-    const bottom = top + viewport.pixelsPerSemitone;
+): RenderItem<TSource> | undefined {
+  return [...items].reverse().find((item) => {
+    const left = item.x;
+    const right = item.x + item.width;
+    const top = item.y;
+    const bottom = item.y + item.height;
 
     return x >= left && x <= right && y >= top && y <= bottom;
   });
