@@ -6,6 +6,7 @@
   } from './PatternNotes.svelte';
   import type { RenderInteractionItem } from '../../framework/editor';
   import PatternOverlays from './PatternOverlays.svelte';
+  import PatternVelocityLane from './PatternVelocityLane.svelte';
   import {
     patternLengthToScreenWidth,
     pitchRangeToScreenHeight,
@@ -34,6 +35,10 @@
   export let onNotePointerUp: (
     event: PointerEvent,
     item: RenderInteractionItem<PianoRollNoteView>
+  ) => void;
+  export let onVelocityCommit: (
+    note: PianoRollNoteView,
+    velocity: number
   ) => void;
 
   const middleCPitch = 60;
@@ -169,6 +174,8 @@
           <PatternOverlays {renderModel} />
         </div>
       </div>
+
+      <PatternVelocityLane {renderModel} {onVelocityCommit} />
     </div>
   </div>
 </div>

@@ -228,6 +228,56 @@ h2 {
   width: max-content;
 }
 
+.velocity-lane {
+  display: grid;
+  grid-template-columns: var(--ruler-label-width) minmax(0, 1fr);
+  gap: var(--spacing-sm);
+  align-items: stretch;
+  width: max-content;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  font-weight: 800;
+}
+
+.velocity-lane > span {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  background: var(--bg);
+}
+
+.velocity-lane-track {
+  position: relative;
+  min-width: 100%;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.velocity-bar {
+  position: absolute;
+  bottom: 0;
+  min-width: 0;
+  padding: 0;
+  border-color: var(--accent-strong);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: var(--accent-soft);
+  cursor: ns-resize;
+}
+
+.velocity-bar:hover,
+.velocity-bar.active {
+  background: var(--accent);
+}
+
+.velocity-bar.selected {
+  box-shadow: inset 0 0 0 var(--focus-ring-width) var(--note-selected);
+}
+
 .piano-roll-scroll {
   width: 100%;
   aspect-ratio: 4 / 1;

@@ -37,58 +37,89 @@ consolidation work needed to keep the codebase coherent as it grows.
 - Component extraction
 - Panel extraction
 
-## Phase 5: Framework Consolidation
-
-The next phase is consolidation, not feature expansion.
-
-The goal is to make the framework own the application shape, while music becomes
-a client of reusable editor and UI concepts.
-
-Completed foundation:
-
-- Core document model
-- Operations
-- Services
-- Sessions emerging in editors
-- Workbench scaffold
-- UI primitives under `framework/ui`
-- Panels extracted from `App.svelte`
-- Framework vocabulary documented
-
-### Phase 5.1: Framework Consolidation Close-Out
+### Phase 5: Framework Consolidation
 
 Status: complete.
 
-Completed in this slice:
+Phase 5 moved the repository from editor infrastructure toward a reusable
+creative-application framework. The framework now owns the application shape,
+while music is a client of reusable editor and UI concepts.
 
-- Pattern editor code moved under `music/pattern`
-- `framework/editor` vocabulary introduced
-- `framework/application/SessionManager` introduced
-- `PatternRenderModelBuilder` introduced
-- `RendererRegistry` seam introduced
-- Pattern sessions and render models made explicit framework clients
+Completed:
 
-Consolidation targets:
+- Workbench
+- UI framework
+- Theme tokens
+- Editor sessions
+- `RenderModelBuilder`
+- Renderer registry
+- Pattern workspace direction
+- Piano Roll renderer
+- Drum Rack renderer
+- Velocity subview
+- Render lanes and render items
+- Render-item interaction context
+- UI primitives under `framework/ui`
+- Panels extracted from `App.svelte`
+- Framework documentation
 
-- `framework/application/SessionManager`
-- `framework/application/Workspace`
-- `framework/application/Panel`
-- `framework/application/PanelDefinition`
-- `framework/editor/Session`
-- `framework/editor/Viewport`
-- `framework/editor/RenderModel`
-- `framework/editor/RenderModelBuilder`
-- `framework/editor/Renderer`
-- `framework/editor/Tool`
-- `framework/editor/Overlay`
-- `framework/editor/InteractionBuilder`
-- `framework/theme/tokens.css`
-- `framework/theme/dark.css`
-- `framework/theme/light.css`
-- `framework/theme/broadcast.css`
-- `framework/theme/touch.css`
-- renderer registry
+The remaining framework ideas are refinements, not blockers:
+
+- `EditorTool<TSource>`
+- generic `InteractionContext<TSource>`
+- lane providers
+- subview registry
 - workspace persistence
+
+## Phase 6: Expressive Editing
+
+The next phase is product work on top of the framework.
+
+The goal is expressive editing: velocity, probability, humanisation,
+articulation, automation, and the details that make a sequence feel performed
+rather than merely placed on a grid.
+
+Phase 6 should focus on editing before playback. Playback and MIDI will be more
+valuable once the editor can create patterns that are enjoyable to hear.
+
+### Sprint 1: Musical Expression
+
+- Velocity polish
+- Probability lane
+- Humanise
+- Quantise
+- Scale snap
+
+### Sprint 2: Drum Workflow
+
+- Drum lane metadata
+- General MIDI drum provider
+- Custom kits
+- Lane colours
+- Lane icons
+- Fold empty lanes
+
+### Sprint 3: Pattern Workflow
+
+- Pattern Grid renderer
+- Step sequencing
+- Accent
+- Ratchets
+- Microsteps
+
+### Sprint 4: Automation
+
+- Automation subview
+- Bezier editing
+- Parameter lanes
+- Curve tools
+
+### Sprint 5: Playback
+
+- Transport clock
+- Scheduler
+- MIDI output
+- Preview playback
 
 ## Target Shape
 
@@ -151,10 +182,8 @@ sessions and workspaces.
 
 ## Future Feature Layers
 
-After framework consolidation, feature work can continue on stronger ground:
+After expressive editing, feature work can continue on stronger ground:
 
-- Music editors
-- Automation
 - Audio
 - MIDI
 - Plugins

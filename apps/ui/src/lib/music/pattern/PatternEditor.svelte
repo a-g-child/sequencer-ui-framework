@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { SetNoteVelocityOperation } from '@sequencer/music';
   import { onMount, tick } from 'svelte';
   import type { AppController } from '../../app-controller';
   import type { EditorKind } from '../../editors/editor-types';
@@ -160,6 +161,14 @@
     applyPointerResult(session.handleNotePointerUp(event, pianoRoll, item));
   }
 
+  function commitNoteVelocity(note: PianoRollNoteView, velocity: number) {
+    controller.execute(
+      new SetNoteVelocityOperation(note.patternId, note.id, velocity)
+    );
+    syncView();
+    invalidateSession();
+  }
+
   function isRendererEditor(editor: EditorKind): editor is PatternRendererId {
     return editor === 'piano-roll' || editor === 'drum-rack';
   }
@@ -204,6 +213,7 @@
         onNotePointerDown={handleNotePointerDown}
         onNotePointerMove={handleNotePointerMove}
         onNotePointerUp={handleNotePointerUp}
+        onVelocityCommit={commitNoteVelocity}
       />
 
       <PatternViewControls
