@@ -9,15 +9,8 @@
 
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import type {
-    PatternRenderedNoteView,
-    PatternRenderModel
-  } from './pattern-renderer';
-  import {
-    beatToScreenX,
-    durationToScreenWidth,
-    pitchToScreenY
-  } from './pattern-viewport';
+  import type { PatternRenderModel } from './pattern-renderer';
+  import type { RenderItem } from './pattern-render-items';
 
   export let renderModel: PatternRenderModel;
 
@@ -30,33 +23,33 @@
   function dispatchNotePointerEvent(
     type: 'pointerdown' | 'pointermove' | 'pointerup',
     pointerEvent: PointerEvent,
-    note: PatternRenderedNoteView
+    item: RenderItem<PianoRollNoteView>
   ): void {
-    dispatch(type, { pointerEvent, note: note.source });
+    dispatch(type, { pointerEvent, note: item.source });
   }
 </script>
 
-{#each renderModel.notes as note (note.id)}
+{#each renderModel.items as item (item.id)}
   <button
     type="button"
     class="note"
-    class:selected={renderModel.selectedNoteIds.includes(note.id)}
-    class:hovered={renderModel.hoveredNoteId === note.id}
+    class:selected={item.selected}
+    class:hovered={item.hovered}
     class:resize-active={renderModel.activeToolId === 'resize-note'}
-    aria-label={`${note.label} note at beat ${note.time}`}
-    style={`left: ${beatToScreenX(note.time, renderModel.viewport)}px; width: ${durationToScreenWidth(note.duration, renderModel.viewport)}px; height: ${renderModel.noteHeight}px; top: ${pitchToScreenY(note.lanePitch, renderModel.viewport, renderModel.highestPitch) + 1}px;`}
+    aria-label={`Pattern item ${item.id}`}
+    style={`left: ${item.x}px; top: ${item.y}px; width: ${item.width}px; height: ${item.height}px;`}
     on:pointerdown|stopPropagation={(event) =>
-      dispatchNotePointerEvent('pointerdown', event, note)}
+      dispatchNotePointerEvent('pointerdown', event, item)}
     on:pointermove|stopPropagation={(event) =>
-      dispatchNotePointerEvent('pointermove', event, note)}
+      dispatchNotePointerEvent('pointermove', event, item)}
     on:pointerup|stopPropagation={(event) =>
-      dispatchNotePointerEvent('pointerup', event, note)}
+      dispatchNotePointerEvent('pointerup', event, item)}
     on:auxclick|preventDefault
   >
     {#if renderModel.activeToolId === 'resize-note'}
       <span
         class="note-resize-handle"
-        aria-label={`Resize ${note.label} note`}
+        aria-label={`Resize pattern item ${item.id}`}
         role="presentation"
       ></span>
     {/if}

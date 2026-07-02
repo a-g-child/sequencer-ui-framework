@@ -3,8 +3,12 @@ import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/
 import type { RenderModel } from '../../framework/editor';
 import type { GridDefinition, PatternGridLine } from './pattern-grid';
 import { hitTestNote } from './pattern-hit-testing';
+import type { RenderItem, RenderLane } from './pattern-render-items';
 import type { PatternNoteOverlay, PatternRectangleOverlay } from './pattern-tool';
 import {
+  beatToScreenX,
+  durationToScreenWidth,
+  pitchToScreenY,
   screenXToBeat,
   screenYToPitch,
   snapBeat,
@@ -38,6 +42,8 @@ export type PatternRenderModel = RenderModel & {
   pitchCount: number;
   highestPitch: number;
   pitchLabels: Record<number, string>;
+  lanes: RenderLane[];
+  items: RenderItem<PianoRollNoteView>[];
   gridLines: PatternGridLine[];
   notes: PatternRenderedNoteView[];
   selectedNoteIds: string[];
@@ -89,6 +95,22 @@ export class PianoRollRenderer implements PatternRenderer<PianoRollView> {
   readonly id = 'piano-roll';
 
   render(input: PatternRenderInput<PianoRollView>): PatternRenderModel {
+    const pitchLabels = Object.fromEntries(
+      input.viewModel.pitchRows.map((pitch) => [pitch, noteName(pitch)])
+    );
+    const lanes = buildRenderLanes(
+      input.viewModel.pitchRows.map((pitch) => ({
+        id: String(pitch),
+        pitch,
+        label: pitchLabels[pitch] ?? String(pitch),
+        source: pitch
+      })),
+      input.viewport,
+      input.viewModel.highestPitch
+    );
+    const selectedIds = input.selectedNotes.map((note) => note.id);
+    const selectedIdSet = new Set(selectedIds);
+
     return {
       rendererId: this.id,
       patternName: input.viewModel.patternName,
@@ -98,9 +120,17 @@ export class PianoRollRenderer implements PatternRenderer<PianoRollView> {
       pitchRows: input.viewModel.pitchRows,
       pitchCount: input.viewModel.pitchCount,
       highestPitch: input.viewModel.highestPitch,
-      pitchLabels: Object.fromEntries(
-        input.viewModel.pitchRows.map((pitch) => [pitch, noteName(pitch)])
-      ),
+      pitchLabels,
+      lanes,
+      items: buildRenderItems({
+        notes: input.viewModel.notes,
+        laneByPitch: new Map(input.viewModel.pitchRows.map((pitch) => [pitch, String(pitch)])),
+        viewport: input.viewport,
+        highestPitch: input.viewModel.highestPitch,
+        noteHeight: input.noteHeight,
+        selectedIds: selectedIdSet,
+        hoveredNoteId: input.hoveredNoteId
+      }),
       gridLines: input.gridLines,
       notes: input.viewModel.notes.map((note) => ({
         ...note,
@@ -108,7 +138,7 @@ export class PianoRollRenderer implements PatternRenderer<PianoRollView> {
         lanePitch: note.pitch,
         label: noteName(note.pitch)
       })),
-      selectedNoteIds: input.selectedNotes.map((note) => note.id),
+      selectedNoteIds: selectedIds,
       hoveredNoteId: input.hoveredNoteId,
       activeToolId: input.activeToolId,
       isPanning: input.isPanning,
@@ -164,8 +194,23 @@ export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
     const laneByPitch = new Map(
       lanes.map((lane) => [lane.pitch, lane.lanePitch])
     );
+    const laneIdByPitch = new Map(
+      lanes.map((lane) => [lane.pitch, String(lane.pitch)])
+    );
     const labelByLane = Object.fromEntries(
       lanes.map((lane) => [lane.lanePitch, lane.label])
+    );
+    const selectedIds = input.selectedNotes.map((note) => note.id);
+    const selectedIdSet = new Set(selectedIds);
+    const renderLanes = buildRenderLanes(
+      lanes.map((lane) => ({
+        id: String(lane.pitch),
+        pitch: lane.lanePitch,
+        label: lane.label,
+        source: lane
+      })),
+      input.viewport,
+      lanes[0]?.lanePitch ?? 0
     );
 
     return {
@@ -178,6 +223,17 @@ export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
       pitchCount: lanes.length,
       highestPitch: lanes[0]?.lanePitch ?? 0,
       pitchLabels: labelByLane,
+      lanes: renderLanes,
+      items: buildRenderItems({
+        notes: input.viewModel.notes,
+        laneByPitch: laneIdByPitch,
+        visualPitchByPitch: laneByPitch,
+        viewport: input.viewport,
+        highestPitch: lanes[0]?.lanePitch ?? 0,
+        noteHeight: Math.max(12, input.noteHeight),
+        selectedIds: selectedIdSet,
+        hoveredNoteId: input.hoveredNoteId
+      }),
       gridLines: input.gridLines,
       notes: input.viewModel.notes.map((note) => ({
         ...note,
@@ -185,7 +241,7 @@ export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
         lanePitch: laneByPitch.get(note.pitch) ?? 0,
         label: noteName(note.pitch)
       })),
-      selectedNoteIds: input.selectedNotes.map((note) => note.id),
+      selectedNoteIds: selectedIds,
       hoveredNoteId: input.hoveredNoteId,
       activeToolId: input.activeToolId,
       isPanning: input.isPanning,
@@ -268,4 +324,50 @@ function noteName(pitch: number): string {
   const octave = Math.floor(pitch / 12) - 1;
 
   return `${names[pitch % 12]}${octave}`;
+}
+
+function buildRenderLanes(
+  lanes: Array<{
+    id: string;
+    pitch: number;
+    label: string;
+    source?: unknown;
+  }>,
+  viewport: PatternViewport,
+  highestPitch: number
+): RenderLane[] {
+  return lanes.map((lane) => ({
+    id: lane.id,
+    label: lane.label,
+    y: pitchToScreenY(lane.pitch, viewport, highestPitch),
+    height: viewport.pixelsPerSemitone,
+    source: lane.source
+  }));
+}
+
+function buildRenderItems(options: {
+  notes: PianoRollNoteView[];
+  laneByPitch: Map<number, string>;
+  visualPitchByPitch?: Map<number, number>;
+  viewport: PatternViewport;
+  highestPitch: number;
+  noteHeight: number;
+  selectedIds: Set<string>;
+  hoveredNoteId?: string;
+}): RenderItem<PianoRollNoteView>[] {
+  return options.notes.map((note) => {
+    const visualPitch = options.visualPitchByPitch?.get(note.pitch) ?? note.pitch;
+
+    return {
+      id: note.id,
+      laneId: options.laneByPitch.get(note.pitch) ?? String(note.pitch),
+      x: beatToScreenX(note.time, options.viewport),
+      y: pitchToScreenY(visualPitch, options.viewport, options.highestPitch) + 1,
+      width: durationToScreenWidth(note.duration, options.viewport),
+      height: options.noteHeight,
+      selected: options.selectedIds.has(note.id),
+      hovered: options.hoveredNoteId === note.id,
+      source: note
+    };
+  });
 }

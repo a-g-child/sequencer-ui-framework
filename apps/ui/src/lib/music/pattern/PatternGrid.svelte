@@ -2,17 +2,16 @@
   import type { PatternRenderModel } from './pattern-renderer';
   import {
     beatToScreenX,
-    patternLengthToScreenWidth,
-    pitchRangeToScreenHeight,
-    pitchToScreenY
+    patternLengthToScreenWidth
   } from './pattern-viewport';
 
   export let renderModel: PatternRenderModel;
   export let layer: 'ruler' | 'pitch-ruler' | 'background';
 
-  function pitchLabel(pitch: number): string {
-    return renderModel.pitchLabels[pitch] ?? String(pitch);
-  }
+  $: renderHeight = Math.max(
+    0,
+    ...renderModel.lanes.map((lane) => lane.y + lane.height)
+  );
 </script>
 
 {#if layer === 'ruler'}
@@ -37,15 +36,14 @@
 {:else if layer === 'pitch-ruler'}
   <div
     class="pitch-ruler"
-    style={`height: ${pitchRangeToScreenHeight(renderModel.pitchCount, renderModel.viewport)}px;`}
+    style={`height: ${renderHeight}px;`}
     aria-hidden="true"
   >
-    {#each renderModel.pitchRows as pitch}
+    {#each renderModel.lanes as lane}
       <span
-        class:c-note={pitch % 12 === 0}
-        style={`top: ${pitchToScreenY(pitch, renderModel.viewport, renderModel.highestPitch) + renderModel.viewport.pixelsPerSemitone / 2}px`}
+        style={`top: ${lane.y + lane.height / 2}px`}
       >
-        {pitchLabel(pitch)}
+        {lane.label}
       </span>
     {/each}
   </div>
@@ -59,10 +57,10 @@
       ></span>
     {/each}
 
-    {#each renderModel.pitchRows as pitch}
+    {#each renderModel.lanes as lane}
       <span
         class="pitch-line"
-        style={`top: ${pitchToScreenY(pitch, renderModel.viewport, renderModel.highestPitch)}px`}
+        style={`top: ${lane.y}px`}
       ></span>
     {/each}
   </div>
