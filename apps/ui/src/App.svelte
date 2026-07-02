@@ -311,43 +311,41 @@
     </div>
   </svelte:fragment>
   
-    <svelte:fragment slot="center">
-      <!-- <TimelinePanel {timeline} /> -->
-      <div>
-        <PatternEditor
-          bars={2}
-          beatsPerBar={4}
-          height={360}
-          width={450}
-          {controller}
-          {pianoRoll}
-          {activeEditor}
-          onEditorChange={(editor) => {
-            activeEditor = editor;
-            syncView();
-          }}
-          {syncView}
-        
-        />
-      </div>
-      <div>
-        <InspectorPanel
-          {inspector}
-          selectedType={selected?.type ?? 'track'}
-          bind:draftName
-          onRenameTrack={renameSelectedTrack}
-          onSetNumberPreview={setNumberPreview}
-          onCommitNumberValue={commitNumberValue}
-          onSetParameterValue={setParameterValue}
-          onCommitPlacementStart={commitPlacementStart}
-          onCommitPlacementLength={commitPlacementLength}
-          onCommitPlacementLoopCount={commitPlacementLoopCount}
-          onCommitNotePitch={commitNotePitch}
-          onCommitNoteTime={commitNoteTime}
-          onCommitNoteDuration={commitNoteDuration}
-          onDeleteSelectedNote={deleteSelectedNote}
-        />
-      </div>
+  <svelte:fragment slot="center">
+    <!-- <TimelinePanel {timeline} /> -->
+    <div class="editor-stack">
+      <PatternEditor
+        bars={1}
+        beatsPerBar={4}
+        height={360}
+        width="100%"
+        {controller}
+        {pianoRoll}
+        {activeEditor}
+        onEditorChange={(editor) => {
+          activeEditor = editor;
+          syncView();
+        }}
+        {syncView}
+      />
+
+      <InspectorPanel
+        {inspector}
+        selectedType={selected?.type ?? 'track'}
+        bind:draftName
+        onRenameTrack={renameSelectedTrack}
+        onSetNumberPreview={setNumberPreview}
+        onCommitNumberValue={commitNumberValue}
+        onSetParameterValue={setParameterValue}
+        onCommitPlacementStart={commitPlacementStart}
+        onCommitPlacementLength={commitPlacementLength}
+        onCommitPlacementLoopCount={commitPlacementLoopCount}
+        onCommitNotePitch={commitNotePitch}
+        onCommitNoteTime={commitNoteTime}
+        onCommitNoteDuration={commitNoteDuration}
+        onDeleteSelectedNote={deleteSelectedNote}
+      />
+    </div>
   </svelte:fragment>
 
   
@@ -370,3 +368,11 @@
     </footer>
   </svelte:fragment>
 </Workbench>
+
+<style>
+  .editor-stack {
+    display: grid;
+    gap: var(--spacing-xl);
+    min-width: 0;
+  }
+</style>

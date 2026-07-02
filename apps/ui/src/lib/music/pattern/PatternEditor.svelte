@@ -157,10 +157,10 @@
     />
 
     {#if activeEditor === 'piano-roll' && renderModel}
-      <div class="pane-heading">
+      <!-- <div class="pane-heading">
         <h2>Piano Roll</h2>
         <span>{renderModel.patternName}</span>
-      </div>
+      </div> -->
 
       <PatternCanvas
         bind:this={patternCanvas}

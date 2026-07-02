@@ -11,10 +11,6 @@
     <section class="workbench-center">
       <slot name="center" />
     </section>
-
-    <aside class="workbench-right">
-      <slot name="right" />
-    </aside>
   </section>
 
   <section class="workbench-bottom">
@@ -52,15 +48,11 @@
   .workbench-workspace {
     min-height: var(--workspace-min-height);
     display: grid;
-    grid-template-columns:
-      minmax(var(--sidebar-min-width), var(--sidebar-max-width))
-      minmax(0, 1fr)
-      minmax(var(--sidebar-min-width), var(--sidebar-max-width));
+    grid-template-columns: minmax(var(--sidebar-min-width), 1fr) minmax(0, 3fr);
   }
 
   .workbench-left,
-  .workbench-center,
-  .workbench-right {
+  .workbench-center {
     min-width: 0;
     padding: var(--spacing-lg);
   }
@@ -70,15 +62,10 @@
     background: var(--surface-2);
   }
 
-  .workbench-center,
-  .workbench-right {
+  .workbench-center {
     display: grid;
     align-content: start;
     gap: var(--spacing-xl);
-  }
-
-  .workbench-right {
-    border-left: var(--border-width) solid var(--border);
   }
 
   .workbench-bottom {
@@ -103,11 +90,6 @@
     .workbench-left {
       border-right: 0;
       border-bottom: var(--border-width) solid var(--border);
-    }
-
-    .workbench-right {
-      border-left: 0;
-      border-top: var(--border-width) solid var(--border);
     }
   }
 </style>
