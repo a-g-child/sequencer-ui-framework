@@ -10,17 +10,14 @@
   export let renderModel: PatternRenderModel;
   export let layer: 'ruler' | 'pitch-ruler' | 'background';
 
-  function noteName(pitch: number): string {
-    const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-    const octave = Math.floor(pitch / 12) - 1;
-
-    return `${names[pitch % 12]}${octave}`;
+  function pitchLabel(pitch: number): string {
+    return renderModel.pitchLabels[pitch] ?? String(pitch);
   }
 </script>
 
 {#if layer === 'ruler'}
   <div class="piano-roll-ruler" aria-hidden="true">
-    <span>Note</span>
+    <span>{renderModel.rendererId === 'drum-rack' ? 'Lane' : 'Note'}</span>
     <div
       class="piano-roll-ruler-track"
       style={`width: ${patternLengthToScreenWidth(renderModel.visibleLength, renderModel.viewport)}px;`}
@@ -48,7 +45,7 @@
         class:c-note={pitch % 12 === 0}
         style={`top: ${pitchToScreenY(pitch, renderModel.viewport, renderModel.highestPitch) + renderModel.viewport.pixelsPerSemitone / 2}px`}
       >
-        {noteName(pitch)}
+        {pitchLabel(pitch)}
       </span>
     {/each}
   </div>

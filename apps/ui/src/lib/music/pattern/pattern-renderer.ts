@@ -16,6 +16,12 @@ export type PatternGhostView = {
   pitch: number;
 };
 
+export type PatternRenderedNoteView = PianoRollNoteView & {
+  source: PianoRollNoteView;
+  lanePitch: number;
+  label: string;
+};
+
 export type PatternMusicalPoint = {
   beat: BeatTime;
   pitch: number;
@@ -31,8 +37,9 @@ export type PatternRenderModel = RenderModel & {
   pitchRows: number[];
   pitchCount: number;
   highestPitch: number;
+  pitchLabels: Record<number, string>;
   gridLines: PatternGridLine[];
-  notes: PianoRollNoteView[];
+  notes: PatternRenderedNoteView[];
   selectedNoteIds: string[];
   hoveredNoteId?: string;
   activeToolId: string;
@@ -91,8 +98,16 @@ export class PianoRollRenderer implements PatternRenderer<PianoRollView> {
       pitchRows: input.viewModel.pitchRows,
       pitchCount: input.viewModel.pitchCount,
       highestPitch: input.viewModel.highestPitch,
+      pitchLabels: Object.fromEntries(
+        input.viewModel.pitchRows.map((pitch) => [pitch, noteName(pitch)])
+      ),
       gridLines: input.gridLines,
-      notes: input.viewModel.notes,
+      notes: input.viewModel.notes.map((note) => ({
+        ...note,
+        source: note,
+        lanePitch: note.pitch,
+        label: noteName(note.pitch)
+      })),
       selectedNoteIds: input.selectedNotes.map((note) => note.id),
       hoveredNoteId: input.hoveredNoteId,
       activeToolId: input.activeToolId,
@@ -141,6 +156,116 @@ export class PianoRollRenderer implements PatternRenderer<PianoRollView> {
   }
 }
 
+export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
+  readonly id = 'drum-rack';
+
+  render(input: PatternRenderInput<PianoRollView>): PatternRenderModel {
+    const lanes = buildDrumLanes(input.viewModel);
+    const laneByPitch = new Map(
+      lanes.map((lane) => [lane.pitch, lane.lanePitch])
+    );
+    const labelByLane = Object.fromEntries(
+      lanes.map((lane) => [lane.lanePitch, lane.label])
+    );
+
+    return {
+      rendererId: this.id,
+      patternName: input.viewModel.patternName,
+      viewport: input.viewport,
+      grid: input.grid,
+      visibleLength: input.visibleLength,
+      pitchRows: lanes.map((lane) => lane.lanePitch),
+      pitchCount: lanes.length,
+      highestPitch: lanes[0]?.lanePitch ?? 0,
+      pitchLabels: labelByLane,
+      gridLines: input.gridLines,
+      notes: input.viewModel.notes.map((note) => ({
+        ...note,
+        source: note,
+        lanePitch: laneByPitch.get(note.pitch) ?? 0,
+        label: noteName(note.pitch)
+      })),
+      selectedNoteIds: input.selectedNotes.map((note) => note.id),
+      hoveredNoteId: input.hoveredNoteId,
+      activeToolId: input.activeToolId,
+      isPanning: input.isPanning,
+      noteHeight: Math.max(12, input.noteHeight),
+      ghost: undefined,
+      overlayNotes: [],
+      overlayRectangles: input.overlayRectangles
+    };
+  }
+
+  hitTest(
+    viewModel: PianoRollView,
+    viewport: PatternViewport,
+    x: number,
+    y: number
+  ): PianoRollNoteView | undefined {
+    const lanes = buildDrumLanes(viewModel);
+    const laneByPitch = new Map(
+      lanes.map((lane) => [lane.pitch, lane.lanePitch])
+    );
+    const renderedNotes = viewModel.notes.map((note) => ({
+      ...note,
+      pitch: laneByPitch.get(note.pitch) ?? 0
+    }));
+
+    const hit = hitTestNote(
+      renderedNotes,
+      viewport,
+      lanes[0]?.lanePitch ?? 0,
+      x,
+      y
+    );
+
+    return hit ? viewModel.notes.find((note) => note.id === hit.id) : undefined;
+  }
+
+  pointerToMusical(
+    viewModel: PianoRollView,
+    viewport: PatternViewport,
+    grid: GridDefinition,
+    x: number,
+    y: number
+  ): PatternMusicalPoint {
+    const lanes = buildDrumLanes(viewModel);
+    const lanePitch = clampPitch(
+      screenYToPitch(y, viewport, lanes[0]?.lanePitch ?? 0),
+      0,
+      Math.max(0, lanes.length - 1)
+    );
+    const lane = lanes.find((item) => item.lanePitch === lanePitch);
+
+    return {
+      beat: snapBeat(screenXToBeat(x, viewport), grid.snap),
+      pitch: lane?.pitch ?? 60,
+      snap: grid.snap
+    };
+  }
+}
+
 function clampPitch(pitch: number, lowestPitch: number, highestPitch: number) {
   return Math.max(lowestPitch, Math.min(highestPitch, pitch));
+}
+
+function buildDrumLanes(viewModel: PianoRollView) {
+  const pitches = Array.from(
+    new Set(viewModel.notes.map((note) => note.pitch))
+  ).sort((left, right) => right - left);
+  const lanePitches = pitches.length > 0 ? pitches : [60];
+  const highestLanePitch = lanePitches.length - 1;
+
+  return lanePitches.map((pitch, index) => ({
+    pitch,
+    lanePitch: highestLanePitch - index,
+    label: noteName(pitch)
+  }));
+}
+
+function noteName(pitch: number): string {
+  const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  const octave = Math.floor(pitch / 12) - 1;
+
+  return `${names[pitch % 12]}${octave}`;
 }

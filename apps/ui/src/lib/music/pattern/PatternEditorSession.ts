@@ -19,6 +19,7 @@ import {
   type PatternNavigationBounds
 } from './pattern-navigation';
 import {
+  DrumRackRenderer,
   PianoRollRenderer,
   type PatternRenderModel,
   type PatternRenderer
@@ -63,6 +64,14 @@ export type PatternPointerResult = {
   syncView?: boolean;
 };
 
+export type PatternRendererId = 'piano-roll' | 'drum-rack';
+
+export type PatternRendererDefinition = {
+  id: PatternRendererId;
+  name: string;
+  description: string;
+};
+
 const defaultBeatsPerBar = 4;
 const defaultTotalBars = 4;
 const defaultBeatDivisions = 4;
@@ -76,11 +85,23 @@ export class PatternEditorSession implements EditorSession {
   readonly input = new PatternInputState();
   readonly tools: PatternTool[];
   readonly rendererRegistry = new RendererRegistry<PatternRenderer<PianoRollView>>();
+  readonly renderers: PatternRendererDefinition[] = [
+    {
+      id: 'piano-roll',
+      name: 'Piano Roll',
+      description: 'Free melodic and polyphonic note editing'
+    },
+    {
+      id: 'drum-rack',
+      name: 'Drum Rack',
+      description: 'Fixed-lane percussion view'
+    }
+  ];
   readonly renderModelBuilder = new PatternRenderModelBuilder();
   readonly middleCPitch = middleCPitch;
 
   activeTool: PatternTool;
-  activeRendererId = 'piano-roll';
+  activeRendererId: PatternRendererId = 'piano-roll';
   viewport: PatternViewport = resetViewport();
   interactionContext: PatternInteractionContext | undefined;
   isPanning = false;
@@ -108,8 +129,12 @@ export class PatternEditorSession implements EditorSession {
       beatsPerBar: options.beatsPerBar,
       beatDivisions: options.beatDivisions
     });
+    this.rendererRegistry.register(new PianoRollRenderer());
+    this.rendererRegistry.register(new DrumRackRenderer());
     this.rendererRegistry.register(renderer);
-    this.activeRendererId = renderer.id;
+    this.activeRendererId = isPatternRendererId(renderer.id)
+      ? renderer.id
+      : 'piano-roll';
     this.tools = [
       new SelectTool(),
       new DrawNoteTool(),
@@ -179,6 +204,15 @@ export class PatternEditorSession implements EditorSession {
   setActiveTool(tool: PatternTool): void {
     this.activeTool.cancel?.();
     this.activeTool = tool;
+    this.refreshOverlay();
+  }
+
+  setActiveRenderer(id: PatternRendererId): void {
+    if (id === this.activeRendererId) return;
+
+    this.activeTool.cancel?.();
+    this.activeRendererId = id;
+    this.clearHover();
     this.refreshOverlay();
   }
 
@@ -681,4 +715,8 @@ function isEditableEventTarget(target: EventTarget | null): boolean {
   return Boolean(
     target.closest('input, textarea, select, [contenteditable="true"]')
   );
+}
+
+function isPatternRendererId(id: string): id is PatternRendererId {
+  return id === 'piano-roll' || id === 'drum-rack';
 }

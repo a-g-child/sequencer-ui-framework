@@ -1,12 +1,14 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import type { AppController } from '../../app-controller';
-  import { EDITORS } from '../../editors/editor-registry';
   import type { EditorKind } from '../../editors/editor-types';
   import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model';
   import PatternCanvas from './PatternCanvas.svelte';
   import { PatternEditorSession } from './PatternEditorSession';
-  import type { PatternPointerResult } from './PatternEditorSession';
+  import type {
+    PatternPointerResult,
+    PatternRendererId
+  } from './PatternEditorSession';
   import PatternToolbar from './PatternToolbar.svelte';
   import PatternViewControls from './PatternViewControls.svelte';
 
@@ -52,6 +54,15 @@
     }
   }
 
+  $: if (
+    session &&
+    isRendererEditor(activeEditor) &&
+    activeEditor !== session.activeRendererId
+  ) {
+    session.setActiveRenderer(activeEditor);
+    invalidateSession();
+  }
+
   $: renderModel = session && pianoRoll
     ? session.buildRenderModel(pianoRoll)
     : undefined;
@@ -65,7 +76,7 @@
   });
 
   function handleKeyDown(event: KeyboardEvent) {
-    if (activeEditor !== 'piano-roll') return;
+    if (!isRendererEditor(activeEditor)) return;
 
     session.handleKeyDown(event, { pianoRoll, syncView });
     invalidateSession();
@@ -138,17 +149,23 @@
   function handleNotePointerUp(event: PointerEvent, note: PianoRollNoteView) {
     applyPointerResult(session.handleNotePointerUp(event, pianoRoll, note));
   }
+
+  function isRendererEditor(editor: EditorKind): editor is PatternRendererId {
+    return editor === 'piano-roll' || editor === 'drum-rack';
+  }
 </script>
 
 {#if session}
   <section class="pattern-editor-panel" aria-label="Pattern editor">
     <PatternToolbar
-      editors={EDITORS}
-      activeEditor={activeEditor}
+      renderers={session.renderers}
+      activeRendererId={session.activeRendererId}
       tools={session.tools}
       activeToolId={session.activeTool.id}
-      onEditorChange={(editor) => {
-        onEditorChange(editor);
+      onRendererChange={(rendererId) => {
+        session.setActiveRenderer(rendererId);
+        onEditorChange(rendererId);
+        invalidateSession();
       }}
       onToolChange={(tool) => {
         session.setActiveTool(tool);
@@ -156,7 +173,7 @@
       }}
     />
 
-    {#if activeEditor === 'piano-roll' && renderModel}
+    {#if renderModel}
       <!-- <div class="pane-heading">
         <h2>Piano Roll</h2>
         <span>{renderModel.patternName}</span>
@@ -215,21 +232,6 @@
         }}
         onResetView={resetPatternViewport}
       />
-    {:else if activeEditor === 'drum-rack'}
-      <section class="panel">
-        <h2>Drum Rack</h2>
-        <p>Fixed-lane percussion editor placeholder.</p>
-      </section>
-    {:else if activeEditor === 'pattern-grid'}
-      <section class="panel">
-        <h2>Pattern Grid</h2>
-        <p>Mono step sequencer with per-slot pitch placeholder.</p>
-      </section>
-    {:else if activeEditor === 'audio-graph'}
-      <section class="panel">
-        <h2>Audio Graph</h2>
-        <p>Node-based routing and modulation placeholder.</p>
-      </section>
     {/if}
   </section>
 {/if}

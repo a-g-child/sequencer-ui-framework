@@ -9,7 +9,10 @@
 
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import type { PatternRenderModel } from './pattern-renderer';
+  import type {
+    PatternRenderedNoteView,
+    PatternRenderModel
+  } from './pattern-renderer';
   import {
     beatToScreenX,
     durationToScreenWidth,
@@ -24,19 +27,12 @@
     pointerup: PatternNotePointerEventDetail;
   }>();
 
-  function noteName(pitch: number): string {
-    const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-    const octave = Math.floor(pitch / 12) - 1;
-
-    return `${names[pitch % 12]}${octave}`;
-  }
-
   function dispatchNotePointerEvent(
     type: 'pointerdown' | 'pointermove' | 'pointerup',
     pointerEvent: PointerEvent,
-    note: PianoRollNoteView
+    note: PatternRenderedNoteView
   ): void {
-    dispatch(type, { pointerEvent, note });
+    dispatch(type, { pointerEvent, note: note.source });
   }
 </script>
 
@@ -47,8 +43,8 @@
     class:selected={renderModel.selectedNoteIds.includes(note.id)}
     class:hovered={renderModel.hoveredNoteId === note.id}
     class:resize-active={renderModel.activeToolId === 'resize-note'}
-    aria-label={`${noteName(note.pitch)} note at beat ${note.time}`}
-    style={`left: ${beatToScreenX(note.time, renderModel.viewport)}px; width: ${durationToScreenWidth(note.duration, renderModel.viewport)}px; height: ${renderModel.noteHeight}px; top: ${pitchToScreenY(note.pitch, renderModel.viewport, renderModel.highestPitch) + 1}px;`}
+    aria-label={`${note.label} note at beat ${note.time}`}
+    style={`left: ${beatToScreenX(note.time, renderModel.viewport)}px; width: ${durationToScreenWidth(note.duration, renderModel.viewport)}px; height: ${renderModel.noteHeight}px; top: ${pitchToScreenY(note.lanePitch, renderModel.viewport, renderModel.highestPitch) + 1}px;`}
     on:pointerdown|stopPropagation={(event) =>
       dispatchNotePointerEvent('pointerdown', event, note)}
     on:pointermove|stopPropagation={(event) =>
@@ -60,7 +56,7 @@
     {#if renderModel.activeToolId === 'resize-note'}
       <span
         class="note-resize-handle"
-        aria-label={`Resize ${noteName(note.pitch)} note`}
+        aria-label={`Resize ${note.label} note`}
         role="presentation"
       ></span>
     {/if}

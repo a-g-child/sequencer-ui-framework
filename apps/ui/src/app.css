@@ -288,6 +288,11 @@ h2 {
   cursor: grabbing;
 }
 
+.piano-roll.drum-rack .note {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .piano-roll-grid {
   position: absolute;
   inset: 0;

@@ -127,6 +127,7 @@
 
 <div
   class="piano-roll-frame"
+  class:drum-rack-frame={renderModel.rendererId === 'drum-rack'}
 >
   <div
     class="piano-roll-scroll"
@@ -143,9 +144,10 @@
 
         <div
           class="piano-roll"
+          class:drum-rack={renderModel.rendererId === 'drum-rack'}
           class:panning={renderModel.isPanning}
           role="application"
-          aria-label="Piano roll notes"
+          aria-label={renderModel.rendererId === 'drum-rack' ? 'Drum rack notes' : 'Piano roll notes'}
           style={`width: ${patternLengthToScreenWidth(renderModel.visibleLength, renderModel.viewport)}px; height: ${pitchRangeToScreenHeight(renderModel.pitchCount, renderModel.viewport)}px;`}
           on:pointerenter={onPointerEnter}
           on:pointerdown={onPointerDown}
