@@ -33,6 +33,7 @@ export type NoteInspectorView = {
   pitch: number
   velocity: number
   probability: number
+  humanizeOffset: number
 }
 
 export type InspectorView = {
@@ -121,7 +122,8 @@ export function buildInspectorView(store: DocumentStore): InspectorView {
         duration: note.duration,
         pitch: note.value.pitch,
         velocity: note.value.velocity,
-        probability: note.value.probability ?? 1
+        probability: note.value.probability ?? 1,
+        humanizeOffset: note.value.humanizeOffset ?? 0
       }
     }
   }

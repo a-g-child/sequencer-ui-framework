@@ -12,6 +12,7 @@ export type PianoRollNoteView = {
   pitch: number
   velocity: number
   probability: number
+  humanizeOffset: number
 }
 
 export type PianoRollView = {

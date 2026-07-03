@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    SetNoteHumanizeOffsetsOperation,
     SetNoteProbabilityOperation,
     SetNoteVelocityOperation
   } from '@sequencer/music';
@@ -32,6 +33,7 @@
   const viewportZoomStep = 1.25;
   const viewportBeatScrollStep = 1;
   const viewportPitchScrollStep = 6;
+  const randomHumanizeRange = 0.06;
 
   let session: PatternEditorSession;
   let patternCanvas: PatternCanvas | undefined;
@@ -199,6 +201,32 @@
     showProbabilityLane = !showProbabilityLane;
   }
 
+  function humanizeSelectedNotes() {
+    if (!pianoRoll) return;
+
+    const selectedNotes = session.selectedNotes(pianoRoll);
+
+    if (selectedNotes.length === 0) return;
+
+    controller.execute(
+      new SetNoteHumanizeOffsetsOperation(
+        pianoRoll.patternId,
+        selectedNotes.map((note) => ({
+          id: note.id,
+          offset: randomHumanizeOffset(note.time)
+        }))
+      )
+    );
+    syncView();
+    invalidateSession();
+  }
+
+  function randomHumanizeOffset(noteTime: number): number {
+    const offset = (Math.random() * 2 - 1) * randomHumanizeRange;
+
+    return Math.max(-noteTime, offset);
+  }
+
   function isRendererEditor(editor: EditorKind): editor is PatternRendererId {
     return editor === 'piano-roll' || editor === 'drum-rack';
   }
@@ -256,6 +284,7 @@
         onToggleVelocityLane={toggleVelocityLane}
         {showProbabilityLane}
         onToggleProbabilityLane={toggleProbabilityLane}
+        onHumanizeSelected={humanizeSelectedNotes}
         onZoomIn={() => {
           session.zoomViewportX(viewportZoomStep, pianoRoll);
           invalidateSession();

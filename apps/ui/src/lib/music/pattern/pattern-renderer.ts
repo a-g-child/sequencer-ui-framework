@@ -347,7 +347,10 @@ function buildRenderItems(options: {
     return {
       id: note.id,
       laneId,
-      x: beatToScreenX(note.time, options.viewport),
+      x: beatToScreenX(
+        Math.max(0, note.time + note.humanizeOffset),
+        options.viewport
+      ),
       y: pitchToScreenY(visualPitch, options.viewport, options.highestPitch) + 1,
       width: durationToScreenWidth(note.duration, options.viewport),
       height: options.noteHeight,

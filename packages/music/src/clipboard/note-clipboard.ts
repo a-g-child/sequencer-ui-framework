@@ -4,6 +4,7 @@ export interface NoteClipboardItem {
   pitch: number
   velocity: number
   probability?: number
+  humanizeOffset?: number
 }
 
 export interface NoteClipboard {

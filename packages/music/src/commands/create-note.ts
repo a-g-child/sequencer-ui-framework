@@ -24,14 +24,15 @@ export class CreateNoteOperation implements Operation {
     duration: BeatTime,
     pitch: number,
     velocity = 0.8,
-    probability = 1
+    probability = 1,
+    humanizeOffset = 0
   ) {
     this.note = {
       id: createId('note'),
       time,
       duration,
       type: 'trigger',
-      value: { pitch, velocity, probability }
+      value: { pitch, velocity, probability, humanizeOffset }
     }
   }
 

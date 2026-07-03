@@ -257,6 +257,11 @@
       <span>Probability</span>
       <input value={inspector.note.probability} readonly />
     </label>
+
+    <label>
+      <span>Humanise</span>
+      <input value={inspector.note.humanizeOffset} readonly />
+    </label>
   </div>
 
   <div class="inspector-actions">

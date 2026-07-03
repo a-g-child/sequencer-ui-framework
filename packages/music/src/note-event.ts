@@ -4,6 +4,7 @@ export interface NoteValue {
   pitch: number
   velocity: number
   probability?: number
+  humanizeOffset?: number
 }
 
 export interface NoteEvent extends TimelineEvent<NoteValue> {

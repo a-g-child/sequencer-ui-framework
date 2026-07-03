@@ -41,6 +41,7 @@ import {
 } from './pattern-viewport';
 import { DrawNoteTool } from './tools/draw-note-tool';
 import { EraseNoteTool } from './tools/erase-note-tool';
+import { HumanizeNoteTool } from './tools/humanize-note-tool';
 import { MoveNoteTool } from './tools/move-note-tool';
 import { ResizeNoteTool } from './tools/resize-note-tool';
 import { SelectTool } from './tools/select-tool';
@@ -142,7 +143,8 @@ export class PatternEditorSession implements EditorSession {
       new DrawNoteTool(),
       new EraseNoteTool(),
       new MoveNoteTool(),
-      resizeNoteTool
+      resizeNoteTool,
+      new HumanizeNoteTool()
     ];
     this.activeTool = this.tools[0];
   }

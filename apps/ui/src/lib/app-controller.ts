@@ -115,7 +115,8 @@ export class AppController {
         duration: note.duration,
         pitch: note.pitch,
         velocity: note.velocity,
-        probability: note.probability
+        probability: note.probability,
+        humanizeOffset: note.humanizeOffset
       }))
     }
 
@@ -410,7 +411,8 @@ export class AppController {
       duration: item.duration,
       pitch: item.pitch,
       velocity: item.velocity,
-      probability: item.probability ?? 1
+      probability: item.probability ?? 1,
+      humanizeOffset: item.humanizeOffset ?? 0
     }
   }
 

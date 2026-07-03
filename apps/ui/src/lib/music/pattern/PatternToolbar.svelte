@@ -19,7 +19,8 @@
     'draw-note': '✎',
     'erase-note': '⌫',
     'move-note': '✥',
-    'resize-note': '↔'
+    'resize-note': '↔',
+    'humanize-note': '≈'
   };
 
   function toolIcon(tool: PatternTool): string {

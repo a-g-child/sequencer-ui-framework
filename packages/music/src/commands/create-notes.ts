@@ -19,6 +19,7 @@ export type CreateNoteInput = {
   pitch: number
   velocity: number
   probability?: number
+  humanizeOffset?: number
 }
 
 export class CreateNotesOperation implements Operation {
@@ -38,7 +39,8 @@ export class CreateNotesOperation implements Operation {
       value: {
         pitch: note.pitch,
         velocity: note.velocity,
-        probability: note.probability ?? 1
+        probability: note.probability ?? 1,
+        humanizeOffset: note.humanizeOffset ?? 0
       }
     }))
   }

@@ -31,6 +31,7 @@ export class MoveNoteOperation implements Operation {
     this.previousEvents = snapshotEvents(pattern.events)
     note.time = this.nextTime
     note.value.pitch = this.nextPitch
+    clampHumanizeOffset(note.value, note.time)
     pattern.events = resolveNoteCollisions(pattern.events, [this.noteId])
   }
 
@@ -38,5 +39,18 @@ export class MoveNoteOperation implements Operation {
     const pattern = document.patterns.get(this.patternId)
 
     pattern.events = restoreEvents(this.previousEvents)
+  }
+}
+
+function clampHumanizeOffset(
+  value: { humanizeOffset?: number },
+  noteTime: number
+): void {
+  if (value.humanizeOffset === undefined) return
+
+  value.humanizeOffset = Math.max(-noteTime, value.humanizeOffset)
+
+  if (value.humanizeOffset === 0) {
+    delete value.humanizeOffset
   }
 }

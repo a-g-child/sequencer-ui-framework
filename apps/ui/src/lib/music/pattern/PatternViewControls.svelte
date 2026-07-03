@@ -15,6 +15,7 @@
   export let onToggleVelocityLane: (() => void) | undefined = undefined;
   export let showProbabilityLane = false;
   export let onToggleProbabilityLane: (() => void) | undefined = undefined;
+  export let onHumanizeSelected: (() => void) | undefined = undefined;
 
   let highlightedControl = '';
   let highlightTimer: ReturnType<typeof setTimeout> | undefined;
@@ -72,6 +73,16 @@
       aria-pressed={showProbabilityLane}
       on:click={() => runViewAction('probability-lane', onToggleProbabilityLane)}
     >％</button>
+  {/if}
+
+  {#if onHumanizeSelected}
+    <button
+      type="button"
+      class:highlighted={highlightedControl === 'humanize-selected'}
+      title="Humanise selected notes"
+      aria-label="Humanise selected notes"
+      on:click={() => runViewAction('humanize-selected', onHumanizeSelected)}
+    >≈</button>
   {/if}
 
   <span class="control-cluster" aria-label="Horizontal zoom and pan">
