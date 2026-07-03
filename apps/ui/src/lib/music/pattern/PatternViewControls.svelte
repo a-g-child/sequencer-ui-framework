@@ -15,6 +15,7 @@
   export let onToggleVelocityLane: (() => void) | undefined = undefined;
   export let showProbabilityLane = false;
   export let onToggleProbabilityLane: (() => void) | undefined = undefined;
+  export let onQuantizeSelected: (() => void) | undefined = undefined;
   export let onHumanizeSelected: (() => void) | undefined = undefined;
 
   let highlightedControl = '';
@@ -83,6 +84,16 @@
       aria-label="Humanise selected notes"
       on:click={() => runViewAction('humanize-selected', onHumanizeSelected)}
     >≈</button>
+  {/if}
+
+  {#if onQuantizeSelected}
+    <button
+      type="button"
+      class:highlighted={highlightedControl === 'quantize-selected'}
+      title="Quantise selected notes"
+      aria-label="Quantise selected notes"
+      on:click={() => runViewAction('quantize-selected', onQuantizeSelected)}
+    >Q</button>
   {/if}
 
   <span class="control-cluster" aria-label="Horizontal zoom and pan">

@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    QuantizeNotesOperation,
     SetNoteHumanizeOffsetsOperation,
     SetNoteProbabilityOperation,
     SetNoteVelocityOperation
@@ -221,6 +222,24 @@
     invalidateSession();
   }
 
+  function quantizeSelectedNotes() {
+    if (!pianoRoll) return;
+
+    const selectedNotes = session.selectedNotes(pianoRoll);
+
+    if (selectedNotes.length === 0) return;
+
+    controller.execute(
+      new QuantizeNotesOperation(
+        pianoRoll.patternId,
+        selectedNotes.map((note) => note.id),
+        session.grid.snap
+      )
+    );
+    syncView();
+    invalidateSession();
+  }
+
   function randomHumanizeOffset(noteTime: number): number {
     const offset = (Math.random() * 2 - 1) * randomHumanizeRange;
 
@@ -284,6 +303,7 @@
         onToggleVelocityLane={toggleVelocityLane}
         {showProbabilityLane}
         onToggleProbabilityLane={toggleProbabilityLane}
+        onQuantizeSelected={quantizeSelectedNotes}
         onHumanizeSelected={humanizeSelectedNotes}
         onZoomIn={() => {
           session.zoomViewportX(viewportZoomStep, pianoRoll);
