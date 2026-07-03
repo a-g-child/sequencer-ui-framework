@@ -5,7 +5,7 @@ import {
   type ParameterDefinition,
   type ParameterValue
 } from '@sequencer/core'
-import { getNote, getNoteTimingOffset } from '@sequencer/music'
+import { getNote, getTimingOffset } from '@sequencer/music'
 
 export type InspectorTargetType = 'none' | 'track' | 'placement' | 'note'
 
@@ -123,7 +123,7 @@ export function buildInspectorView(store: DocumentStore): InspectorView {
         pitch: note.value.pitch,
         velocity: note.value.velocity,
         probability: note.value.probability ?? 1,
-        humanizeOffset: getNoteTimingOffset(note.value)
+        humanizeOffset: getTimingOffset(note.value)
       }
     }
   }

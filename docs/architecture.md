@@ -6,6 +6,10 @@ Sequencer is a creative document framework for time-based systems. Music is the 
 
 The document is state. It can be saved, diffed, serialized, transmitted, validated, and tested without UI, audio, or runtime services attached.
 
+Musical intent is persistent. Performance is interpretive. Playback is derived.
+The document always preserves the author's intent. Everything else is layered
+on top.
+
 The UI never mutates the document directly. User actions go through commands, commands mutate the document, history records those mutations, and observers react to the result.
 
 Core knows about entities, relationships, registries, timelines, properties/parameters, validation, and document editing. Core should not know about DSP, MIDI devices, Svelte components, audio engines, or visual presentation.

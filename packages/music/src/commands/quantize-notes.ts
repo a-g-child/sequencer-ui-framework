@@ -4,11 +4,8 @@ import type {
   SequencerDocument,
   TimelineEvent
 } from '@sequencer/core'
-import {
-  getNoteTimingOffset,
-  isNoteEvent,
-  setNoteTimingOffset
-} from '../note-event'
+import { isNoteEvent } from '../note-event'
+import { getEffectiveBeat, setTimingOffset } from '../performance'
 import {
   resolveNoteCollisions,
   restoreEvents,
@@ -37,9 +34,9 @@ export class QuantizeNotesOperation implements Operation {
     for (const event of pattern.events) {
       if (!noteIdSet.has(event.id) || !isNoteEvent(event)) continue
 
-      const effectiveTime = event.time + getNoteTimingOffset(event.value)
+      const effectiveTime = getEffectiveBeat(event)
       event.time = Math.max(0, quantizeBeat(effectiveTime, this.division))
-      setNoteTimingOffset(event.value, 0, event.time)
+      setTimingOffset(event.value, 0, event.time)
     }
 
     pattern.events = resolveNoteCollisions(pattern.events, this.noteIds)

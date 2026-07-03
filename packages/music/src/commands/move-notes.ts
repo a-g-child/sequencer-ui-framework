@@ -5,11 +5,10 @@ import type {
   TimelineEvent
 } from '@sequencer/core'
 import {
-  getNoteTimingOffset,
   isNoteEvent,
-  setNoteTimingOffset,
   type NoteValue
 } from '../note-event'
+import { getTimingOffset, setTimingOffset } from '../performance'
 import {
   resolveNoteCollisions,
   restoreEvents,
@@ -65,5 +64,5 @@ export class MoveNotesOperation implements Operation {
 }
 
 function clampHumanizeOffset(value: NoteValue, noteTime: number): void {
-  setNoteTimingOffset(value, getNoteTimingOffset(value), noteTime)
+  setTimingOffset(value, getTimingOffset(value), noteTime)
 }

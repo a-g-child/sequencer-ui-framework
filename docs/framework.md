@@ -6,6 +6,10 @@ It is a guide for refactors, not a complete implementation plan.
 The goal is to keep the lower layers reusable and non-musical, while musical
 editors become clients of the framework rather than owners of it.
 
+The document stores creative intent. Derived systems--rendering, editing,
+performance, and playback--interpret that intent without destroying it whenever
+practical.
+
 ## Vocabulary
 
 ### Document
