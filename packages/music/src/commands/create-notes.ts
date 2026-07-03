@@ -18,6 +18,7 @@ export type CreateNoteInput = {
   duration: BeatTime
   pitch: number
   velocity: number
+  probability?: number
 }
 
 export class CreateNotesOperation implements Operation {
@@ -36,7 +37,8 @@ export class CreateNotesOperation implements Operation {
       type: 'trigger',
       value: {
         pitch: note.pitch,
-        velocity: note.velocity
+        velocity: note.velocity,
+        probability: note.probability ?? 1
       }
     }))
   }

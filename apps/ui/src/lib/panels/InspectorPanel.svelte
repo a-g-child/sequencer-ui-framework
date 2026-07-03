@@ -252,6 +252,11 @@
       <span>Velocity</span>
       <input value={inspector.note.velocity} readonly />
     </label>
+
+    <label>
+      <span>Probability</span>
+      <input value={inspector.note.probability} readonly />
+    </label>
   </div>
 
   <div class="inspector-actions">

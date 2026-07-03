@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { SetNoteVelocityOperation } from '@sequencer/music';
+  import {
+    SetNoteProbabilityOperation,
+    SetNoteVelocityOperation
+  } from '@sequencer/music';
   import { onMount, tick } from 'svelte';
   import type { AppController } from '../../app-controller';
   import type { EditorKind } from '../../editors/editor-types';
@@ -34,6 +37,7 @@
   let patternCanvas: PatternCanvas | undefined;
   let timelineRevision = '';
   let showVelocityLane = false;
+  let showProbabilityLane = false;
 
   $: if (controller && (!session || session.controller !== controller)) {
     session = new PatternEditorSession({
@@ -176,8 +180,23 @@
     invalidateSession();
   }
 
+  function commitNoteProbability(
+    note: PianoRollNoteView,
+    probability: number
+  ) {
+    controller.execute(
+      new SetNoteProbabilityOperation(note.patternId, note.id, probability)
+    );
+    syncView();
+    invalidateSession();
+  }
+
   function toggleVelocityLane() {
     showVelocityLane = !showVelocityLane;
+  }
+
+  function toggleProbabilityLane() {
+    showProbabilityLane = !showProbabilityLane;
   }
 
   function isRendererEditor(editor: EditorKind): editor is PatternRendererId {
@@ -215,6 +234,7 @@
         {height}
         {width}
         {showVelocityLane}
+        {showProbabilityLane}
         onViewportWidthChange={handleViewportWidthChange}
         onViewportHeightChange={handleViewportHeightChange}
         onWheel={handlePatternWheel}
@@ -227,12 +247,15 @@
         onNotePointerMove={handleNotePointerMove}
         onNotePointerUp={handleNotePointerUp}
         onVelocityCommit={commitNoteVelocity}
+        onProbabilityCommit={commitNoteProbability}
       />
 
       <PatternViewControls
         onAddNote={addC4Note}
         {showVelocityLane}
         onToggleVelocityLane={toggleVelocityLane}
+        {showProbabilityLane}
+        onToggleProbabilityLane={toggleProbabilityLane}
         onZoomIn={() => {
           session.zoomViewportX(viewportZoomStep, pianoRoll);
           invalidateSession();

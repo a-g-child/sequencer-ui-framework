@@ -114,7 +114,8 @@ export class AppController {
         time: note.time,
         duration: note.duration,
         pitch: note.pitch,
-        velocity: note.velocity
+        velocity: note.velocity,
+        probability: note.probability
       }))
     }
 
@@ -408,7 +409,8 @@ export class AppController {
       time: Math.max(0, item.time + offset),
       duration: item.duration,
       pitch: item.pitch,
-      velocity: item.velocity
+      velocity: item.velocity,
+      probability: item.probability ?? 1
     }
   }
 

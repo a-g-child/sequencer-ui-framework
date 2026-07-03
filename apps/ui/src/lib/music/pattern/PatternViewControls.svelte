@@ -13,6 +13,8 @@
   export let onResetView: () => void;
   export let showVelocityLane = false;
   export let onToggleVelocityLane: (() => void) | undefined = undefined;
+  export let showProbabilityLane = false;
+  export let onToggleProbabilityLane: (() => void) | undefined = undefined;
 
   let highlightedControl = '';
   let highlightTimer: ReturnType<typeof setTimeout> | undefined;
@@ -59,6 +61,17 @@
       aria-pressed={showVelocityLane}
       on:click={() => runViewAction('velocity-lane', onToggleVelocityLane)}
     >▥</button>
+  {/if}
+
+  {#if onToggleProbabilityLane}
+    <button
+      type="button"
+      class:highlighted={showProbabilityLane || highlightedControl === 'probability-lane'}
+      title={showProbabilityLane ? 'Hide probability lane' : 'Show probability lane'}
+      aria-label={showProbabilityLane ? 'Hide probability lane' : 'Show probability lane'}
+      aria-pressed={showProbabilityLane}
+      on:click={() => runViewAction('probability-lane', onToggleProbabilityLane)}
+    >％</button>
   {/if}
 
   <span class="control-cluster" aria-label="Horizontal zoom and pan">

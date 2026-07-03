@@ -7,6 +7,7 @@ export type PatternNoteView = {
   duration: number
   pitch: number
   velocity: number
+  probability: number
 }
 
 export type PatternEditorModel = {
@@ -26,7 +27,8 @@ export function buildPatternEditorModel(pattern: Pattern): PatternEditorModel {
       time: event.time,
       duration: event.duration,
       pitch: event.value.pitch,
-      velocity: event.value.velocity
+      velocity: event.value.velocity,
+      probability: event.value.probability ?? 1
     }))
   }
 }

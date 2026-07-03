@@ -3,6 +3,7 @@ export interface NoteClipboardItem {
   duration: number
   pitch: number
   velocity: number
+  probability?: number
 }
 
 export interface NoteClipboard {

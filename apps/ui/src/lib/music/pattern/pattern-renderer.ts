@@ -187,6 +187,7 @@ export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
     const labelByLane = Object.fromEntries(
       lanes.map((lane) => [lane.lanePitch, lane.label])
     );
+    const highestLanePitch = highestVisualPitch(lanes);
     const selectedIds = input.selectedNotes.map((note) => note.id);
     const selectedIdSet = new Set(selectedIds);
     const renderLanes = buildRenderLanes(
@@ -197,7 +198,7 @@ export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
         source: lane
       })),
       input.viewport,
-      lanes[0]?.lanePitch ?? 0
+      highestLanePitch
     );
 
     return {
@@ -208,7 +209,7 @@ export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
       visibleLength: input.visibleLength,
       pitchRows: lanes.map((lane) => lane.lanePitch),
       pitchCount: lanes.length,
-      highestPitch: lanes[0]?.lanePitch ?? 0,
+      highestPitch: highestLanePitch,
       pitchLabels: labelByLane,
       pitchByVisualPitch,
       lanes: renderLanes,
@@ -217,7 +218,7 @@ export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
         laneByPitch: laneIdByPitch,
         visualPitchByPitch: laneByPitch,
         viewport: input.viewport,
-        highestPitch: lanes[0]?.lanePitch ?? 0,
+        highestPitch: highestLanePitch,
         noteHeight: Math.max(12, input.noteHeight),
         selectedIds: selectedIdSet,
         hoveredNoteId: input.hoveredNoteId
@@ -248,10 +249,11 @@ export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
     y: number
   ): PatternMusicalPoint {
     const lanes = buildDrumLanes();
+    const highestLanePitch = highestVisualPitch(lanes);
     const lanePitch = clampPitch(
-      screenYToPitch(y, viewport, lanes[0]?.lanePitch ?? 0),
+      screenYToPitch(y, viewport, highestLanePitch),
       0,
-      Math.max(0, lanes.length - 1)
+      highestLanePitch
     );
     const lane = lanes.find((item) => item.lanePitch === lanePitch);
 
@@ -290,12 +292,14 @@ const drumRackLaneDefinitions = [
 ];
 
 function buildDrumLanes() {
-  const highestLanePitch = drumRackLaneDefinitions.length - 1;
-
   return drumRackLaneDefinitions.map((lane, index) => ({
     ...lane,
-    lanePitch: highestLanePitch - index
+    lanePitch: index
   }));
+}
+
+function highestVisualPitch(lanes: Array<{ lanePitch: number }>): number {
+  return Math.max(0, ...lanes.map((lane) => lane.lanePitch));
 }
 
 function noteName(pitch: number): string {

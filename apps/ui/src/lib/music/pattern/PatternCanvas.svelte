@@ -6,6 +6,7 @@
   } from './PatternNotes.svelte';
   import type { RenderInteractionItem } from '../../framework/editor';
   import PatternOverlays from './PatternOverlays.svelte';
+  import PatternProbabilityLane from './PatternProbabilityLane.svelte';
   import PatternVelocityLane from './PatternVelocityLane.svelte';
   import {
     patternLengthToScreenWidth,
@@ -18,6 +19,7 @@
   export let height: string | number | undefined = undefined;
   export let width: string | number | undefined = undefined;
   export let showVelocityLane = false;
+  export let showProbabilityLane = false;
   export let onViewportWidthChange: (width: number) => void;
   export let onViewportHeightChange: (height: number) => void;
   export let onWheel: (event: WheelEvent) => void;
@@ -42,11 +44,16 @@
     note: PianoRollNoteView,
     velocity: number
   ) => void;
+  export let onProbabilityCommit: (
+    note: PianoRollNoteView,
+    probability: number
+  ) => void;
 
   const middleCPitch = 60;
   const velocityLaneOuterHeight = 72;
 
   let scrollElement: HTMLDivElement | undefined;
+  let bodyScrollElement: HTMLDivElement | undefined;
   let activeScrollRendererId: string | undefined;
   let measuredViewportHeight: number | undefined;
   $: viewportHeight = toCssSize(measuredViewportHeight ?? height);
@@ -58,34 +65,42 @@
     renderModel.pitchCount,
     renderModel.viewport
   );
-  $: scrollStyle = buildScrollStyle(width, height, showVelocityLane);
+  $: scrollStyle = buildScrollStyle(
+    width,
+    height,
+    visibleAutomationLaneCount
+  );
+  $: visibleAutomationLaneCount =
+    Number(showVelocityLane) + Number(showProbabilityLane);
   $: editorSurfaceStyle =
     `width: ${editorWidth}px; height: ${editorHeight}px;` +
     (viewportHeight ? ` min-height: ${viewportHeight};` : '');
-  $: if (scrollElement && renderModel.rendererId !== activeScrollRendererId) {
+  $: if (
+    scrollElement &&
+    bodyScrollElement &&
+    renderModel.rendererId !== activeScrollRendererId
+  ) {
     activeScrollRendererId = renderModel.rendererId;
     alignScrollToRenderer();
     measureViewportSize();
   }
 
   export function centerOnMiddleC() {
-    if (!scrollElement) return;
+    if (!bodyScrollElement) return;
     if (renderModel.rendererId !== 'piano-roll') {
-      scrollElement.scrollTop = 0;
+      bodyScrollElement.scrollTop = 0;
       return;
     }
 
     const middleCOffset =
       pitchToScreenY(middleCPitch, renderModel.viewport, 127) -
-      scrollElement.clientHeight / 2;
+      bodyScrollElement.clientHeight / 2;
 
-    scrollElement.scrollTop = Math.max(0, middleCOffset);
+    bodyScrollElement.scrollTop = Math.max(0, middleCOffset);
   }
 
   function centerOnMount(node: HTMLDivElement) {
     scrollElement = node;
-    activeScrollRendererId = renderModel.rendererId;
-    alignScrollToRenderer();
     measureViewportSize();
 
     const observer = new ResizeObserver(measureViewportSize);
@@ -100,14 +115,14 @@
   }
 
   function alignScrollToRenderer() {
-    if (!scrollElement) return;
+    if (!bodyScrollElement) return;
 
     if (renderModel.rendererId === 'piano-roll') {
       centerOnMiddleC();
       return;
     }
 
-    scrollElement.scrollTop = 0;
+    bodyScrollElement.scrollTop = 0;
   }
 
   function toCssSize(value: string | number | undefined): string | undefined {
@@ -119,12 +134,12 @@
   function buildScrollStyle(
     widthValue: string | number | undefined,
     heightValue: string | number | undefined,
-    includeVelocityLane: boolean
+    automationLaneCount: number
   ): string | undefined {
     const nextWidth = toCssSize(widthValue);
     const nextHeight = toExpandedHeight(
       heightValue,
-      includeVelocityLane ? velocityLaneOuterHeight : 0
+      automationLaneCount * velocityLaneOuterHeight
     );
     const declarations: string[] = [];
 
@@ -161,9 +176,10 @@
 
     const noteSurface = scrollElement.querySelector('.piano-roll');
     const scrollBounds = scrollElement.getBoundingClientRect();
+    const bodyBounds = bodyScrollElement?.getBoundingClientRect();
     const noteBounds = noteSurface?.getBoundingClientRect();
     const noteOffset = noteBounds ? noteBounds.left - scrollBounds.left : 0;
-    const nextViewportHeight = readEditorViewportHeight(noteBounds, scrollBounds);
+    const nextViewportHeight = readEditorViewportHeight(bodyBounds, scrollBounds);
 
     onViewportWidthChange(Math.max(0, scrollElement.clientWidth - noteOffset));
     if (nextViewportHeight !== measuredViewportHeight) {
@@ -174,10 +190,10 @@
   }
 
   function readEditorViewportHeight(
-    noteBounds: DOMRect | undefined,
+    bodyBounds: DOMRect | undefined,
     scrollBounds: DOMRect
   ): number {
-    const noteTopOffset = noteBounds ? noteBounds.top - scrollBounds.top : 0;
+    const noteTopOffset = bodyBounds ? bodyBounds.top - scrollBounds.top : 0;
     const declaredHeight = readDeclaredEditorHeight();
     const availableHeight = (declaredHeight ?? scrollElement?.clientHeight ?? 0) -
       noteTopOffset;
@@ -232,6 +248,7 @@
 
       <div
         class="piano-roll-body"
+        bind:this={bodyScrollElement}
         style={viewportHeight ? `--pattern-viewport-height: ${viewportHeight};` : undefined}
       >
         <PatternGrid {renderModel} layer="pitch-ruler" />
@@ -265,6 +282,10 @@
 
       {#if showVelocityLane}
         <PatternVelocityLane {renderModel} {onVelocityCommit} />
+      {/if}
+
+      {#if showProbabilityLane}
+        <PatternProbabilityLane {renderModel} {onProbabilityCommit} />
       {/if}
     </div>
   </div>

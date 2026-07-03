@@ -225,6 +225,8 @@ h2 {
   display: grid;
   grid-template-columns: var(--ruler-label-width) minmax(0, 1fr);
   gap: var(--spacing-sm);
+  height: var(--pattern-viewport-height, var(--editor-panel-min-height));
+  overflow-y: auto;
   width: max-content;
 }
 
@@ -283,7 +285,8 @@ h2 {
   aspect-ratio: 4 / 1;
   min-height: var(--piano-roll-scroll-min-height);
   max-height: min(var(--piano-roll-scroll-max-height), 58vh);
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
   padding-right: var(--spacing-xs);
 }
 

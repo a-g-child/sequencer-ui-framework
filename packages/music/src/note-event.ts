@@ -3,6 +3,7 @@ import type { BeatTime, TimelineEvent } from '@sequencer/core'
 export interface NoteValue {
   pitch: number
   velocity: number
+  probability?: number
 }
 
 export interface NoteEvent extends TimelineEvent<NoteValue> {
