@@ -6,7 +6,7 @@ import {
   type SequencerDocument,
   type TimelineEvent
 } from '@sequencer/core'
-import type { NoteEvent } from '../note-event'
+import { setNoteTimingOffset, type NoteEvent } from '../note-event'
 import {
   resolveNoteCollisions,
   restoreEvents,
@@ -31,18 +31,23 @@ export class CreateNotesOperation implements Operation {
     private readonly patternId: EntityId,
     notes: CreateNoteInput[]
   ) {
-    this.notes = notes.map((note) => ({
-      id: createId('note'),
-      time: note.time,
-      duration: note.duration,
-      type: 'trigger',
-      value: {
-        pitch: note.pitch,
-        velocity: note.velocity,
-        probability: note.probability ?? 1,
-        humanizeOffset: note.humanizeOffset ?? 0
+    this.notes = notes.map((note) => {
+      const event: NoteEvent = {
+        id: createId('note'),
+        time: note.time,
+        duration: note.duration,
+        type: 'trigger',
+        value: {
+          pitch: note.pitch,
+          velocity: note.velocity,
+          probability: note.probability ?? 1
+        }
       }
-    }))
+
+      setNoteTimingOffset(event.value, note.humanizeOffset ?? 0, note.time)
+
+      return event
+    })
   }
 
   execute(document: SequencerDocument): void {

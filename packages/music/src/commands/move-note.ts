@@ -5,6 +5,11 @@ import type {
   SequencerDocument,
   TimelineEvent
 } from '@sequencer/core'
+import {
+  getNoteTimingOffset,
+  setNoteTimingOffset,
+  type NoteValue
+} from '../note-event'
 import { getNote } from '../note-lookup'
 import {
   resolveNoteCollisions,
@@ -42,15 +47,6 @@ export class MoveNoteOperation implements Operation {
   }
 }
 
-function clampHumanizeOffset(
-  value: { humanizeOffset?: number },
-  noteTime: number
-): void {
-  if (value.humanizeOffset === undefined) return
-
-  value.humanizeOffset = Math.max(-noteTime, value.humanizeOffset)
-
-  if (value.humanizeOffset === 0) {
-    delete value.humanizeOffset
-  }
+function clampHumanizeOffset(value: NoteValue, noteTime: number): void {
+  setNoteTimingOffset(value, getNoteTimingOffset(value), noteTime)
 }

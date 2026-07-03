@@ -1,5 +1,5 @@
 import type { Pattern } from '@sequencer/core'
-import { isNoteEvent } from './note-event'
+import { getNoteTimingOffset, isNoteEvent } from './note-event'
 
 export type PatternNoteView = {
   id: string
@@ -30,7 +30,7 @@ export function buildPatternEditorModel(pattern: Pattern): PatternEditorModel {
       pitch: event.value.pitch,
       velocity: event.value.velocity,
       probability: event.value.probability ?? 1,
-      humanizeOffset: event.value.humanizeOffset ?? 0
+      humanizeOffset: getNoteTimingOffset(event.value)
     }))
   }
 }

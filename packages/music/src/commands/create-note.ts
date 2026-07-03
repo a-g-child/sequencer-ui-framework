@@ -6,7 +6,7 @@ import {
   type SequencerDocument,
   type TimelineEvent
 } from '@sequencer/core'
-import type { NoteEvent } from '../note-event'
+import { setNoteTimingOffset, type NoteEvent } from '../note-event'
 import {
   resolveNoteCollisions,
   restoreEvents,
@@ -32,8 +32,10 @@ export class CreateNoteOperation implements Operation {
       time,
       duration,
       type: 'trigger',
-      value: { pitch, velocity, probability, humanizeOffset }
+      value: { pitch, velocity, probability }
     }
+
+    setNoteTimingOffset(this.note.value, humanizeOffset, time)
   }
 
   execute(document: SequencerDocument): void {

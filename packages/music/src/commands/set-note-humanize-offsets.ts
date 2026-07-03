@@ -3,7 +3,12 @@ import type {
   Operation,
   SequencerDocument
 } from '@sequencer/core'
-import { isNoteEvent } from '../note-event'
+import {
+  clampNoteTimingOffset,
+  getNoteTimingOffset,
+  isNoteEvent,
+  setNoteTimingOffset
+} from '../note-event'
 
 export type NoteHumanizeOffsetInput = {
   id: EntityId
@@ -38,7 +43,7 @@ export class SetNoteHumanizeOffsetsOperation implements Operation {
 
       this.previous.push({
         id: event.id,
-        offset: event.value.humanizeOffset
+        offset: getNoteTimingOffset(event.value)
       })
 
       const nextOffset = clampHumanizeOffset(
@@ -46,11 +51,7 @@ export class SetNoteHumanizeOffsetsOperation implements Operation {
         event.time
       )
 
-      if (nextOffset === 0) {
-        delete event.value.humanizeOffset
-      } else {
-        event.value.humanizeOffset = nextOffset
-      }
+      setNoteTimingOffset(event.value, nextOffset, event.time)
     }
   }
 
@@ -65,17 +66,11 @@ export class SetNoteHumanizeOffsetsOperation implements Operation {
 
       const previousOffset = previousById.get(event.id)
 
-      if (previousOffset === undefined) {
-        delete event.value.humanizeOffset
-      } else {
-        event.value.humanizeOffset = previousOffset
-      }
+      setNoteTimingOffset(event.value, previousOffset ?? 0, event.time)
     }
   }
 }
 
 function clampHumanizeOffset(offset: number, noteTime: number): number {
-  if (!Number.isFinite(offset)) return 0
-
-  return Math.max(-noteTime, offset)
+  return clampNoteTimingOffset(offset, noteTime)
 }

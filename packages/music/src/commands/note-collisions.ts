@@ -77,7 +77,9 @@ function cloneValue(value: unknown): unknown {
 
   if (Array.isArray(value)) return [...value]
 
-  return { ...value }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [key, cloneValue(entry)])
+  )
 }
 
 function noteEnd(note: NoteEvent): number {
