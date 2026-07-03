@@ -20,8 +20,10 @@ export type PatternInteractionContext = {
   musical: {
     beat: BeatTime;
     pitch: number;
+    visualPitch?: number;
     snap: BeatTime;
   };
+  pitchByVisualPitch: Record<number, number>;
   hoveredItem?: RenderInteractionItem<PatternNoteView>;
   selectedItems: RenderInteractionItem<PatternNoteView>[];
   visibleItems: RenderInteractionItem<PatternNoteView>[];

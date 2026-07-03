@@ -1,11 +1,17 @@
 import type {
   EntityId,
   Operation,
-  SequencerDocument
+  SequencerDocument,
+  TimelineEvent
 } from '@sequencer/core'
 import { isNoteEvent } from '../note-event'
+import {
+  resolveNoteCollisions,
+  restoreEvents,
+  snapshotEvents
+} from './note-collisions'
 
-type PreviousNoteState = {
+export type MoveNoteTarget = {
   id: EntityId
   time: number
   pitch: number
@@ -14,45 +20,40 @@ type PreviousNoteState = {
 export class MoveNotesOperation implements Operation {
   readonly name = 'Move Notes'
 
-  private previous: PreviousNoteState[] = []
+  private previousEvents: TimelineEvent[] = []
 
   constructor(
     private readonly patternId: EntityId,
     private readonly noteIds: EntityId[],
     private readonly deltaBeat: number,
-    private readonly deltaPitch: number
+    private readonly deltaPitch: number,
+    private readonly targets?: MoveNoteTarget[]
   ) {}
 
   execute(document: SequencerDocument): void {
     const pattern = document.patterns.get(this.patternId)
-    this.previous = []
+
+    this.previousEvents = snapshotEvents(pattern.events)
+
+    const targetById = new Map(this.targets?.map((target) => [target.id, target]))
 
     for (const event of pattern.events) {
       if (!this.noteIds.includes(event.id) || !isNoteEvent(event)) continue
 
-      this.previous.push({
-        id: event.id,
-        time: event.time,
-        pitch: event.value.pitch
-      })
+      const target = targetById.get(event.id)
 
-      event.time = Math.max(0, event.time + this.deltaBeat)
-      event.value.pitch = event.value.pitch + this.deltaPitch
+      event.time = target
+        ? Math.max(0, target.time)
+        : Math.max(0, event.time + this.deltaBeat)
+      event.value.pitch = target ? target.pitch : event.value.pitch + this.deltaPitch
     }
+
+    pattern.events = resolveNoteCollisions(pattern.events, this.noteIds)
   }
 
   undo(document: SequencerDocument): void {
     const pattern = document.patterns.get(this.patternId)
 
-    for (const previous of this.previous) {
-      const event = pattern.events.find(
-        (candidate) => candidate.id === previous.id
-      )
-
-      if (!event || !isNoteEvent(event)) continue
-
-      event.time = previous.time
-      event.value.pitch = previous.pitch
-    }
+    pattern.events = restoreEvents(this.previousEvents)
   }
 }

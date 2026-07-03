@@ -16,6 +16,9 @@ export type PatternNavigationBounds = {
   maxScrollX: number;
   contentLength: number;
   viewportWidth: number;
+  viewportHeight: number;
+  pitchCount: number;
+  minPixelsPerSemitone?: number;
   minScrollY: number;
   maxScrollY: number;
 };
@@ -101,7 +104,7 @@ export function clampViewport(
   );
   const pixelsPerSemitone = clampNumber(
     viewport.pixelsPerSemitone,
-    MIN_PIXELS_PER_SEMITONE,
+    bounds.minPixelsPerSemitone ?? MIN_PIXELS_PER_SEMITONE,
     MAX_PIXELS_PER_SEMITONE
   );
 

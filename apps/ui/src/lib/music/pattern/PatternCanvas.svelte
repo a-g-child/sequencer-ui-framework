@@ -17,7 +17,9 @@
   export let renderModel: PatternRenderModel;
   export let height: string | number | undefined = undefined;
   export let width: string | number | undefined = undefined;
+  export let showVelocityLane = false;
   export let onViewportWidthChange: (width: number) => void;
+  export let onViewportHeightChange: (height: number) => void;
   export let onWheel: (event: WheelEvent) => void;
   export let onPointerEnter: (event: PointerEvent) => void;
   export let onPointerDown: (event: PointerEvent) => void;
@@ -42,12 +44,36 @@
   ) => void;
 
   const middleCPitch = 60;
+  const velocityLaneOuterHeight = 72;
 
   let scrollElement: HTMLDivElement | undefined;
-  $: scrollStyle = buildScrollStyle(width, height);
+  let activeScrollRendererId: string | undefined;
+  let measuredViewportHeight: number | undefined;
+  $: viewportHeight = toCssSize(measuredViewportHeight ?? height);
+  $: editorWidth = patternLengthToScreenWidth(
+    renderModel.visibleLength,
+    renderModel.viewport
+  );
+  $: editorHeight = pitchRangeToScreenHeight(
+    renderModel.pitchCount,
+    renderModel.viewport
+  );
+  $: scrollStyle = buildScrollStyle(width, height, showVelocityLane);
+  $: editorSurfaceStyle =
+    `width: ${editorWidth}px; height: ${editorHeight}px;` +
+    (viewportHeight ? ` min-height: ${viewportHeight};` : '');
+  $: if (scrollElement && renderModel.rendererId !== activeScrollRendererId) {
+    activeScrollRendererId = renderModel.rendererId;
+    alignScrollToRenderer();
+    measureViewportSize();
+  }
 
   export function centerOnMiddleC() {
     if (!scrollElement) return;
+    if (renderModel.rendererId !== 'piano-roll') {
+      scrollElement.scrollTop = 0;
+      return;
+    }
 
     const middleCOffset =
       pitchToScreenY(middleCPitch, renderModel.viewport, 127) -
@@ -58,10 +84,11 @@
 
   function centerOnMount(node: HTMLDivElement) {
     scrollElement = node;
-    centerOnMiddleC();
-    measureViewportWidth();
+    activeScrollRendererId = renderModel.rendererId;
+    alignScrollToRenderer();
+    measureViewportSize();
 
-    const observer = new ResizeObserver(measureViewportWidth);
+    const observer = new ResizeObserver(measureViewportSize);
 
     observer.observe(node);
 
@@ -72,6 +99,17 @@
     };
   }
 
+  function alignScrollToRenderer() {
+    if (!scrollElement) return;
+
+    if (renderModel.rendererId === 'piano-roll') {
+      centerOnMiddleC();
+      return;
+    }
+
+    scrollElement.scrollTop = 0;
+  }
+
   function toCssSize(value: string | number | undefined): string | undefined {
     if (value === undefined) return undefined;
 
@@ -80,10 +118,14 @@
 
   function buildScrollStyle(
     widthValue: string | number | undefined,
-    heightValue: string | number | undefined
+    heightValue: string | number | undefined,
+    includeVelocityLane: boolean
   ): string | undefined {
     const nextWidth = toCssSize(widthValue);
-    const nextHeight = toCssSize(heightValue);
+    const nextHeight = toExpandedHeight(
+      heightValue,
+      includeVelocityLane ? velocityLaneOuterHeight : 0
+    );
     const declarations: string[] = [];
 
     if (nextWidth) {
@@ -101,15 +143,58 @@
     return declarations.length > 0 ? declarations.join('; ') : undefined;
   }
 
-  function measureViewportWidth() {
+  function toExpandedHeight(
+    value: string | number | undefined,
+    extraPixels: number
+  ): string | undefined {
+    if (value === undefined) return undefined;
+
+    if (typeof value === 'number') {
+      return `${value + extraPixels}px`;
+    }
+
+    return extraPixels > 0 ? `calc(${value} + ${extraPixels}px)` : value;
+  }
+
+  function measureViewportSize() {
     if (!scrollElement) return;
 
     const noteSurface = scrollElement.querySelector('.piano-roll');
     const scrollBounds = scrollElement.getBoundingClientRect();
     const noteBounds = noteSurface?.getBoundingClientRect();
     const noteOffset = noteBounds ? noteBounds.left - scrollBounds.left : 0;
+    const nextViewportHeight = readEditorViewportHeight(noteBounds, scrollBounds);
 
     onViewportWidthChange(Math.max(0, scrollElement.clientWidth - noteOffset));
+    if (nextViewportHeight !== measuredViewportHeight) {
+      measuredViewportHeight = nextViewportHeight;
+    }
+
+    onViewportHeightChange(nextViewportHeight);
+  }
+
+  function readEditorViewportHeight(
+    noteBounds: DOMRect | undefined,
+    scrollBounds: DOMRect
+  ): number {
+    const noteTopOffset = noteBounds ? noteBounds.top - scrollBounds.top : 0;
+    const declaredHeight = readDeclaredEditorHeight();
+    const availableHeight = (declaredHeight ?? scrollElement?.clientHeight ?? 0) -
+      noteTopOffset;
+
+    return Math.max(0, availableHeight);
+  }
+
+  function readDeclaredEditorHeight(): number | undefined {
+    if (typeof height === 'number') return height;
+
+    const parsedHeight = typeof height === 'string'
+      ? Number.parseFloat(height)
+      : Number.NaN;
+
+    if (Number.isFinite(parsedHeight)) return parsedHeight;
+
+    return undefined;
   }
 
   function handleNotePointerDown(
@@ -145,7 +230,10 @@
     <div class="piano-roll-content">
       <PatternGrid {renderModel} layer="ruler" />
 
-      <div class="piano-roll-body">
+      <div
+        class="piano-roll-body"
+        style={viewportHeight ? `--pattern-viewport-height: ${viewportHeight};` : undefined}
+      >
         <PatternGrid {renderModel} layer="pitch-ruler" />
 
         <div
@@ -154,7 +242,7 @@
           class:panning={renderModel.isPanning}
           role="application"
           aria-label={renderModel.rendererId === 'drum-rack' ? 'Drum rack notes' : 'Piano roll notes'}
-          style={`width: ${patternLengthToScreenWidth(renderModel.visibleLength, renderModel.viewport)}px; height: ${pitchRangeToScreenHeight(renderModel.pitchCount, renderModel.viewport)}px;`}
+          style={editorSurfaceStyle}
           on:pointerenter={onPointerEnter}
           on:pointerdown={onPointerDown}
           on:pointermove={onPointerMove}
@@ -175,7 +263,9 @@
         </div>
       </div>
 
-      <PatternVelocityLane {renderModel} {onVelocityCommit} />
+      {#if showVelocityLane}
+        <PatternVelocityLane {renderModel} {onVelocityCommit} />
+      {/if}
     </div>
   </div>
 </div>

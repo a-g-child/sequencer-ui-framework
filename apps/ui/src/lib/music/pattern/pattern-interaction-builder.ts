@@ -58,6 +58,7 @@ export function buildPatternInteractionContext(
     patternId: options.patternId,
     pointer: { x, y },
     musical,
+    pitchByVisualPitch: options.renderModel.pitchByVisualPitch,
     hoveredItem,
     selectedItems: options.renderModel.items.filter((item) => item.selected),
     visibleItems: options.renderModel.items,

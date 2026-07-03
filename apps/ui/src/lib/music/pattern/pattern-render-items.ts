@@ -13,6 +13,7 @@ export type RenderItem<TSource = unknown> = {
   y: number;
   width: number;
   height: number;
+  visualPitch?: number;
   selected: boolean;
   hovered: boolean;
   source: TSource;

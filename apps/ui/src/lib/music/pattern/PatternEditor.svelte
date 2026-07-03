@@ -33,6 +33,7 @@
   let session: PatternEditorSession;
   let patternCanvas: PatternCanvas | undefined;
   let timelineRevision = '';
+  let showVelocityLane = false;
 
   $: if (controller && (!session || session.controller !== controller)) {
     session = new PatternEditorSession({
@@ -120,6 +121,12 @@
     }
   }
 
+  function handleViewportHeightChange(height: number) {
+    if (session.setViewportHeight(height, pianoRoll)) {
+      invalidateSession();
+    }
+  }
+
   function handlePianoRollPointerEnter(event: PointerEvent) {
     applyPointerResult(session.handlePointerEnter(event, pianoRoll));
   }
@@ -169,6 +176,10 @@
     invalidateSession();
   }
 
+  function toggleVelocityLane() {
+    showVelocityLane = !showVelocityLane;
+  }
+
   function isRendererEditor(editor: EditorKind): editor is PatternRendererId {
     return editor === 'piano-roll' || editor === 'drum-rack';
   }
@@ -203,7 +214,9 @@
         {renderModel}
         {height}
         {width}
+        {showVelocityLane}
         onViewportWidthChange={handleViewportWidthChange}
+        onViewportHeightChange={handleViewportHeightChange}
         onWheel={handlePatternWheel}
         onPointerEnter={handlePianoRollPointerEnter}
         onPointerDown={handlePianoRollPointerDown}
@@ -218,6 +231,8 @@
 
       <PatternViewControls
         onAddNote={addC4Note}
+        {showVelocityLane}
+        onToggleVelocityLane={toggleVelocityLane}
         onZoomIn={() => {
           session.zoomViewportX(viewportZoomStep, pianoRoll);
           invalidateSession();

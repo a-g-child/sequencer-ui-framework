@@ -3,13 +3,20 @@ import {
   type BeatTime,
   type EntityId,
   type Operation,
-  type SequencerDocument
+  type SequencerDocument,
+  type TimelineEvent
 } from '@sequencer/core'
 import type { NoteEvent } from '../note-event'
+import {
+  resolveNoteCollisions,
+  restoreEvents,
+  snapshotEvents
+} from './note-collisions'
 
 export class CreateNoteOperation implements Operation {
   readonly name = 'Create Note'
   readonly note: NoteEvent
+  private previousEvents: TimelineEvent[] = []
 
   constructor(
     private readonly patternId: EntityId,
@@ -28,11 +35,16 @@ export class CreateNoteOperation implements Operation {
   }
 
   execute(document: SequencerDocument): void {
-    document.patterns.get(this.patternId).events.push(this.note)
+    const pattern = document.patterns.get(this.patternId)
+
+    this.previousEvents = snapshotEvents(pattern.events)
+    pattern.events.push(this.note)
+    pattern.events = resolveNoteCollisions(pattern.events, [this.note.id])
   }
 
   undo(document: SequencerDocument): void {
     const pattern = document.patterns.get(this.patternId)
-    pattern.events = pattern.events.filter((event) => event.id !== this.note.id)
+
+    pattern.events = restoreEvents(this.previousEvents)
   }
 }

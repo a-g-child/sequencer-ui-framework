@@ -28,6 +28,7 @@ export type PatternRenderedNoteView = PianoRollNoteView & {
 export type PatternMusicalPoint = {
   beat: BeatTime;
   pitch: number;
+  visualPitch?: number;
   snap: BeatTime;
 };
 
@@ -41,6 +42,7 @@ export type PatternRenderModel = RenderModel & {
   pitchCount: number;
   highestPitch: number;
   pitchLabels: Record<number, string>;
+  pitchByVisualPitch: Record<number, number>;
   lanes: RenderLane[];
   items: RenderItem<PianoRollNoteView>[];
   gridLines: PatternGridLine[];
@@ -114,6 +116,9 @@ export class PianoRollRenderer implements PatternRenderer<PianoRollView> {
       pitchCount: input.viewModel.pitchCount,
       highestPitch: input.viewModel.highestPitch,
       pitchLabels,
+      pitchByVisualPitch: Object.fromEntries(
+        input.viewModel.pitchRows.map((pitch) => [pitch, pitch])
+      ),
       lanes,
       items: buildRenderItems({
         notes: input.viewModel.notes,
@@ -159,6 +164,7 @@ export class PianoRollRenderer implements PatternRenderer<PianoRollView> {
     return {
       beat,
       pitch,
+      visualPitch: pitch,
       snap: grid.snap
     };
   }
@@ -168,9 +174,12 @@ export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
   readonly id = 'drum-rack';
 
   render(input: PatternRenderInput<PianoRollView>): PatternRenderModel {
-    const lanes = buildDrumLanes(input.viewModel);
+    const lanes = buildDrumLanes();
     const laneByPitch = new Map(
       lanes.map((lane) => [lane.pitch, lane.lanePitch])
+    );
+    const pitchByVisualPitch = Object.fromEntries(
+      lanes.map((lane) => [lane.lanePitch, lane.pitch])
     );
     const laneIdByPitch = new Map(
       lanes.map((lane) => [lane.pitch, String(lane.pitch)])
@@ -201,6 +210,7 @@ export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
       pitchCount: lanes.length,
       highestPitch: lanes[0]?.lanePitch ?? 0,
       pitchLabels: labelByLane,
+      pitchByVisualPitch,
       lanes: renderLanes,
       items: buildRenderItems({
         notes: input.viewModel.notes,
@@ -224,20 +234,20 @@ export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
       activeToolId: input.activeToolId,
       isPanning: input.isPanning,
       noteHeight: Math.max(12, input.noteHeight),
-      ghost: undefined,
-      overlayNotes: [],
+      ghost: input.ghost,
+      overlayNotes: input.overlayNotes,
       overlayRectangles: input.overlayRectangles
     };
   }
 
   pointerToMusical(
-    viewModel: PianoRollView,
+    _viewModel: PianoRollView,
     viewport: PatternViewport,
     grid: GridDefinition,
     x: number,
     y: number
   ): PatternMusicalPoint {
-    const lanes = buildDrumLanes(viewModel);
+    const lanes = buildDrumLanes();
     const lanePitch = clampPitch(
       screenYToPitch(y, viewport, lanes[0]?.lanePitch ?? 0),
       0,
@@ -248,6 +258,7 @@ export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
     return {
       beat: snapBeat(screenXToBeat(x, viewport), grid.snap),
       pitch: lane?.pitch ?? 60,
+      visualPitch: lanePitch,
       snap: grid.snap
     };
   }
@@ -257,17 +268,33 @@ function clampPitch(pitch: number, lowestPitch: number, highestPitch: number) {
   return Math.max(lowestPitch, Math.min(highestPitch, pitch));
 }
 
-function buildDrumLanes(viewModel: PianoRollView) {
-  const pitches = Array.from(
-    new Set(viewModel.notes.map((note) => note.pitch))
-  ).sort((left, right) => right - left);
-  const lanePitches = pitches.length > 0 ? pitches : [60];
-  const highestLanePitch = lanePitches.length - 1;
+export const DRUM_RACK_LANE_COUNT = 16;
 
-  return lanePitches.map((pitch, index) => ({
-    pitch,
-    lanePitch: highestLanePitch - index,
-    label: noteName(pitch)
+const drumRackLaneDefinitions = [
+  { pitch: 36, label: 'Kick' },
+  { pitch: 37, label: 'Rim' },
+  { pitch: 38, label: 'Snare' },
+  { pitch: 39, label: 'Clap' },
+  { pitch: 42, label: 'Closed Hihat' },
+  { pitch: 46, label: 'Open Hihat' },
+  { pitch: 47, label: 'Percussion 1' },
+  { pitch: 48, label: 'Percussion 2' },
+  { pitch: 49, label: 'Percussion 3' },
+  { pitch: 50, label: 'Percussion 4' },
+  { pitch: 51, label: 'Percussion 5' },
+  { pitch: 52, label: 'Percussion 6' },
+  { pitch: 53, label: 'Percussion 7' },
+  { pitch: 54, label: 'Percussion 8' },
+  { pitch: 55, label: 'Percussion 9' },
+  { pitch: 56, label: 'Percussion 10' }
+];
+
+function buildDrumLanes() {
+  const highestLanePitch = drumRackLaneDefinitions.length - 1;
+
+  return drumRackLaneDefinitions.map((lane, index) => ({
+    ...lane,
+    lanePitch: highestLanePitch - index
   }));
 }
 
@@ -307,16 +334,20 @@ function buildRenderItems(options: {
   selectedIds: Set<string>;
   hoveredNoteId?: string;
 }): RenderItem<PianoRollNoteView>[] {
-  return options.notes.map((note) => {
+  return options.notes.flatMap((note) => {
+    const laneId = options.laneByPitch.get(note.pitch);
     const visualPitch = options.visualPitchByPitch?.get(note.pitch) ?? note.pitch;
+
+    if (!laneId) return [];
 
     return {
       id: note.id,
-      laneId: options.laneByPitch.get(note.pitch) ?? String(note.pitch),
+      laneId,
       x: beatToScreenX(note.time, options.viewport),
       y: pitchToScreenY(visualPitch, options.viewport, options.highestPitch) + 1,
       width: durationToScreenWidth(note.duration, options.viewport),
       height: options.noteHeight,
+      visualPitch,
       selected: options.selectedIds.has(note.id),
       hovered: options.hoveredNoteId === note.id,
       source: note

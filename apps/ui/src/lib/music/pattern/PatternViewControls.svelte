@@ -11,6 +11,8 @@
   export let onPitchUp: () => void;
   export let onPitchDown: () => void;
   export let onResetView: () => void;
+  export let showVelocityLane = false;
+  export let onToggleVelocityLane: (() => void) | undefined = undefined;
 
   let highlightedControl = '';
   let highlightTimer: ReturnType<typeof setTimeout> | undefined;
@@ -35,7 +37,7 @@
   });
 </script>
 
-<div class="pattern-view-controls" aria-label="Piano roll view controls">
+<div class="pattern-view-controls" aria-label="Pattern view controls">
   {#if onAddNote}
     <button
       type="button"
@@ -46,6 +48,17 @@
     >
       ＋♪
     </button>
+  {/if}
+
+  {#if onToggleVelocityLane}
+    <button
+      type="button"
+      class:highlighted={showVelocityLane || highlightedControl === 'velocity-lane'}
+      title={showVelocityLane ? 'Hide velocity lane' : 'Show velocity lane'}
+      aria-label={showVelocityLane ? 'Hide velocity lane' : 'Show velocity lane'}
+      aria-pressed={showVelocityLane}
+      on:click={() => runViewAction('velocity-lane', onToggleVelocityLane)}
+    >▥</button>
   {/if}
 
   <span class="control-cluster" aria-label="Horizontal zoom and pan">

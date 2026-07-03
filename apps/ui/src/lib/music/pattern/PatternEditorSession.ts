@@ -20,6 +20,7 @@ import {
   type PatternNavigationBounds
 } from './pattern-navigation';
 import {
+  DRUM_RACK_LANE_COUNT,
   DrumRackRenderer,
   PianoRollRenderer,
   type PatternRenderModel,
@@ -116,6 +117,7 @@ export class PatternEditorSession implements EditorSession {
   private beatsPerBar = defaultBeatsPerBar;
   private beatDivisions = defaultBeatDivisions;
   private viewportWidth = 0;
+  private viewportHeight = 0;
 
   constructor(options: PatternEditorSessionOptions) {
     const resizeNoteTool = new ResizeNoteTool();
@@ -196,6 +198,20 @@ export class PatternEditorSession implements EditorSession {
     if (nextWidth === this.viewportWidth) return false;
 
     this.viewportWidth = nextWidth;
+    this.applyViewport(this.viewport, pianoRoll);
+
+    return true;
+  }
+
+  setViewportHeight(
+    height: number,
+    pianoRoll: PianoRollView | undefined
+  ): boolean {
+    const nextHeight = Math.max(0, height);
+
+    if (nextHeight === this.viewportHeight) return false;
+
+    this.viewportHeight = nextHeight;
     this.applyViewport(this.viewport, pianoRoll);
 
     return true;
@@ -304,18 +320,32 @@ export class PatternEditorSession implements EditorSession {
   }
 
   navigationBounds(pianoRoll: PianoRollView | undefined): PatternNavigationBounds {
-    const scrollLimit = pianoRoll ? pianoRoll.pitchCount : 0;
+    const pitchCount = this.activePitchCount(pianoRoll);
+    const visiblePitchCount = this.viewportHeight / this.viewport.pixelsPerSemitone;
     const contentLength = this.visibleLength(pianoRoll);
     const visibleBeats = this.viewportWidth / this.viewport.pixelsPerBeat;
     const maxScrollX = Math.max(0, contentLength - visibleBeats);
+    const minPixelsPerSemitone =
+      this.activeRendererId === 'drum-rack' && this.viewportHeight > 0
+        ? this.viewportHeight / Math.max(1, pitchCount)
+        : undefined;
 
     return {
       maxScrollX,
       contentLength,
       viewportWidth: this.viewportWidth,
-      minScrollY: -scrollLimit,
-      maxScrollY: scrollLimit
+      viewportHeight: this.viewportHeight,
+      pitchCount,
+      minPixelsPerSemitone,
+      minScrollY: 0,
+      maxScrollY: Math.max(0, pitchCount - visiblePitchCount)
     };
+  }
+
+  private activePitchCount(pianoRoll: PianoRollView | undefined): number {
+    if (this.activeRendererId === 'drum-rack') return DRUM_RACK_LANE_COUNT;
+
+    return pianoRoll ? pianoRoll.pitchCount : 0;
   }
 
   visibleLength(pianoRoll: PianoRollView | undefined): number {
