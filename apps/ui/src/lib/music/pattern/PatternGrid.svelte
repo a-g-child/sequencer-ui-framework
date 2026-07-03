@@ -41,6 +41,7 @@
   >
     {#each renderModel.lanes as lane}
       <span
+        class:in-scale={lane.inScale}
         style={`top: ${lane.y + lane.height / 2}px`}
       >
         {lane.label}
@@ -55,6 +56,15 @@
         class:bar-line={line.isBar}
         style={`left: ${beatToScreenX(line.beat, renderModel.viewport)}px`}
       ></span>
+    {/each}
+
+    {#each renderModel.lanes as lane}
+      {#if lane.inScale}
+        <span
+          class="scale-lane"
+          style={`top: ${lane.y}px; height: ${lane.height}px`}
+        ></span>
+      {/if}
     {/each}
 
     {#each renderModel.lanes as lane}

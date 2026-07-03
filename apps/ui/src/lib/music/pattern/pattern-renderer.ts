@@ -3,6 +3,11 @@ import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/
 import type { RenderModel } from '../../framework/editor';
 import type { GridDefinition, PatternGridLine } from './pattern-grid';
 import type { RenderItem, RenderLane } from './pattern-render-items';
+import {
+  defaultScaleState,
+  isPitchInScale,
+  type PatternScaleState
+} from './pattern-scale';
 import type { PatternNoteOverlay, PatternRectangleOverlay } from './pattern-tool';
 import {
   beatToScreenX,
@@ -55,6 +60,7 @@ export type PatternRenderModel = RenderModel & {
   ghost?: PatternGhostView;
   overlayNotes: PatternNoteOverlay[];
   overlayRectangles: PatternRectangleOverlay[];
+  scale: PatternScaleState;
 };
 
 export type PatternRenderInput<TViewModel> = {
@@ -71,6 +77,7 @@ export type PatternRenderInput<TViewModel> = {
   ghost?: PatternGhostView;
   overlayNotes: PatternNoteOverlay[];
   overlayRectangles: PatternRectangleOverlay[];
+  scale?: PatternScaleState;
 };
 
 export interface PatternRenderer<TViewModel> {
@@ -82,7 +89,8 @@ export interface PatternRenderer<TViewModel> {
     viewport: PatternViewport,
     grid: GridDefinition,
     x: number,
-    y: number
+    y: number,
+    renderModel?: PatternRenderModel
   ): PatternMusicalPoint;
 }
 
@@ -90,18 +98,36 @@ export class PianoRollRenderer implements PatternRenderer<PianoRollView> {
   readonly id = 'piano-roll';
 
   render(input: PatternRenderInput<PianoRollView>): PatternRenderModel {
+    const scale = input.scale ?? defaultScaleState;
+    const shouldFold = scale.mode === 'fold';
+    const pitchRows = shouldFold
+      ? input.viewModel.pitchRows.filter((pitch) => isPitchInScale(pitch, scale))
+      : input.viewModel.pitchRows;
+    const highestPitch = shouldFold
+      ? Math.max(0, pitchRows.length - 1)
+      : input.viewModel.highestPitch;
+    const visualPitchByPitch = new Map(
+      pitchRows.map((pitch, index) => [
+        pitch,
+        shouldFold ? pitchRows.length - 1 - index : pitch
+      ])
+    );
+    const pitchByVisualPitch = Object.fromEntries(
+      pitchRows.map((pitch) => [visualPitchByPitch.get(pitch) ?? pitch, pitch])
+    );
     const pitchLabels = Object.fromEntries(
-      input.viewModel.pitchRows.map((pitch) => [pitch, noteName(pitch)])
+      pitchRows.map((pitch) => [pitch, noteName(pitch)])
     );
     const lanes = buildRenderLanes(
-      input.viewModel.pitchRows.map((pitch) => ({
+      pitchRows.map((pitch) => ({
         id: String(pitch),
-        pitch,
+        pitch: visualPitchByPitch.get(pitch) ?? pitch,
         label: pitchLabels[pitch] ?? String(pitch),
+        inScale: isPitchInScale(pitch, scale),
         source: pitch
       })),
       input.viewport,
-      input.viewModel.highestPitch
+      highestPitch
     );
     const selectedIds = input.selectedNotes.map((note) => note.id);
     const selectedIdSet = new Set(selectedIds);
@@ -112,19 +138,18 @@ export class PianoRollRenderer implements PatternRenderer<PianoRollView> {
       viewport: input.viewport,
       grid: input.grid,
       visibleLength: input.visibleLength,
-      pitchRows: input.viewModel.pitchRows,
-      pitchCount: input.viewModel.pitchCount,
-      highestPitch: input.viewModel.highestPitch,
+      pitchRows,
+      pitchCount: pitchRows.length,
+      highestPitch,
       pitchLabels,
-      pitchByVisualPitch: Object.fromEntries(
-        input.viewModel.pitchRows.map((pitch) => [pitch, pitch])
-      ),
+      pitchByVisualPitch,
       lanes,
       items: buildRenderItems({
         notes: input.viewModel.notes,
-        laneByPitch: new Map(input.viewModel.pitchRows.map((pitch) => [pitch, String(pitch)])),
+        laneByPitch: new Map(pitchRows.map((pitch) => [pitch, String(pitch)])),
+        visualPitchByPitch,
         viewport: input.viewport,
-        highestPitch: input.viewModel.highestPitch,
+        highestPitch,
         noteHeight: input.noteHeight,
         selectedIds: selectedIdSet,
         hoveredNoteId: input.hoveredNoteId
@@ -143,7 +168,8 @@ export class PianoRollRenderer implements PatternRenderer<PianoRollView> {
       noteHeight: input.noteHeight,
       ghost: input.ghost,
       overlayNotes: input.overlayNotes,
-      overlayRectangles: input.overlayRectangles
+      overlayRectangles: input.overlayRectangles,
+      scale
     };
   }
 
@@ -152,11 +178,18 @@ export class PianoRollRenderer implements PatternRenderer<PianoRollView> {
     viewport: PatternViewport,
     grid: GridDefinition,
     x: number,
-    y: number
+    y: number,
+    renderModel?: PatternRenderModel
   ): PatternMusicalPoint {
     const beat = snapBeat(screenXToBeat(x, viewport), grid.snap);
+    const highestPitch = renderModel?.highestPitch ?? viewModel.highestPitch;
+    const visualPitch = clampPitch(
+      screenYToPitch(y, viewport, highestPitch),
+      0,
+      highestPitch
+    );
     const pitch = clampPitch(
-      screenYToPitch(y, viewport, viewModel.highestPitch),
+      renderModel?.pitchByVisualPitch[visualPitch] ?? visualPitch,
       viewModel.lowestPitch,
       viewModel.highestPitch
     );
@@ -164,7 +197,7 @@ export class PianoRollRenderer implements PatternRenderer<PianoRollView> {
     return {
       beat,
       pitch,
-      visualPitch: pitch,
+      visualPitch,
       snap: grid.snap
     };
   }
@@ -237,7 +270,8 @@ export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
       noteHeight: Math.max(12, input.noteHeight),
       ghost: input.ghost,
       overlayNotes: input.overlayNotes,
-      overlayRectangles: input.overlayRectangles
+      overlayRectangles: input.overlayRectangles,
+      scale: input.scale ?? defaultScaleState
     };
   }
 
@@ -246,7 +280,8 @@ export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
     viewport: PatternViewport,
     grid: GridDefinition,
     x: number,
-    y: number
+    y: number,
+    _renderModel?: PatternRenderModel
   ): PatternMusicalPoint {
     const lanes = buildDrumLanes();
     const highestLanePitch = highestVisualPitch(lanes);
@@ -314,7 +349,8 @@ function buildRenderLanes(
     id: string;
     pitch: number;
     label: string;
-    source?: unknown;
+      source?: unknown;
+      inScale?: boolean;
   }>,
   viewport: PatternViewport,
   highestPitch: number
@@ -324,6 +360,7 @@ function buildRenderLanes(
     label: lane.label,
     y: pitchToScreenY(lane.pitch, viewport, highestPitch),
     height: viewport.pixelsPerSemitone,
+    inScale: lane.inScale,
     source: lane.source
   }));
 }

@@ -1,5 +1,11 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import {
+    scaleDefinitions,
+    scaleRoots,
+    type PatternScaleMode,
+    type PatternScaleState
+  } from './pattern-scale';
 
   export let onAddNote: (() => void) | undefined = undefined;
   export let onZoomIn: () => void;
@@ -17,6 +23,10 @@
   export let onToggleProbabilityLane: (() => void) | undefined = undefined;
   export let onQuantizeSelected: (() => void) | undefined = undefined;
   export let onHumanizeSelected: (() => void) | undefined = undefined;
+  export let scale: PatternScaleState | undefined = undefined;
+  export let onScaleRootChange: ((root: number) => void) | undefined = undefined;
+  export let onScaleIdChange: ((scaleId: string) => void) | undefined = undefined;
+  export let onScaleModeChange: ((mode: PatternScaleMode) => void) | undefined = undefined;
 
   let highlightedControl = '';
   let highlightTimer: ReturnType<typeof setTimeout> | undefined;
@@ -94,6 +104,59 @@
       aria-label="Quantise selected notes"
       on:click={() => runViewAction('quantize-selected', onQuantizeSelected)}
     >Q</button>
+  {/if}
+
+  {#if scale && onScaleRootChange && onScaleIdChange && onScaleModeChange}
+    <span class="scale-controls" aria-label="Scale fold controls">
+      <select
+        aria-label="Scale root"
+        value={scale.root}
+        on:change={(event) =>
+          onScaleRootChange(Number((event.currentTarget as HTMLSelectElement).value))}
+      >
+        {#each scaleRoots as root}
+          <option value={root.value}>{root.name}</option>
+        {/each}
+      </select>
+
+      <select
+        aria-label="Scale"
+        value={scale.scaleId}
+        on:change={(event) =>
+          onScaleIdChange((event.currentTarget as HTMLSelectElement).value)}
+      >
+        {#each scaleDefinitions as definition}
+          <option value={definition.id}>{definition.name}</option>
+        {/each}
+      </select>
+
+      <span class="control-cluster" aria-label="Scale display mode">
+        <button
+          type="button"
+          class:highlighted={scale.mode === 'off'}
+          title="Disable scale guide"
+          aria-label="Disable scale guide"
+          aria-pressed={scale.mode === 'off'}
+          on:click={() => runViewAction('scale-off', () => onScaleModeChange('off'))}
+        >All</button>
+        <button
+          type="button"
+          class:highlighted={scale.mode === 'highlight'}
+          title="Highlight scale lanes"
+          aria-label="Highlight scale lanes"
+          aria-pressed={scale.mode === 'highlight'}
+          on:click={() => runViewAction('scale-highlight', () => onScaleModeChange('highlight'))}
+        >HL</button>
+        <button
+          type="button"
+          class:highlighted={scale.mode === 'fold'}
+          title="Fold to scale lanes"
+          aria-label="Fold to scale lanes"
+          aria-pressed={scale.mode === 'fold'}
+          on:click={() => runViewAction('scale-fold', () => onScaleModeChange('fold'))}
+        >Fold</button>
+      </span>
+    </span>
   {/if}
 
   <span class="control-cluster" aria-label="Horizontal zoom and pan">
@@ -181,6 +244,23 @@
     display: inline-flex;
     align-items: center;
     gap: var(--spacing-xs);
+  }
+
+  .scale-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    flex-wrap: wrap;
+  }
+
+  .scale-controls select {
+    width: auto;
+    min-width: 76px;
+    min-height: var(--control-height-md);
+    padding: 0 var(--spacing-sm);
+    border-radius: var(--radius-md);
+    background: var(--surface-2);
+    font-weight: 700;
   }
 
   .pattern-view-controls button {

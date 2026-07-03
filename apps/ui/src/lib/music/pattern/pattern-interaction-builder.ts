@@ -44,7 +44,8 @@ export function buildPatternInteractionContext(
     options.viewport,
     options.grid,
     x,
-    y
+    y,
+    options.renderModel
   );
 
   const hoveredItem = options.hoveredItem ?? hitTestRenderItem<PianoRollNoteView>(

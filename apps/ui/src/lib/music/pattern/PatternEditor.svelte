@@ -16,6 +16,7 @@
     PatternPointerResult,
     PatternRendererId
   } from './PatternEditorSession';
+  import type { PatternScaleMode } from './pattern-scale';
   import PatternToolbar from './PatternToolbar.svelte';
   import PatternViewControls from './PatternViewControls.svelte';
 
@@ -202,6 +203,24 @@
     showProbabilityLane = !showProbabilityLane;
   }
 
+  function setScaleRoot(root: number) {
+    session.setScaleRoot(root);
+    session.applyViewport(session.viewport, pianoRoll);
+    invalidateSession();
+  }
+
+  function setScaleId(scaleId: string) {
+    session.setScaleId(scaleId);
+    session.applyViewport(session.viewport, pianoRoll);
+    invalidateSession();
+  }
+
+  function setScaleMode(mode: PatternScaleMode) {
+    session.setScaleMode(mode);
+    session.applyViewport(session.viewport, pianoRoll);
+    invalidateSession();
+  }
+
   function humanizeSelectedNotes() {
     if (!pianoRoll) return;
 
@@ -305,6 +324,10 @@
         onToggleProbabilityLane={toggleProbabilityLane}
         onQuantizeSelected={quantizeSelectedNotes}
         onHumanizeSelected={humanizeSelectedNotes}
+        scale={session.activeRendererId === 'piano-roll' ? session.scale : undefined}
+        onScaleRootChange={setScaleRoot}
+        onScaleIdChange={setScaleId}
+        onScaleModeChange={setScaleMode}
         onZoomIn={() => {
           session.zoomViewportX(viewportZoomStep, pianoRoll);
           invalidateSession();

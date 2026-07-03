@@ -26,6 +26,12 @@ import {
   type PatternRenderModel,
   type PatternRenderer
 } from './pattern-renderer';
+import {
+  defaultScaleState,
+  isPitchInScale,
+  type PatternScaleMode,
+  type PatternScaleState
+} from './pattern-scale';
 import { PatternRenderModelBuilder } from './PatternRenderModelBuilder';
 import { handlePatternShortcut } from './pattern-shortcuts';
 import type {
@@ -111,6 +117,7 @@ export class PatternEditorSession implements EditorSession {
   ghostBeat = 0;
   ghostPitch = middleCPitch;
   showGhost = false;
+  scale: PatternScaleState = { ...defaultScaleState };
 
   private lastPanX = 0;
   private lastPanY = 0;
@@ -234,6 +241,24 @@ export class PatternEditorSession implements EditorSession {
     this.refreshOverlay();
   }
 
+  setScaleRoot(root: number): void {
+    this.scale = {
+      ...this.scale,
+      root: Math.min(11, Math.max(0, Math.round(root)))
+    };
+    this.refreshOverlay();
+  }
+
+  setScaleId(scaleId: string): void {
+    this.scale = { ...this.scale, scaleId };
+    this.refreshOverlay();
+  }
+
+  setScaleMode(mode: PatternScaleMode): void {
+    this.scale = { ...this.scale, mode };
+    this.refreshOverlay();
+  }
+
   applyViewport(next: PatternViewport, pianoRoll: PianoRollView | undefined): void {
     this.viewport = clampViewport(next, this.navigationBounds(pianoRoll));
     this.refreshOverlay();
@@ -346,6 +371,12 @@ export class PatternEditorSession implements EditorSession {
 
   private activePitchCount(pianoRoll: PianoRollView | undefined): number {
     if (this.activeRendererId === 'drum-rack') return DRUM_RACK_LANE_COUNT;
+    if (this.scale.mode === 'fold' && pianoRoll) {
+      return Math.max(
+        1,
+        pianoRoll.pitchRows.filter((pitch) => isPitchInScale(pitch, this.scale)).length
+      );
+    }
 
     return pianoRoll ? pianoRoll.pitchCount : 0;
   }

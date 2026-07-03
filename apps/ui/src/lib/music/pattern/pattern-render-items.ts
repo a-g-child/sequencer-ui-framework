@@ -3,6 +3,7 @@ export type RenderLane = {
   label: string;
   y: number;
   height: number;
+  inScale?: boolean;
   source?: unknown;
 };
 

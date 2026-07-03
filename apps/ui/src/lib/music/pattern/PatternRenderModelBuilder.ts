@@ -41,7 +41,8 @@ export class PatternRenderModelBuilder
         ? { beat: session.ghostBeat, pitch: session.ghostPitch }
         : undefined,
       overlayNotes: session.overlayNotes(),
-      overlayRectangles: session.overlayRectangles()
+      overlayRectangles: session.overlayRectangles(),
+      scale: session.scale
     });
   }
 }
