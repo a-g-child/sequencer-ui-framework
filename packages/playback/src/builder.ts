@@ -22,8 +22,15 @@ export class PlaybackModelBuilder {
 
         if (!pattern) continue
 
-        const loopCount = Math.max(1, Math.floor(placement.loopCount ?? 1))
         const clipLength = placement.length ?? pattern.length
+        const loop = placement.loop ?? true
+        const loopStart = clampLoopStart(placement.loopStart ?? 0, clipLength)
+        const loopLength = clampLoopLength(
+          placement.loopLength ?? clipLength,
+          loopStart,
+          clipLength
+        )
+        const loopCount = loop ? 1 : Math.max(1, Math.floor(placement.loopCount ?? 1))
 
         for (let loopIndex = 0; loopIndex < loopCount; loopIndex += 1) {
           const clipStart = placement.start + loopIndex * clipLength
@@ -34,6 +41,9 @@ export class PlaybackModelBuilder {
             name: placement.name,
             start: clipStart,
             length: clipLength,
+            loop,
+            loopStart,
+            loopLength,
             sourceStart: 0,
             sourceLength: pattern.length,
             loopIndex
@@ -49,7 +59,11 @@ export class PlaybackModelBuilder {
             }
 
             const beat = clipStart + effectiveBeat
-            const duration = Math.max(0, Math.min(event.duration, clipLength - effectiveBeat))
+            const maximumDuration =
+              loop && effectiveBeat >= loopStart && effectiveBeat < loopStart + loopLength
+                ? loopStart + loopLength - effectiveBeat
+                : clipLength - effectiveBeat
+            const duration = Math.max(0, Math.min(event.duration, maximumDuration))
 
             notes.push({
               id: `${clip.id}:${event.id}`,
@@ -83,4 +97,22 @@ export class PlaybackModelBuilder {
       notes
     })
   }
+}
+
+function clampLoopStart(loopStart: number, clipLength: number): number {
+  if (!Number.isFinite(loopStart)) return 0
+
+  return Math.min(Math.max(0, loopStart), Math.max(0, clipLength))
+}
+
+function clampLoopLength(
+  loopLength: number,
+  loopStart: number,
+  clipLength: number
+): number {
+  const maximumLength = Math.max(0.25, clipLength - loopStart)
+
+  if (!Number.isFinite(loopLength)) return maximumLength
+
+  return Math.min(Math.max(0.25, loopLength), maximumLength)
 }

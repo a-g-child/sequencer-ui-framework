@@ -1,10 +1,13 @@
 import {
   AddTrackOperation,
+  CompositeOperation,
   MovePatternPlacementOperation,
   RenameEntityOperation,
   ResizePatternPlacementOperation,
   SetParameterValueOperation,
+  SetPatternPlacementLoopOperation,
   SetPatternPlacementLoopCountOperation,
+  SetPatternPlacementLoopRegionOperation,
   type BeatTime,
   type Operation,
   type ParameterValue,
@@ -26,6 +29,13 @@ import type { PlacementInspectorView } from './inspector/inspector-model'
 import type { NoteInspectorView } from './inspector/inspector-model'
 import type { PianoRollNoteView } from './editors/piano-roll/piano-roll-model'
 import type { TimelinePlacementView } from './timeline/timeline-model'
+
+export type ClipLoopRegion = {
+  clipStart: BeatTime
+  clipLength: BeatTime
+  loopStart: BeatTime
+  loopLength: BeatTime
+}
 
 export class AppController {
   constructor(private readonly app: SequencerApplication) {}
@@ -290,6 +300,185 @@ export class AppController {
       )
     )
     return true
+  }
+
+  setPatternClipLoop(patternId: string | undefined, loop: boolean): boolean {
+    if (!patternId) return false
+
+    const placement = this.findFirstPlacementForPattern(patternId)
+
+    if (!placement || (placement.placement.loop ?? true) === loop) return false
+
+    this.app.documentStore.execute(
+      new SetPatternPlacementLoopOperation(
+        placement.trackId,
+        placement.placement.id,
+        loop
+      )
+    )
+    return true
+  }
+
+  setPatternClipLoopRegion(
+    patternId: string | undefined,
+    loopStart: number,
+    loopLength: number
+  ): boolean {
+    if (!patternId || !Number.isFinite(loopStart) || !Number.isFinite(loopLength)) {
+      return false
+    }
+
+    const placement = this.findFirstPlacementForPattern(patternId)
+
+    if (!placement) return false
+
+    const clipLength = this.patternClipLength(patternId, placement.placement.length)
+    const nextLoopStart = Math.min(Math.max(0, loopStart), Math.max(0, clipLength - 0.25))
+    const nextLoopLength = Math.min(
+      Math.max(0.25, loopLength),
+      Math.max(0.25, clipLength - nextLoopStart)
+    )
+    const current = this.patternClipLoopRegion(patternId)
+
+    if (
+      current.loopStart === nextLoopStart &&
+      current.loopLength === nextLoopLength
+    ) {
+      return false
+    }
+
+    this.app.documentStore.execute(
+      new SetPatternPlacementLoopRegionOperation(
+        placement.trackId,
+        placement.placement.id,
+        nextLoopStart,
+        nextLoopLength
+      )
+    )
+    return true
+  }
+
+  setPatternClipBounds(
+    patternId: string | undefined,
+    clipStart: number,
+    clipLength: number
+  ): boolean {
+    if (!patternId || !Number.isFinite(clipStart) || !Number.isFinite(clipLength)) {
+      return false
+    }
+
+    const placement = this.findFirstPlacementForPattern(patternId)
+
+    if (!placement) return false
+
+    const nextClipStart = Math.max(0, clipStart)
+    const nextClipLength = Math.max(0.25, clipLength)
+    const currentRegion = this.patternClipLoopRegion(patternId)
+
+    if (
+      currentRegion.clipStart === nextClipStart &&
+      currentRegion.clipLength === nextClipLength
+    ) {
+      return false
+    }
+
+    const nextLoopStart = Math.min(
+      currentRegion.loopStart,
+      Math.max(0, nextClipLength - 0.25)
+    )
+    const nextLoopLength = Math.min(
+      currentRegion.loopLength,
+      Math.max(0.25, nextClipLength - nextLoopStart)
+    )
+    const operation = new CompositeOperation('Set Pattern Clip Bounds')
+
+    operation
+      .add(
+        new MovePatternPlacementOperation(
+          placement.trackId,
+          placement.placement.id,
+          nextClipStart
+        )
+      )
+      .add(
+        new ResizePatternPlacementOperation(
+          placement.trackId,
+          placement.placement.id,
+          nextClipLength
+        )
+      )
+
+    if (
+      currentRegion.loopStart !== nextLoopStart ||
+      currentRegion.loopLength !== nextLoopLength
+    ) {
+      operation.add(
+        new SetPatternPlacementLoopRegionOperation(
+          placement.trackId,
+          placement.placement.id,
+          nextLoopStart,
+          nextLoopLength
+        )
+      )
+    }
+
+    this.app.documentStore.execute(operation)
+    return true
+  }
+
+  isPatternClipLooping(patternId: string | undefined): boolean {
+    if (!patternId) return true
+
+    const placement = this.findFirstPlacementForPattern(patternId)
+
+    return placement?.placement.loop ?? true
+  }
+
+  patternClipLoopRegion(patternId: string | undefined): ClipLoopRegion {
+    if (!patternId) {
+      return { clipStart: 0, clipLength: 0, loopStart: 0, loopLength: 0 }
+    }
+
+    const placement = this.findFirstPlacementForPattern(patternId)
+
+    if (!placement) {
+      return { clipStart: 0, clipLength: 0, loopStart: 0, loopLength: 0 }
+    }
+
+    const clipLength = this.patternClipLength(patternId, placement.placement.length)
+    const loopStart = Math.min(
+      Math.max(0, placement.placement.loopStart ?? 0),
+      Math.max(0, clipLength)
+    )
+    const loopLength = Math.min(
+      Math.max(0.25, placement.placement.loopLength ?? clipLength),
+      Math.max(0.25, clipLength - loopStart)
+    )
+
+    return {
+      clipStart: placement.placement.start,
+      clipLength,
+      loopStart,
+      loopLength
+    }
+  }
+
+  private findFirstPlacementForPattern(patternId: string) {
+    for (const track of this.app.documentStore.document.tracks.values()) {
+      const placement = track.placements.find(
+        (candidate) => candidate.target === patternId
+      )
+
+      if (placement) {
+        return { trackId: track.id, placement }
+      }
+    }
+
+    return undefined
+  }
+
+  private patternClipLength(patternId: string, placementLength: number | undefined): number {
+    return placementLength ?? this.app.documentStore.document.patterns.get(patternId).length
   }
 
   createNote(

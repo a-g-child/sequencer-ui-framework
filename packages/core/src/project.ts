@@ -17,6 +17,9 @@ export interface Track extends Entity, ParameterOwner {
 export interface PatternPlacement extends Relationship<Track, Pattern> {
   start: BeatTime;
   length?: BeatTime;
+  loop?: boolean;
+  loopStart?: BeatTime;
+  loopLength?: BeatTime;
   loopCount?: number;
 }
 

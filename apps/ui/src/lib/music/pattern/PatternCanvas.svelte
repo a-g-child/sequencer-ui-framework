@@ -10,6 +10,7 @@
   import PatternProbabilityLane from './PatternProbabilityLane.svelte';
   import PatternVelocityLane from './PatternVelocityLane.svelte';
   import {
+    beatToScreenX,
     patternLengthToScreenWidth,
     pitchRangeToScreenHeight,
     pitchToScreenY
@@ -21,6 +22,7 @@
   } from './pattern-automation';
 
   export let renderModel: PatternRenderModel;
+  export let playheadBeat: number | undefined = undefined;
   export let height: string | number | undefined = undefined;
   export let width: string | number | undefined = undefined;
   export let showVelocityLane = false;
@@ -88,6 +90,17 @@
   $: editorSurfaceStyle =
     `width: ${editorWidth}px; height: ${editorHeight}px;` +
     (viewportHeight ? ` min-height: ${viewportHeight};` : '');
+  $: playheadX =
+    playheadBeat === undefined
+      ? undefined
+      : beatToScreenX(playheadBeat, renderModel.viewport);
+  $: showPlayhead =
+    playheadBeat !== undefined &&
+    playheadBeat >= 0 &&
+    playheadBeat <= renderModel.visibleLength &&
+    playheadX !== undefined &&
+    playheadX >= 0 &&
+    playheadX <= editorWidth;
   $: if (
     scrollElement &&
     bodyScrollElement &&
@@ -290,6 +303,14 @@
           />
 
           <PatternOverlays {renderModel} />
+
+          {#if showPlayhead}
+            <div
+              class="pattern-playhead"
+              aria-hidden="true"
+              style={`transform: translateX(${playheadX}px);`}
+            ></div>
+          {/if}
         </div>
       </div>
 
@@ -314,3 +335,17 @@
     </div>
   </div>
 </div>
+
+<style>
+  .pattern-playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 5;
+    width: 2px;
+    pointer-events: none;
+    background: var(--accent-strong);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--surface) 70%, transparent);
+  }
+</style>

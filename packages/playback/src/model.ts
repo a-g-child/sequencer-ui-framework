@@ -34,6 +34,9 @@ export interface PlaybackClip {
   readonly name: string
   readonly start: BeatTime
   readonly length: BeatTime
+  readonly loop: boolean
+  readonly loopStart: BeatTime
+  readonly loopLength: BeatTime
   readonly sourceStart: BeatTime
   readonly sourceLength: BeatTime
   readonly loopIndex: number

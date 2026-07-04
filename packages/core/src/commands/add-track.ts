@@ -50,8 +50,7 @@ export class AddTrackCommand implements Command {
       track.id,
       pattern.id,
       this.start,
-      pattern.length,
-      1
+      pattern.length
     );
     const existingDefinitionIds = new Set(
       document.parameterDefinitions.values().map((definition) => definition.id)

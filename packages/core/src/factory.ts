@@ -35,6 +35,9 @@ export function createPatternPlacement(
   target: Pattern["id"],
   start: BeatTime,
   length?: BeatTime,
+  loop = true,
+  loopStart?: BeatTime,
+  loopLength?: BeatTime,
   loopCount?: number
 ): PatternPlacement {
   return {
@@ -44,6 +47,9 @@ export function createPatternPlacement(
     target,
     start,
     length,
+    loop,
+    loopStart,
+    loopLength,
     loopCount
   };
 }
@@ -63,7 +69,7 @@ export function createDocument(name = "Sequencer"): SequencerDocument {
   const timeline = createTimeline();
 
   track.placements.push(
-    createPatternPlacement(track.id, pattern.id, 0, pattern.length, 1)
+    createPatternPlacement(track.id, pattern.id, 0, pattern.length)
   );
   patterns.add(pattern);
   tracks.add(track);

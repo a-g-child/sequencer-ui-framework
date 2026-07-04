@@ -6,6 +6,7 @@
     type PatternScaleMode,
     type PatternScaleState
   } from './pattern-scale';
+  import type { ClipLoopRegion } from '../../app-controller';
 
   export let onAddNote: (() => void) | undefined = undefined;
   export let onZoomIn: () => void;
@@ -23,6 +24,11 @@
   export let onToggleProbabilityLane: (() => void) | undefined = undefined;
   export let showAutomationLane = false;
   export let onToggleAutomationLane: (() => void) | undefined = undefined;
+  export let loopClip = true;
+  export let loopRegion: ClipLoopRegion | undefined = undefined;
+  export let onToggleLoopClip: (() => void) | undefined = undefined;
+  export let onClipBoundsChange: ((clipStart: number, clipLength: number) => void) | undefined = undefined;
+  export let onLoopRegionChange: ((loopStart: number, loopLength: number) => void) | undefined = undefined;
   export let onQuantizeSelected: (() => void) | undefined = undefined;
   export let onHumanizeSelected: (() => void) | undefined = undefined;
   export let scale: PatternScaleState | undefined = undefined;
@@ -97,6 +103,81 @@
       aria-pressed={showAutomationLane}
       on:click={() => runViewAction('automation-lane', onToggleAutomationLane)}
     >⌁</button>
+  {/if}
+
+  {#if onToggleLoopClip}
+    <span class="loop-controls" aria-label="Clip loop controls">
+      <button
+        type="button"
+        class:highlighted={loopClip || highlightedControl === 'loop-clip'}
+        title={loopClip ? 'Disable clip loop' : 'Enable clip loop'}
+        aria-label={loopClip ? 'Disable clip loop' : 'Enable clip loop'}
+        aria-pressed={loopClip}
+        on:click={() => runViewAction('loop-clip', onToggleLoopClip)}
+      >↻</button>
+
+      {#if loopRegion && onClipBoundsChange}
+        <input
+          type="number"
+          min="0"
+          step="0.25"
+          value={loopRegion.clipStart}
+          title="Clip start"
+          aria-label="Clip start"
+          on:change={(event) =>
+            onClipBoundsChange(
+              Number((event.currentTarget as HTMLInputElement).value),
+              loopRegion?.clipLength ?? 0.25
+            )}
+        />
+        <input
+          type="number"
+          min="0.25"
+          step="0.25"
+          value={loopRegion.clipLength}
+          title="Clip length"
+          aria-label="Clip length"
+          on:change={(event) =>
+            onClipBoundsChange(
+              loopRegion?.clipStart ?? 0,
+              Number((event.currentTarget as HTMLInputElement).value)
+            )}
+        />
+      {/if}
+
+      {#if loopRegion && onLoopRegionChange}
+        <input
+          type="number"
+          min="0"
+          max={Math.max(0, loopRegion.clipLength - 0.25)}
+          step="0.25"
+          value={loopRegion.loopStart}
+          title="Loop start"
+          aria-label="Loop start"
+          disabled={!loopClip}
+          on:change={(event) =>
+            onLoopRegionChange(
+              Number((event.currentTarget as HTMLInputElement).value),
+              loopRegion?.loopLength ?? 0.25
+            )}
+        />
+        <input
+          type="number"
+          min="0.25"
+          max={Math.max(0.25, loopRegion.clipLength - loopRegion.loopStart)}
+          step="0.25"
+          value={loopRegion.loopLength}
+          title="Loop length"
+          aria-label="Loop length"
+          disabled={!loopClip}
+          on:change={(event) =>
+            onLoopRegionChange(
+              loopRegion?.loopStart ?? 0,
+              Number((event.currentTarget as HTMLInputElement).value)
+            )}
+        />
+      {/if}
+    </span>
   {/if}
 
   {#if onHumanizeSelected}
@@ -259,6 +340,12 @@
     gap: var(--spacing-xs);
   }
 
+  .loop-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+  }
+
   .scale-controls {
     display: inline-flex;
     align-items: center;
@@ -271,6 +358,15 @@
     min-width: 76px;
     min-height: var(--control-height-md);
     padding: 0 var(--spacing-sm);
+    border-radius: var(--radius-md);
+    background: var(--surface-2);
+    font-weight: 700;
+  }
+
+  .loop-controls input {
+    width: 64px;
+    min-height: var(--control-height-md);
+    padding: 0 var(--spacing-xs);
     border-radius: var(--radius-md);
     background: var(--surface-2);
     font-weight: 700;

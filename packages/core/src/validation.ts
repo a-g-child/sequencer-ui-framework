@@ -71,13 +71,33 @@ export function validateDocument(document: SequencerDocument): ValidationIssue[]
         });
       }
 
-      const placementEnd =
-        placement.start + (placement.length ?? 0) * (placement.loopCount ?? 1);
+      const placementLength = placement.length ?? 0;
+      const placementEnd = (placement.loop ?? true)
+        ? document.timeline.length
+        : placement.start + placementLength * (placement.loopCount ?? 1);
+      const loopStart = placement.loopStart ?? 0;
+      const loopLength = placement.loopLength ?? placementLength;
 
       if (placementEnd > document.timeline.length) {
         issues.push({
           level: "warning",
           message: "Pattern placement extends beyond the project timeline length",
+          entityId: placement.id
+        });
+      }
+
+      if (loopStart < 0 || loopStart > placementLength) {
+        issues.push({
+          level: "error",
+          message: "Pattern placement loop start must be within the clip",
+          entityId: placement.id
+        });
+      }
+
+      if (loopLength <= 0 || loopStart + loopLength > placementLength) {
+        issues.push({
+          level: "error",
+          message: "Pattern placement loop length must fit within the clip",
           entityId: placement.id
         });
       }

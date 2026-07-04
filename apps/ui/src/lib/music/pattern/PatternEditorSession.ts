@@ -59,6 +59,7 @@ export type PatternEditorSessionOptions = {
   totalBars?: number;
   beatsPerBar?: number;
   beatDivisions?: number;
+  visibleLength?: number;
 };
 
 export type PatternEditorTimelineOptions = {
@@ -66,6 +67,7 @@ export type PatternEditorTimelineOptions = {
   totalBars?: number;
   beatsPerBar?: number;
   beatDivisions?: number;
+  visibleLength?: number;
 };
 
 export type PatternPointerResult = {
@@ -124,6 +126,7 @@ export class PatternEditorSession implements EditorSession {
   private totalBars = defaultTotalBars;
   private beatsPerBar = defaultBeatsPerBar;
   private beatDivisions = defaultBeatDivisions;
+  private explicitVisibleLength: number | undefined;
   private viewportWidth = 0;
   private viewportHeight = 0;
 
@@ -137,7 +140,8 @@ export class PatternEditorSession implements EditorSession {
       bars: options.bars,
       totalBars: options.totalBars,
       beatsPerBar: options.beatsPerBar,
-      beatDivisions: options.beatDivisions
+      beatDivisions: options.beatDivisions,
+      visibleLength: options.visibleLength
     });
     this.rendererRegistry.register(new PianoRollRenderer());
     this.rendererRegistry.register(new SampleGridRenderer());
@@ -179,14 +183,20 @@ export class PatternEditorSession implements EditorSession {
       options.beatDivisions,
       defaultBeatDivisions
     );
+    const nextVisibleLength =
+      typeof options.visibleLength === 'number' && options.visibleLength > 0
+        ? options.visibleLength
+        : undefined;
     const changed =
       nextTotalBars !== this.totalBars ||
       nextBeatsPerBar !== this.beatsPerBar ||
-      nextBeatDivisions !== this.beatDivisions;
+      nextBeatDivisions !== this.beatDivisions ||
+      nextVisibleLength !== this.explicitVisibleLength;
 
     this.totalBars = nextTotalBars;
     this.beatsPerBar = nextBeatsPerBar;
     this.beatDivisions = nextBeatDivisions;
+    this.explicitVisibleLength = nextVisibleLength;
     this.grid = createGridDefinition({
       ...this.grid,
       majorEvery: nextBeatsPerBar,
@@ -382,7 +392,7 @@ export class PatternEditorSession implements EditorSession {
   }
 
   visibleLength(pianoRoll: PianoRollView | undefined): number {
-    return this.totalBars * this.beatsPerBar;
+    return this.explicitVisibleLength ?? this.totalBars * this.beatsPerBar;
   }
 
   noteHeight(): number {

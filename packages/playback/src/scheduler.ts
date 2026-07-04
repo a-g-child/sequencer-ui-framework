@@ -3,7 +3,6 @@ import type { ClockState } from './clock'
 import type { PlaybackEvent } from './events'
 import type { PlaybackModel } from './model'
 import { createEmptyPlaybackModel } from './model'
-import type { PlaybackOutput } from './output'
 import { beatsToMs, msToBeats } from './tempo'
 
 export interface Scheduler {
@@ -11,7 +10,7 @@ export interface Scheduler {
   start(position: BeatTime): void
   stop(): void
   seek(position: BeatTime): void
-  tick(state: ClockState): void
+  tick(state: ClockState): readonly PlaybackEvent[]
   scheduleLookahead(window: number): readonly PlaybackEvent[]
 }
 
@@ -23,7 +22,6 @@ export interface SchedulerStatus {
 }
 
 export interface TypeScriptSchedulerOptions {
-  readonly output?: PlaybackOutput
   readonly lookaheadMs?: number
 }
 
@@ -77,12 +75,12 @@ export class TypeScriptScheduler implements Scheduler {
     this.emittedEventIds.clear()
   }
 
-  tick(state: ClockState): void {
-    if (!this.running) return
+  tick(state: ClockState): readonly PlaybackEvent[] {
+    if (!this.running) return []
 
     this.currentBeat = state.beat
     this.currentTimeMs = state.timeMs
-    this.scheduleLookahead(this.options.lookaheadMs ?? 120)
+    return this.scheduleLookahead(this.options.lookaheadMs ?? 120)
   }
 
   scheduleLookahead(window: number): readonly PlaybackEvent[] {
@@ -93,59 +91,107 @@ export class TypeScriptScheduler implements Scheduler {
     const toBeat = Math.max(fromBeat, this.currentBeat + windowBeats)
     const events = this.buildEvents(fromBeat, toBeat)
 
+    const emittedEvents: PlaybackEvent[] = []
+
     for (const event of events) {
       if (this.emittedEventIds.has(event.id)) continue
 
       this.emittedEventIds.add(event.id)
       this.lastEmittedEvent = event
-      this.options.output?.handleEvent(event)
+      emittedEvents.push(event)
     }
 
     this.scheduledUntilBeat = toBeat
-    this.queuedEventCount = events.length
+    this.queuedEventCount = emittedEvents.length
 
-    return events
+    return emittedEvents
   }
 
   private buildEvents(fromBeat: BeatTime, toBeat: BeatTime): PlaybackEvent[] {
     const tracksById = new Map(this.model.tracks.map((track) => [track.id, track]))
+    const clipsById = new Map(this.model.clips.map((clip) => [clip.id, clip]))
     const events: PlaybackEvent[] = []
 
     for (const note of this.model.notes) {
-      const noteOffBeat = note.beat + note.duration
+      const clip = clipsById.get(note.clipId)
 
-      if (note.beat >= fromBeat && note.beat < toBeat) {
-        const track = tracksById.get(note.trackId)
-        events.push({
-          id: `${note.id}:on`,
-          type: 'note:on',
-          noteId: note.id,
-          trackId: note.trackId,
-          channel: track?.channel,
-          pitch: note.pitch,
-          velocity: note.velocity,
-          beat: note.beat,
-          timeMs: this.eventTimeMs(note.beat)
-        })
+      if (!clip?.loop) {
+        this.addNoteEvents(events, tracksById, note, note.beat, fromBeat, toBeat)
+        continue
       }
 
-      if (noteOffBeat >= fromBeat && noteOffBeat < toBeat) {
-        const track = tracksById.get(note.trackId)
-        events.push({
-          id: `${note.id}:off`,
-          type: 'note:off',
-          noteId: note.id,
-          trackId: note.trackId,
-          channel: track?.channel,
-          pitch: note.pitch,
-          velocity: 0,
-          beat: noteOffBeat,
-          timeMs: this.eventTimeMs(noteOffBeat)
-        })
+      const loopStartBeat = clip.start + clip.loopStart
+      const loopEndBeat = loopStartBeat + clip.loopLength
+
+      if (note.beat < loopStartBeat) {
+        this.addNoteEvents(events, tracksById, note, note.beat, fromBeat, toBeat)
+        continue
+      }
+
+      if (note.beat >= loopEndBeat) continue
+
+      const firstRepeat = Math.max(
+        0,
+        Math.floor((fromBeat - note.beat - note.duration) / clip.loopLength)
+      )
+      const lastRepeat = Math.ceil((toBeat - note.beat) / clip.loopLength)
+
+      for (let repeatIndex = firstRepeat; repeatIndex <= lastRepeat; repeatIndex += 1) {
+        this.addNoteEvents(
+          events,
+          tracksById,
+          note,
+          note.beat + repeatIndex * clip.loopLength,
+          fromBeat,
+          toBeat,
+          repeatIndex
+        )
       }
     }
 
     return events.sort((a, b) => a.beat - b.beat || sortEventType(a) - sortEventType(b))
+  }
+
+  private addNoteEvents(
+    events: PlaybackEvent[],
+    tracksById: Map<string, { readonly channel: number }>,
+    note: { readonly id: string; readonly trackId: string; readonly pitch: number; readonly velocity: number; readonly duration: number },
+    beat: BeatTime,
+    fromBeat: BeatTime,
+    toBeat: BeatTime,
+    repeatIndex = 0
+  ): void {
+    const noteOffBeat = beat + note.duration
+    const track = tracksById.get(note.trackId)
+    const repeatSuffix = repeatIndex > 0 ? `:repeat-${repeatIndex}` : ''
+
+    if (beat >= fromBeat && beat < toBeat) {
+      events.push({
+        id: `${note.id}${repeatSuffix}:on`,
+        type: 'note:on',
+        noteId: note.id,
+        trackId: note.trackId,
+        channel: track?.channel,
+        pitch: note.pitch,
+        velocity: note.velocity,
+        beat,
+        timeMs: this.eventTimeMs(beat)
+      })
+    }
+
+    if (noteOffBeat >= fromBeat && noteOffBeat < toBeat) {
+      events.push({
+        id: `${note.id}${repeatSuffix}:off`,
+        type: 'note:off',
+        noteId: note.id,
+        trackId: note.trackId,
+        channel: track?.channel,
+        pitch: note.pitch,
+        velocity: 0,
+        beat: noteOffBeat,
+        timeMs: this.eventTimeMs(noteOffBeat)
+      })
+    }
   }
 
   private eventTimeMs(beat: BeatTime): number {

@@ -7,6 +7,7 @@
   } from '@sequencer/music';
   import { onMount, tick } from 'svelte';
   import type { AppController } from '../../app-controller';
+  import type { ClipLoopRegion } from '../../app-controller';
   import type { EditorKind } from '../../editors/editor-types';
   import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model';
   import type { RenderInteractionItem } from '../../framework/editor';
@@ -27,6 +28,13 @@
   export let controller: AppController;
   export let pianoRoll: PianoRollView | undefined;
   export let activeEditor: EditorKind;
+  export let playheadBeat: number | undefined = undefined;
+  export let clipLength: number | undefined = undefined;
+  export let loopClip = true;
+  export let loopRegion: ClipLoopRegion | undefined = undefined;
+  export let onLoopClipChange: ((loop: boolean) => void) | undefined = undefined;
+  export let onLoopRegionChange: ((loopStart: number, loopLength: number) => void) | undefined = undefined;
+  export let onClipBoundsChange: ((clipStart: number, clipLength: number) => void) | undefined = undefined;
   export let onEditorChange: (editor: EditorKind) => void;
   export let syncView: () => void;
   export let height: string | number | undefined = undefined;
@@ -64,17 +72,18 @@
       bars,
       totalBars,
       beatsPerBar,
-      beatDivisions
+      beatDivisions,
+      visibleLength: clipLength
     });
   }
 
   $: nextTimelineRevision =
-    `${totalBars ?? bars ?? ''}:${beatsPerBar ?? ''}:${beatDivisions ?? ''}`;
+    `${totalBars ?? bars ?? ''}:${beatsPerBar ?? ''}:${beatDivisions ?? ''}:${clipLength ?? ''}`;
 
   $: if (session && nextTimelineRevision !== timelineRevision) {
     timelineRevision = nextTimelineRevision;
 
-    if (session.configureTimeline({ bars, totalBars, beatsPerBar, beatDivisions })) {
+    if (session.configureTimeline({ bars, totalBars, beatsPerBar, beatDivisions, visibleLength: clipLength })) {
       session.applyViewport(session.viewport, pianoRoll);
       invalidateSession();
     }
@@ -329,6 +338,7 @@
       <PatternCanvas
         bind:this={patternCanvas}
         {renderModel}
+        {playheadBeat}
         {height}
         {width}
         {showVelocityLane}
@@ -362,6 +372,13 @@
         onToggleProbabilityLane={toggleProbabilityLane}
         {showAutomationLane}
         onToggleAutomationLane={toggleAutomationLane}
+        {loopClip}
+        {loopRegion}
+        onToggleLoopClip={onLoopClipChange
+          ? () => onLoopClipChange(!loopClip)
+          : undefined}
+        {onLoopRegionChange}
+        {onClipBoundsChange}
         onQuantizeSelected={quantizeSelectedNotes}
         onHumanizeSelected={humanizeSelectedNotes}
         scale={session.activeRendererId === 'piano-roll' ? session.scale : undefined}

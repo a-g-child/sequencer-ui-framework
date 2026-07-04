@@ -70,6 +70,10 @@
   let automationTargets = buildPatternAutomationTargets(
     buildTrackParameterViews(activePatternTrack)
   )
+  let activePatternClipLoop = controller.isPatternClipLooping(activePattern?.id)
+  let activePatternClipLoopRegion = controller.patternClipLoopRegion(
+    activePattern?.id
+  )
   let draftName = inspector.type === 'track' ? inspector.title : ''
   let numberDrafts: Record<string, number> = {}
   let transportPlaying = app.editorTransport.playing
@@ -84,6 +88,12 @@
   let canUndo = store.history.canUndo()
   let canRedo = store.history.canRedo()
   let activeEditor: EditorKind = 'piano-roll';
+  $: activePatternPlayheadBeat = localPlayheadBeat(
+    transportPlaying,
+    transportBeat,
+    activePatternClipLoop,
+    activePatternClipLoopRegion
+  )
   function rebuildInspector() {
     selected = store.selection.current()
     selectedTrackId = selected?.type === 'track' ? selected.id : ''
@@ -102,6 +112,8 @@
     automationTargets = buildPatternAutomationTargets(
       buildTrackParameterViews(activePatternTrack)
     )
+    activePatternClipLoop = controller.isPatternClipLooping(activePattern?.id)
+    activePatternClipLoopRegion = controller.patternClipLoopRegion(activePattern?.id)
     rebuildInspector()
     issues = validateDocument(store.document)
     canUndo = store.history.canUndo()
@@ -205,6 +217,55 @@
     const bpm = readNumberValue(event)
 
     controller.setRuntimeBpm(bpm)
+  }
+
+  function toggleActivePatternClipLoop(loop: boolean) {
+    if (!controller.setPatternClipLoop(activePattern?.id, loop)) return
+
+    syncView()
+  }
+
+  function setActivePatternClipLoopRegion(loopStart: number, loopLength: number) {
+    if (
+      !controller.setPatternClipLoopRegion(
+        activePattern?.id,
+        loopStart,
+        loopLength
+      )
+    ) {
+      return
+    }
+
+    syncView()
+  }
+
+  function setActivePatternClipBounds(clipStart: number, clipLength: number) {
+    if (
+      !controller.setPatternClipBounds(activePattern?.id, clipStart, clipLength)
+    ) {
+      return
+    }
+
+    syncView()
+  }
+
+  function localPlayheadBeat(
+    playing: boolean,
+    beat: number,
+    loopClip: boolean,
+    region: { clipStart: number; clipLength: number; loopStart: number; loopLength: number }
+  ): number | undefined {
+    if (!playing || region.clipLength <= 0) return undefined
+
+    const localBeat = beat - region.clipStart
+
+    if (localBeat < 0) return undefined
+
+    if (!loopClip || localBeat < region.loopStart || region.loopLength <= 0) {
+      return localBeat <= region.clipLength ? localBeat : undefined
+    }
+
+    return region.loopStart + ((localBeat - region.loopStart) % region.loopLength)
   }
 
   function selectTrack(track: Track) {
@@ -388,6 +449,13 @@
         {controller}
         {pianoRoll}
         {activeEditor}
+        playheadBeat={activePatternPlayheadBeat}
+        loopClip={activePatternClipLoop}
+        loopRegion={activePatternClipLoopRegion}
+        clipLength={activePatternClipLoopRegion.clipLength}
+        onLoopClipChange={toggleActivePatternClipLoop}
+        onLoopRegionChange={setActivePatternClipLoopRegion}
+        onClipBoundsChange={setActivePatternClipBounds}
         {automationTargets}
         onEditorChange={(editor) => {
           activeEditor = editor;

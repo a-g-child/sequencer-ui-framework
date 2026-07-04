@@ -3,12 +3,20 @@ import { PlaybackModelBuilder } from './builder'
 import type { ClockState } from './clock'
 import type { PlaybackEvent } from './events'
 import type { PlaybackModel } from './model'
-import { ConsoleMidiOutput } from './output'
+import {
+  ConsoleOutput,
+  EventLoggerOutput,
+  MidiOutputStub,
+  OutputManager,
+  StatisticsOutput,
+  type OutputManagerStatus
+} from './output'
 import { TypeScriptScheduler, type Scheduler, type SchedulerStatus } from './scheduler'
 
 export interface PlaybackServiceStatus extends SchedulerStatus {
   readonly modelId: string
   readonly noteCount: number
+  readonly outputManager: OutputManagerStatus
 }
 
 export class PlaybackService implements Service, DocumentObserver {
@@ -20,25 +28,27 @@ export class PlaybackService implements Service, DocumentObserver {
   private runtimeBpm?: number
   private readonly builder = new PlaybackModelBuilder()
   private readonly scheduler: Scheduler & { readonly status?: SchedulerStatus }
+  private readonly outputManager = new OutputManager()
   private unsubscribeServiceEvents?: () => void
 
   constructor(scheduler?: Scheduler & { readonly status?: SchedulerStatus }) {
-    this.scheduler =
-      scheduler ?? new TypeScriptScheduler({ output: new ConsoleMidiOutput() })
+    this.scheduler = scheduler ?? new TypeScriptScheduler()
   }
 
-  initialise(context: ServiceContext): void {
+  async initialise(context: ServiceContext): Promise<void> {
     this.context = context
     context.documentStore.addObserver(this)
     this.unsubscribeServiceEvents = context.events.subscribe((event) =>
       this.handleServiceEvent(event)
     )
+    await this.initialiseOutputs()
     this.rebuildModel()
     this.emitStatus()
   }
 
-  shutdown(): void {
+  async shutdown(): Promise<void> {
     this.scheduler.stop()
+    await this.outputManager.disconnectAll()
     this.context?.documentStore.removeObserver(this)
     this.unsubscribeServiceEvents?.()
     this.context = undefined
@@ -55,7 +65,8 @@ export class PlaybackService implements Service, DocumentObserver {
     return {
       ...status,
       modelId: this.model?.id ?? '',
-      noteCount: this.model?.notes.length ?? 0
+      noteCount: this.model?.notes.length ?? 0,
+      outputManager: this.outputManager.status
     }
   }
 
@@ -111,9 +122,20 @@ export class PlaybackService implements Service, DocumentObserver {
     }
 
     if (event.type === 'clock:tick') {
-      this.scheduler.tick(event.payload as ClockState)
+      const events = this.scheduler.tick(event.payload as ClockState)
+
+      this.outputManager.handleEvents(events)
       this.emitStatus()
     }
+  }
+
+  private async initialiseOutputs(): Promise<void> {
+    if (this.outputManager.registry.outputs().length > 0) return
+
+    await this.outputManager.register(new ConsoleOutput())
+    await this.outputManager.register(new MidiOutputStub(), false)
+    await this.outputManager.register(new EventLoggerOutput(), false)
+    await this.outputManager.register(new StatisticsOutput(), false)
   }
 
   private emitStatus(): void {
