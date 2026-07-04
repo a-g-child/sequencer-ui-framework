@@ -14,7 +14,7 @@ Pattern
 PatternEditorSession
   rendererRegistry
     piano-roll
-    drum-rack
+    sample-grid
 ```
 
 ## Same Data, Different Renderers
@@ -40,9 +40,10 @@ C#1  --------------------------------
 C1   [note]--------------------------
 ```
 
-### Drum Rack
+### Sample Grid
 
-The drum rack treats pitch as fixed lanes.
+The sample grid treats pitch as fixed sample lanes. A drum rack is one preset
+mapping for this view; a step sequencer can use the same lane-based surface.
 
 ```text
 Lane       1       2       3       4
@@ -62,7 +63,7 @@ The current implementation has the right seam:
 PatternEditorSession
   RendererRegistry
     PianoRollRenderer
-    DrumRackRenderer
+    SampleGridRenderer
 
 PatternRenderModelBuilder
   document + session + renderer
@@ -117,12 +118,12 @@ RenderItem[]
 Canvas DOM
 ```
 
-## Drum Rack Lane Metadata
+## Sample Grid Lane Metadata
 
-Drum Rack should grow through lane definitions, not new editor operations.
+Sample Grid should grow through lane definitions, not new editor operations.
 
 ```ts
-interface DrumLane {
+interface SampleGridLane {
   pitch: number;
   name: string;
   colour?: string;
@@ -145,6 +146,10 @@ Later sources can include General MIDI, user kits, sample kits, and hardware
 mappings. The renderer should consume lane definitions rather than discover all
 lanes from notes forever.
 
+The Sample Grid provider should be organised around 4x4 pad pages. A pad maps a
+MIDI trigger to sample playback; it is not a VST hosting surface. Sampler DSP,
+envelopes, and audio-engine concerns belong later in the runtime/audio layer.
+
 ## Lane Providers
 
 Lane providers are the likely next abstraction.
@@ -163,8 +168,8 @@ Examples:
 PianoRollLaneProvider
   128 MIDI pitches
 
-DrumRackLaneProvider
-  Kick, Snare, Hat, kit lanes
+SampleGridLaneProvider
+  Kick, Snare, Hat, sample lanes
 
 PatternGridLaneProvider
   Step 1, Step 2, Step 3
@@ -184,7 +189,7 @@ Piano Roll
   notes
   velocityItems
 
-Drum Rack
+Sample Grid
   lanes
   hits
   lane-local velocityItems
@@ -220,7 +225,7 @@ work:
 
 ```text
 Piano Roll
-Drum Rack
+Sample Grid
 Velocity lane
 Lane providers
 Pattern Grid renderer

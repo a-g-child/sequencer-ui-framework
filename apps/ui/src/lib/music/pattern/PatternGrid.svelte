@@ -16,7 +16,7 @@
 
 {#if layer === 'ruler'}
   <div class="piano-roll-ruler" aria-hidden="true">
-    <span>{renderModel.rendererId === 'drum-rack' ? 'Lane' : 'Note'}</span>
+    <span>{renderModel.rendererId === 'sample-grid' ? 'Lane' : 'Note'}</span>
     <div
       class="piano-roll-ruler-track"
       style={`width: ${patternLengthToScreenWidth(renderModel.visibleLength, renderModel.viewport)}px;`}

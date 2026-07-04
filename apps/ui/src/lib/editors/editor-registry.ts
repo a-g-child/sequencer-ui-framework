@@ -7,9 +7,9 @@ export const EDITORS: EditorDefinition[] = [
     description: 'Free melodic and polyphonic note editing'
   },
   {
-    id: 'drum-rack',
-    name: 'Drum Rack',
-    description: 'Fixed-lane percussion sequencing'
+    id: 'sample-grid',
+    name: 'Sample Grid',
+    description: 'Fixed-lane sample sequencing'
   },
   {
     id: 'pattern-grid',

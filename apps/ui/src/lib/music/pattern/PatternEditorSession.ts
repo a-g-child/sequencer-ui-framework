@@ -20,9 +20,9 @@ import {
   type PatternNavigationBounds
 } from './pattern-navigation';
 import {
-  DRUM_RACK_LANE_COUNT,
-  DrumRackRenderer,
   PianoRollRenderer,
+  SAMPLE_GRID_LANE_COUNT,
+  SampleGridRenderer,
   type PatternRenderModel,
   type PatternRenderer
 } from './pattern-renderer';
@@ -72,7 +72,7 @@ export type PatternPointerResult = {
   syncView?: boolean;
 };
 
-export type PatternRendererId = 'piano-roll' | 'drum-rack';
+export type PatternRendererId = 'piano-roll' | 'sample-grid';
 
 export type PatternRendererDefinition = {
   id: PatternRendererId;
@@ -100,9 +100,9 @@ export class PatternEditorSession implements EditorSession {
       description: 'Free melodic and polyphonic note editing'
     },
     {
-      id: 'drum-rack',
-      name: 'Drum Rack',
-      description: 'Fixed-lane percussion view'
+      id: 'sample-grid',
+      name: 'Sample Grid',
+      description: 'Fixed-lane sample sequencing'
     }
   ];
   readonly renderModelBuilder = new PatternRenderModelBuilder();
@@ -140,7 +140,7 @@ export class PatternEditorSession implements EditorSession {
       beatDivisions: options.beatDivisions
     });
     this.rendererRegistry.register(new PianoRollRenderer());
-    this.rendererRegistry.register(new DrumRackRenderer());
+    this.rendererRegistry.register(new SampleGridRenderer());
     this.rendererRegistry.register(renderer);
     this.activeRendererId = isPatternRendererId(renderer.id)
       ? renderer.id
@@ -353,7 +353,7 @@ export class PatternEditorSession implements EditorSession {
     const visibleBeats = this.viewportWidth / this.viewport.pixelsPerBeat;
     const maxScrollX = Math.max(0, contentLength - visibleBeats);
     const minPixelsPerSemitone =
-      this.activeRendererId === 'drum-rack' && this.viewportHeight > 0
+      this.activeRendererId === 'sample-grid' && this.viewportHeight > 0
         ? this.viewportHeight / Math.max(1, pitchCount)
         : undefined;
 
@@ -370,7 +370,7 @@ export class PatternEditorSession implements EditorSession {
   }
 
   private activePitchCount(pianoRoll: PianoRollView | undefined): number {
-    if (this.activeRendererId === 'drum-rack') return DRUM_RACK_LANE_COUNT;
+    if (this.activeRendererId === 'sample-grid') return SAMPLE_GRID_LANE_COUNT;
     if (this.scale.mode === 'fold' && pianoRoll) {
       return Math.max(
         1,
@@ -778,5 +778,5 @@ function isEditableEventTarget(target: EventTarget | null): boolean {
 }
 
 function isPatternRendererId(id: string): id is PatternRendererId {
-  return id === 'piano-roll' || id === 'drum-rack';
+  return id === 'piano-roll' || id === 'sample-grid';
 }

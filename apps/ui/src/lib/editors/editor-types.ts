@@ -1,6 +1,6 @@
 export type EditorKind =
   | 'piano-roll'
-  | 'drum-rack'
+  | 'sample-grid'
   | 'pattern-grid'
   | 'audio-graph';
 

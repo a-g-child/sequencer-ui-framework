@@ -234,7 +234,7 @@
 
 <div
   class="piano-roll-frame"
-  class:drum-rack-frame={renderModel.rendererId === 'drum-rack'}
+  class:sample-grid-frame={renderModel.rendererId === 'sample-grid'}
 >
   <div
     class="piano-roll-scroll"
@@ -255,10 +255,10 @@
 
         <div
           class="piano-roll"
-          class:drum-rack={renderModel.rendererId === 'drum-rack'}
+          class:sample-grid={renderModel.rendererId === 'sample-grid'}
           class:panning={renderModel.isPanning}
           role="application"
-          aria-label={renderModel.rendererId === 'drum-rack' ? 'Drum rack notes' : 'Piano roll notes'}
+          aria-label={renderModel.rendererId === 'sample-grid' ? 'Sample grid notes' : 'Piano roll notes'}
           style={editorSurfaceStyle}
           on:pointerenter={onPointerEnter}
           on:pointerdown={onPointerDown}

@@ -124,7 +124,7 @@ Current examples:
 
 ```text
 PianoRollRenderer
-DrumRackRenderer
+SampleGridRenderer
 ```
 
 Both can read the same pattern and produce different lanes and items.

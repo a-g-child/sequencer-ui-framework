@@ -55,7 +55,7 @@ Completed:
 - Renderer registry
 - Pattern workspace direction
 - Piano Roll renderer
-- Drum Rack renderer
+- Sample Grid renderer
 - Velocity subview
 - Render lanes and render items
 - Render-item interaction context
@@ -134,7 +134,7 @@ apps/ui/src/lib/
     pattern/
     timeline/
     piano-roll/
-    drum-rack/
+    sample-grid/
     automation/
   panels/
 ```

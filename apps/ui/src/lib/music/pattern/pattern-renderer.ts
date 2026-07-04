@@ -1,6 +1,10 @@
 import type { BeatTime } from '@sequencer/core';
 import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model';
 import type { RenderModel } from '../../framework/editor';
+import {
+  getGeneralMidiDrumLaneLabel,
+  getGeneralMidiDrumLanes
+} from './sample-grid-lane-provider';
 import type { GridDefinition, PatternGridLine } from './pattern-grid';
 import type { RenderItem, RenderLane } from './pattern-render-items';
 import {
@@ -203,11 +207,11 @@ export class PianoRollRenderer implements PatternRenderer<PianoRollView> {
   }
 }
 
-export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
-  readonly id = 'drum-rack';
+export class SampleGridRenderer implements PatternRenderer<PianoRollView> {
+  readonly id = 'sample-grid';
 
   render(input: PatternRenderInput<PianoRollView>): PatternRenderModel {
-    const lanes = buildDrumLanes();
+    const lanes = buildSampleGridLanes();
     const laneByPitch = new Map(
       lanes.map((lane) => [lane.pitch, lane.lanePitch])
     );
@@ -261,7 +265,7 @@ export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
         ...note,
         source: note,
         lanePitch: laneByPitch.get(note.pitch) ?? 0,
-        label: noteName(note.pitch)
+        label: getGeneralMidiDrumLaneLabel(note.pitch) ?? String(note.pitch)
       })),
       selectedNoteIds: selectedIds,
       hoveredNoteId: input.hoveredNoteId,
@@ -283,7 +287,7 @@ export class DrumRackRenderer implements PatternRenderer<PianoRollView> {
     y: number,
     _renderModel?: PatternRenderModel
   ): PatternMusicalPoint {
-    const lanes = buildDrumLanes();
+    const lanes = buildSampleGridLanes();
     const highestLanePitch = highestVisualPitch(lanes);
     const lanePitch = clampPitch(
       screenYToPitch(y, viewport, highestLanePitch),
@@ -305,29 +309,10 @@ function clampPitch(pitch: number, lowestPitch: number, highestPitch: number) {
   return Math.max(lowestPitch, Math.min(highestPitch, pitch));
 }
 
-export const DRUM_RACK_LANE_COUNT = 16;
+export const SAMPLE_GRID_LANE_COUNT = getGeneralMidiDrumLanes().length;
 
-const drumRackLaneDefinitions = [
-  { pitch: 36, label: 'Kick' },
-  { pitch: 37, label: 'Rim' },
-  { pitch: 38, label: 'Snare' },
-  { pitch: 39, label: 'Clap' },
-  { pitch: 42, label: 'Closed Hihat' },
-  { pitch: 46, label: 'Open Hihat' },
-  { pitch: 47, label: 'Percussion 1' },
-  { pitch: 48, label: 'Percussion 2' },
-  { pitch: 49, label: 'Percussion 3' },
-  { pitch: 50, label: 'Percussion 4' },
-  { pitch: 51, label: 'Percussion 5' },
-  { pitch: 52, label: 'Percussion 6' },
-  { pitch: 53, label: 'Percussion 7' },
-  { pitch: 54, label: 'Percussion 8' },
-  { pitch: 55, label: 'Percussion 9' },
-  { pitch: 56, label: 'Percussion 10' }
-];
-
-function buildDrumLanes() {
-  return drumRackLaneDefinitions.map((lane, index) => ({
+function buildSampleGridLanes() {
+  return getGeneralMidiDrumLanes().map((lane, index) => ({
     ...lane,
     lanePitch: index
   }));

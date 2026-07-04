@@ -266,7 +266,7 @@
   }
 
   function isRendererEditor(editor: EditorKind): editor is PatternRendererId {
-    return editor === 'piano-roll' || editor === 'drum-rack';
+    return editor === 'piano-roll' || editor === 'sample-grid';
   }
 </script>
 

@@ -345,7 +345,7 @@ h2 {
   cursor: grabbing;
 }
 
-.piano-roll.drum-rack .note {
+.piano-roll.sample-grid .note {
   border-color: var(--accent);
   background: var(--accent-soft);
 }

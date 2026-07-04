@@ -163,7 +163,7 @@ parts without importing musical semantics.
 Notes, patterns, MIDI, and musical semantics.
 
 Music-specific code specializes the framework. Pattern editors, piano-roll
-renderers, drum-rack renderers, note hit testing, musical snapping, and MIDI
+renderers, sample-grid renderers, note hit testing, musical snapping, and MIDI
 concepts belong above the framework layer.
 
 The desired inversion is:
