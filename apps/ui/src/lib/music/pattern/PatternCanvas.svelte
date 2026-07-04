@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { PatternRenderModel } from './pattern-renderer';
+  import PatternAutomationLane from './PatternAutomationLane.svelte';
   import PatternGrid from './PatternGrid.svelte';
   import PatternNotes, {
     type PatternNotePointerEventDetail
@@ -14,12 +15,22 @@
     pitchToScreenY
   } from './pattern-viewport';
   import type { PianoRollNoteView } from '../../editors/piano-roll/piano-roll-model';
+  import type {
+    AutomationCurvePoint,
+    PatternAutomationTarget
+  } from './pattern-automation';
 
   export let renderModel: PatternRenderModel;
   export let height: string | number | undefined = undefined;
   export let width: string | number | undefined = undefined;
   export let showVelocityLane = false;
   export let showProbabilityLane = false;
+  export let showAutomationLane = false;
+  export let automationTargets: PatternAutomationTarget[] = [];
+  export let selectedAutomationTargetId = '';
+  export let automationPoints: AutomationCurvePoint[] = [];
+  export let onAutomationTargetChange: (parameterId: string) => void;
+  export let onAutomationPointsChange: (points: AutomationCurvePoint[]) => void;
   export let onViewportWidthChange: (width: number) => void;
   export let onViewportHeightChange: (height: number) => void;
   export let onWheel: (event: WheelEvent) => void;
@@ -71,7 +82,9 @@
     visibleAutomationLaneCount
   );
   $: visibleAutomationLaneCount =
-    Number(showVelocityLane) + Number(showProbabilityLane);
+    Number(showVelocityLane) +
+    Number(showProbabilityLane) +
+    Number(showAutomationLane);
   $: editorSurfaceStyle =
     `width: ${editorWidth}px; height: ${editorHeight}px;` +
     (viewportHeight ? ` min-height: ${viewportHeight};` : '');
@@ -286,6 +299,17 @@
 
       {#if showProbabilityLane}
         <PatternProbabilityLane {renderModel} {onProbabilityCommit} />
+      {/if}
+
+      {#if showAutomationLane}
+        <PatternAutomationLane
+          {renderModel}
+          targets={automationTargets}
+          selectedTargetId={selectedAutomationTargetId}
+          points={automationPoints}
+          onTargetChange={onAutomationTargetChange}
+          onPointsChange={onAutomationPointsChange}
+        />
       {/if}
     </div>
   </div>

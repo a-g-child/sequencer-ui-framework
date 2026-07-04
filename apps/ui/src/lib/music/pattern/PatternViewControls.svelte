@@ -21,6 +21,8 @@
   export let onToggleVelocityLane: (() => void) | undefined = undefined;
   export let showProbabilityLane = false;
   export let onToggleProbabilityLane: (() => void) | undefined = undefined;
+  export let showAutomationLane = false;
+  export let onToggleAutomationLane: (() => void) | undefined = undefined;
   export let onQuantizeSelected: (() => void) | undefined = undefined;
   export let onHumanizeSelected: (() => void) | undefined = undefined;
   export let scale: PatternScaleState | undefined = undefined;
@@ -84,6 +86,17 @@
       aria-pressed={showProbabilityLane}
       on:click={() => runViewAction('probability-lane', onToggleProbabilityLane)}
     >％</button>
+  {/if}
+
+  {#if onToggleAutomationLane}
+    <button
+      type="button"
+      class:highlighted={showAutomationLane || highlightedControl === 'automation-lane'}
+      title={showAutomationLane ? 'Hide automation lane' : 'Show automation lane'}
+      aria-label={showAutomationLane ? 'Hide automation lane' : 'Show automation lane'}
+      aria-pressed={showAutomationLane}
+      on:click={() => runViewAction('automation-lane', onToggleAutomationLane)}
+    >⌁</button>
   {/if}
 
   {#if onHumanizeSelected}

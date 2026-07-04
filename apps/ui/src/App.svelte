@@ -25,6 +25,7 @@
   } from './lib/editors/piano-roll/piano-roll-model'
   import type { EditorKind } from './lib/editors/editor-types';
   import PatternEditor from './lib/music/pattern/PatternEditor.svelte';
+  import { buildPatternAutomationTargets } from './lib/music/pattern/pattern-automation';
   import Workbench from './lib/framework/application/Workbench.svelte';
   import InspectorPanel from './lib/panels/InspectorPanel.svelte';
   import RuntimePanel from './lib/panels/RuntimePanel.svelte';
@@ -53,9 +54,13 @@
   let inspector: InspectorView = buildInspectorView(store)
   let timeline: TimelineView = buildTimelineView(store)
   let activePattern: Pattern | undefined = store.document.patterns.values()[0]
+  let activePatternTrack: Track | undefined = findTrackForPattern(activePattern)
   let pianoRoll: PianoRollView | undefined = activePattern
     ? buildPianoRollView(activePattern)
     : undefined
+  let automationTargets = buildPatternAutomationTargets(
+    buildTrackParameterViews(activePatternTrack)
+  )
   let draftName = inspector.type === 'track' ? inspector.title : ''
   let numberDrafts: Record<string, number> = {}
   let transportPlaying = app.editorTransport.playing
@@ -81,7 +86,11 @@
     activePattern = activePattern
       ? store.document.patterns.find(activePattern.id)
       : store.document.patterns.values()[0]
+    activePatternTrack = findTrackForPattern(activePattern)
     pianoRoll = activePattern ? buildPianoRollView(activePattern) : undefined
+    automationTargets = buildPatternAutomationTargets(
+      buildTrackParameterViews(activePatternTrack)
+    )
     rebuildInspector()
     issues = validateDocument(store.document)
     canUndo = store.history.canUndo()
@@ -125,6 +134,27 @@
     if (event.type === 'preferences:loaded') {
       preferencesStatus = 'loaded'
     }
+  }
+
+  function findTrackForPattern(pattern: Pattern | undefined): Track | undefined {
+    if (!pattern) return undefined
+
+    return store.document.tracks.values().find((track) =>
+      track.placements.some((placement) => placement.target === pattern.id)
+    )
+  }
+
+  function buildTrackParameterViews(track: Track | undefined) {
+    if (!track) return []
+
+    return track.parameters.map((parameterId) => {
+      const parameter = store.document.parameters.get(parameterId)
+      const definition = store.document.parameterDefinitions.get(
+        parameter.definitionId
+      )
+
+      return { parameter, definition }
+    })
   }
 
   function playTransport() {
@@ -322,6 +352,7 @@
         {controller}
         {pianoRoll}
         {activeEditor}
+        {automationTargets}
         onEditorChange={(editor) => {
           activeEditor = editor;
           syncView();

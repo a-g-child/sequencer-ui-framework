@@ -183,6 +183,10 @@ This keeps the renderer framework useful beyond piano-roll note editing.
 ## Velocity And Automation
 
 Velocity should not require a separate panel. It can be another renderer output.
+Velocity and probability are composition-level note attributes. Automation is
+track-level interpretation for the clip: a one-bar pattern can expose a
+parameter lane for track volume, pan, or future FX parameters, then playback can
+evaluate that curve while the clip loops or plays one-shot.
 
 ```text
 Piano Roll
@@ -201,6 +205,19 @@ Automation
 
 The canvas still renders visual primitives. Renderers decide whether an item is
 a rectangle, a point, a curve segment, or a velocity bar.
+
+The first automation subview is a single lane with a parameter selector. It can
+render the current value as a Bezier path before persistent automation points
+exist. Later curve tools should use the same Bezier equation for rendering and
+for sampling parameter values at playback time.
+
+Curve helpers should stay outside the Svelte component so editing tools,
+rendering, and playback can share the same Bezier interpolation instead of each
+layer inventing its own curve math.
+
+Automation editing should be pointer-first for touch screens: press the lane to
+create a point, drag a point to move it, and long-press a point to remove it.
+The same interactions should work with mouse, pen, and touch input.
 
 ## Naming Direction
 

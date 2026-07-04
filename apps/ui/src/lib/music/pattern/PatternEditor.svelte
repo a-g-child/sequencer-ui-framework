@@ -17,6 +17,10 @@
     PatternRendererId
   } from './PatternEditorSession';
   import type { PatternScaleMode } from './pattern-scale';
+  import type {
+    AutomationCurvePoint,
+    PatternAutomationTarget
+  } from './pattern-automation';
   import PatternToolbar from './PatternToolbar.svelte';
   import PatternViewControls from './PatternViewControls.svelte';
 
@@ -31,6 +35,7 @@
   export let totalBars: number | undefined = undefined;
   export let beatsPerBar: number | undefined = undefined;
   export let beatDivisions: number | undefined = undefined;
+  export let automationTargets: PatternAutomationTarget[] = [];
 
   const viewportZoomStep = 1.25;
   const viewportBeatScrollStep = 1;
@@ -42,6 +47,16 @@
   let timelineRevision = '';
   let showVelocityLane = false;
   let showProbabilityLane = false;
+  let showAutomationLane = false;
+  let selectedAutomationTargetId = '';
+  let automationPointsByTarget: Record<string, AutomationCurvePoint[]> = {};
+
+  $: if (
+    automationTargets.length > 0 &&
+    !automationTargets.some((target) => target.parameter.id === selectedAutomationTargetId)
+  ) {
+    selectedAutomationTargetId = automationTargets[0].parameter.id;
+  }
 
   $: if (controller && (!session || session.controller !== controller)) {
     session = new PatternEditorSession({
@@ -203,6 +218,23 @@
     showProbabilityLane = !showProbabilityLane;
   }
 
+  function toggleAutomationLane() {
+    showAutomationLane = !showAutomationLane;
+  }
+
+  function setAutomationTarget(parameterId: string) {
+    selectedAutomationTargetId = parameterId;
+  }
+
+  function setAutomationPoints(points: AutomationCurvePoint[]) {
+    if (!selectedAutomationTargetId) return;
+
+    automationPointsByTarget = {
+      ...automationPointsByTarget,
+      [selectedAutomationTargetId]: points
+    };
+  }
+
   function setScaleRoot(root: number) {
     session.setScaleRoot(root);
     session.applyViewport(session.viewport, pianoRoll);
@@ -301,6 +333,12 @@
         {width}
         {showVelocityLane}
         {showProbabilityLane}
+        {showAutomationLane}
+        {automationTargets}
+        {selectedAutomationTargetId}
+        automationPoints={automationPointsByTarget[selectedAutomationTargetId] ?? []}
+        onAutomationTargetChange={setAutomationTarget}
+        onAutomationPointsChange={setAutomationPoints}
         onViewportWidthChange={handleViewportWidthChange}
         onViewportHeightChange={handleViewportHeightChange}
         onWheel={handlePatternWheel}
@@ -322,6 +360,8 @@
         onToggleVelocityLane={toggleVelocityLane}
         {showProbabilityLane}
         onToggleProbabilityLane={toggleProbabilityLane}
+        {showAutomationLane}
+        onToggleAutomationLane={toggleAutomationLane}
         onQuantizeSelected={quantizeSelectedNotes}
         onHumanizeSelected={humanizeSelectedNotes}
         scale={session.activeRendererId === 'piano-roll' ? session.scale : undefined}
