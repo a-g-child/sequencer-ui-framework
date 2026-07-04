@@ -1,5 +1,6 @@
 import type { DocumentObserver, Operation, Service, ServiceContext, ServiceEvent } from '@sequencer/core'
 import { PlaybackModelBuilder } from './builder'
+import type { ClockState } from './clock'
 import type { PlaybackEvent } from './events'
 import type { PlaybackModel } from './model'
 import { ConsoleMidiOutput } from './output'
@@ -20,7 +21,6 @@ export class PlaybackService implements Service, DocumentObserver {
   private readonly builder = new PlaybackModelBuilder()
   private readonly scheduler: Scheduler & { readonly status?: SchedulerStatus }
   private unsubscribeServiceEvents?: () => void
-  private timer: ReturnType<typeof setInterval> | undefined
 
   constructor(scheduler?: Scheduler & { readonly status?: SchedulerStatus }) {
     this.scheduler =
@@ -38,7 +38,6 @@ export class PlaybackService implements Service, DocumentObserver {
   }
 
   shutdown(): void {
-    this.stopClock()
     this.scheduler.stop()
     this.context?.documentStore.removeObserver(this)
     this.unsubscribeServiceEvents?.()
@@ -86,42 +85,35 @@ export class PlaybackService implements Service, DocumentObserver {
   private handleServiceEvent(event: ServiceEvent): void {
     if (event.serviceId === this.id) return
 
-    if (event.type === 'transport:playing-changed') {
-      const payload = event.payload as { playing?: boolean } | undefined
-
-      if (payload?.playing) {
-        this.scheduler.start(this.readTransportBeat())
-        this.startClock()
-      } else {
-        this.stopClock()
-        this.scheduler.stop()
-      }
-
+    if (event.type === 'clock:started') {
+      const state = event.payload as ClockState
+      this.runtimeBpm = state.bpm
+      this.rebuildModel()
+      this.scheduler.start(state.beat)
       this.emitStatus()
     }
 
-    if (event.type === 'transport:tempo-changed') {
-      this.runtimeBpm = (event.payload as { bpm?: number } | undefined)?.bpm
+    if (event.type === 'clock:stopped') {
+      this.scheduler.stop()
+      this.emitStatus()
+    }
 
+    if (event.type === 'clock:seeked') {
+      const state = event.payload as ClockState
+      this.scheduler.seek(state.beat)
+      this.emitStatus()
+    }
+
+    if (event.type === 'clock:tempo-changed') {
+      const state = event.payload as ClockState
+      this.runtimeBpm = state.bpm
       this.rebuildModel()
     }
-  }
 
-  private startClock(): void {
-    if (this.timer) return
-
-    this.timer = setInterval(() => {
-      this.scheduler.tick(nowMs())
+    if (event.type === 'clock:tick') {
+      this.scheduler.tick(event.payload as ClockState)
       this.emitStatus()
-      this.emitBeatChanged()
-    }, 25)
-  }
-
-  private stopClock(): void {
-    if (!this.timer) return
-
-    clearInterval(this.timer)
-    this.timer = undefined
+    }
   }
 
   private emitStatus(): void {
@@ -132,21 +124,6 @@ export class PlaybackService implements Service, DocumentObserver {
     })
   }
 
-  private emitBeatChanged(): void {
-    this.context?.events.emit({
-      type: 'playback:beat-changed',
-      serviceId: this.id,
-      payload: { currentBeat: this.status.currentBeat }
-    })
-  }
-
-  private readTransportBeat(): number {
-    return this.context?.application.editorTransport.currentBeat ?? 0
-  }
-}
-
-function nowMs(): number {
-  return globalThis.performance?.now() ?? Date.now()
 }
 
 export type { PlaybackEvent }

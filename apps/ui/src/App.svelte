@@ -9,7 +9,13 @@
     type Pattern,
     type Track
   } from '@sequencer/core'
-  import { PlaybackService, type PlaybackEvent, type PlaybackServiceStatus } from '@sequencer/playback'
+  import {
+    ClockService,
+    PlaybackService,
+    type ClockServiceStatus,
+    type PlaybackEvent,
+    type PlaybackServiceStatus
+  } from '@sequencer/playback'
   import { AppController } from './lib/app-controller'
   import {
     buildInspectorView,
@@ -36,6 +42,7 @@
   
 
   const app = new SequencerApplication()
+  const clock = app.services.add(new ClockService())
   const playback = app.services.add(new PlaybackService())
   const controller = new AppController(app)
   const store = app.documentStore
@@ -71,6 +78,7 @@
   let audioEngineStatus = 'idle'
   let midiStatus = 'idle'
   let preferencesStatus = 'not loaded'
+  let clockStatus: ClockServiceStatus = clock.status
   let playbackStatus: PlaybackServiceStatus = playback.status
   let issues = validateDocument(store.document)
   let canUndo = store.history.canUndo()
@@ -116,6 +124,11 @@
       transportBeat = payload?.currentBeat ?? transportBeat
     }
 
+    if (event.type === 'clock:tempo-changed') {
+      const payload = event.payload as { bpm?: number } | undefined
+      transportBpm = payload?.bpm ?? transportBpm
+    }
+
     if (event.type === 'audio-engine:status-changed') {
       const payload = event.payload as { status?: string } | undefined
       audioEngineStatus = payload?.status ?? audioEngineStatus
@@ -136,6 +149,11 @@
 
     if (event.type === 'preferences:loaded') {
       preferencesStatus = 'loaded'
+    }
+
+    if (event.type === 'clock:status-changed') {
+      clockStatus =
+        (event.payload as ClockServiceStatus | undefined) ?? clockStatus
     }
 
     if (event.type === 'playback:status-changed') {
@@ -407,6 +425,11 @@
       {audioEngineStatus}
       {midiStatus}
       {preferencesStatus}
+      clockSource={clockStatus.activeSourceName}
+      clockRunning={clockStatus.state.running}
+      clockBeat={clockStatus.state.beat}
+      clockBpm={clockStatus.state.bpm}
+      clockDrift={clockStatus.state.driftMs}
       playbackRunning={playbackStatus.running}
       playbackQueuedEvents={playbackStatus.queuedEventCount}
       playbackBeat={playbackStatus.currentBeat}

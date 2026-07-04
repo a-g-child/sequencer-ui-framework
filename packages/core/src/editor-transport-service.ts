@@ -64,6 +64,18 @@ export class EditorTransportService implements Service {
     });
   }
 
+  seek(beat: number): void {
+    const nextBeat = Math.max(0, beat);
+
+    this.state.currentBeat = nextBeat;
+    this.state.currentStep = Math.floor(nextBeat);
+    this.emit("transport:seeked", { beat: nextBeat });
+    this.emit("transport:beat-changed", {
+      currentBeat: this.state.currentBeat,
+      currentStep: this.state.currentStep
+    });
+  }
+
   toggle(): void {
     if (this.state.playing) {
       this.stop();

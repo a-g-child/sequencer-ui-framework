@@ -1,4 +1,5 @@
 import type { BeatTime } from '@sequencer/core'
+import type { ClockState } from './clock'
 import type { PlaybackEvent } from './events'
 import type { PlaybackModel } from './model'
 import { createEmptyPlaybackModel } from './model'
@@ -10,7 +11,7 @@ export interface Scheduler {
   start(position: BeatTime): void
   stop(): void
   seek(position: BeatTime): void
-  tick(now: number): void
+  tick(state: ClockState): void
   scheduleLookahead(window: number): readonly PlaybackEvent[]
 }
 
@@ -29,9 +30,8 @@ export interface TypeScriptSchedulerOptions {
 export class TypeScriptScheduler implements Scheduler {
   private model: PlaybackModel = createEmptyPlaybackModel()
   private running = false
-  private startTimeMs = 0
-  private startBeat = 0
   private currentBeat = 0
+  private currentTimeMs = 0
   private scheduledUntilBeat = 0
   private readonly emittedEventIds = new Set<string>()
   private queuedEventCount = 0
@@ -55,18 +55,16 @@ export class TypeScriptScheduler implements Scheduler {
 
   start(position: BeatTime): void {
     this.running = true
-    this.startBeat = Math.max(0, position)
-    this.currentBeat = this.startBeat
-    this.scheduledUntilBeat = this.startBeat
-    this.startTimeMs = nowMs()
+    this.currentBeat = Math.max(0, position)
+    this.scheduledUntilBeat = this.currentBeat
     this.emittedEventIds.clear()
   }
 
   stop(): void {
     this.running = false
     this.currentBeat = 0
-    this.startBeat = 0
     this.scheduledUntilBeat = 0
+    this.currentTimeMs = 0
     this.queuedEventCount = 0
     this.emittedEventIds.clear()
   }
@@ -74,18 +72,16 @@ export class TypeScriptScheduler implements Scheduler {
   seek(position: BeatTime): void {
     const beat = Math.max(0, position)
     this.currentBeat = beat
-    this.startBeat = beat
     this.scheduledUntilBeat = beat
-    this.startTimeMs = nowMs()
     this.queuedEventCount = 0
     this.emittedEventIds.clear()
   }
 
-  tick(now: number): void {
+  tick(state: ClockState): void {
     if (!this.running) return
 
-    const elapsedMs = Math.max(0, now - this.startTimeMs)
-    this.currentBeat = this.startBeat + msToBeats(elapsedMs, this.model.tempoMap)
+    this.currentBeat = state.beat
+    this.currentTimeMs = state.timeMs
     this.scheduleLookahead(this.options.lookaheadMs ?? 120)
   }
 
@@ -153,9 +149,9 @@ export class TypeScriptScheduler implements Scheduler {
   }
 
   private eventTimeMs(beat: BeatTime): number {
-    const deltaBeats = beat - this.startBeat
+    const deltaBeats = beat - this.currentBeat
 
-    return this.startTimeMs + beatsToMs(deltaBeats, this.model.tempoMap)
+    return this.currentTimeMs + beatsToMs(deltaBeats, this.model.tempoMap)
   }
 }
 
@@ -164,8 +160,4 @@ function sortEventType(event: PlaybackEvent): number {
   if (event.type === 'note:on') return 1
 
   return 2
-}
-
-function nowMs(): number {
-  return globalThis.performance?.now() ?? Date.now()
 }

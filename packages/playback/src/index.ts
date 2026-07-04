@@ -1,4 +1,6 @@
 export * from './builder'
+export * from './clock'
+export * from './clock-service'
 export * from './events'
 export * from './model'
 export * from './output'

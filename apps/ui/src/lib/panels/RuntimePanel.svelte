@@ -5,6 +5,11 @@
   export let audioEngineStatus = 'idle';
   export let midiStatus = 'idle';
   export let preferencesStatus = 'not loaded';
+  export let clockSource = 'Internal Clock';
+  export let clockRunning = false;
+  export let clockBeat = 0;
+  export let clockBpm = 120;
+  export let clockDrift: number | undefined = undefined;
   export let playbackRunning = false;
   export let playbackQueuedEvents = 0;
   export let playbackBeat = 0;
@@ -35,6 +40,26 @@
   <div>
     <span>Preferences</span>
     <strong>{preferencesStatus}</strong>
+  </div>
+  <div>
+    <span>Clock Source</span>
+    <strong>{clockSource}</strong>
+  </div>
+  <div>
+    <span>Clock</span>
+    <strong>{clockRunning ? 'running' : 'stopped'}</strong>
+  </div>
+  <div>
+    <span>Clock Beat</span>
+    <strong>{clockBeat.toFixed(2)}</strong>
+  </div>
+  <div>
+    <span>Clock BPM</span>
+    <strong>{clockBpm}</strong>
+  </div>
+  <div>
+    <span>Clock Drift</span>
+    <strong>{clockDrift === undefined ? 'n/a' : clockDrift.toFixed(2)}</strong>
   </div>
   <div>
     <span>Scheduler</span>
