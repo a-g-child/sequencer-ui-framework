@@ -11,12 +11,14 @@ import {
   StatisticsOutput,
   type OutputManagerStatus
 } from './output'
+import type { PlaybackOutputStatistics } from './output/StatisticsOutput'
 import { TypeScriptScheduler, type Scheduler, type SchedulerStatus } from './scheduler'
 
 export interface PlaybackServiceStatus extends SchedulerStatus {
   readonly modelId: string
   readonly noteCount: number
   readonly outputManager: OutputManagerStatus
+  readonly statistics: PlaybackOutputStatistics
 }
 
 export class PlaybackService implements Service, DocumentObserver {
@@ -29,6 +31,7 @@ export class PlaybackService implements Service, DocumentObserver {
   private readonly builder = new PlaybackModelBuilder()
   private readonly scheduler: Scheduler & { readonly status?: SchedulerStatus }
   private readonly outputManager = new OutputManager()
+  private readonly statisticsOutput = new StatisticsOutput()
   private unsubscribeServiceEvents?: () => void
 
   constructor(scheduler?: Scheduler & { readonly status?: SchedulerStatus }) {
@@ -66,7 +69,8 @@ export class PlaybackService implements Service, DocumentObserver {
       ...status,
       modelId: this.model?.id ?? '',
       noteCount: this.model?.notes.length ?? 0,
-      outputManager: this.outputManager.status
+      outputManager: this.outputManager.status,
+      statistics: this.statisticsOutput.statistics
     }
   }
 
@@ -135,7 +139,7 @@ export class PlaybackService implements Service, DocumentObserver {
     await this.outputManager.register(new ConsoleOutput())
     await this.outputManager.register(new MidiOutputStub(), false)
     await this.outputManager.register(new EventLoggerOutput(), false)
-    await this.outputManager.register(new StatisticsOutput(), false)
+    await this.outputManager.register(this.statisticsOutput)
   }
 
   private emitStatus(): void {

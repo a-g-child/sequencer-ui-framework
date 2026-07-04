@@ -14,6 +14,9 @@
   export let playbackQueuedEvents = 0;
   export let playbackBeat = 0;
   export let playbackLastEvent = 'none';
+  export let playbackEventCount = 0;
+  export let playbackEventsPerSecond = 0;
+  export let playbackLastBatchSize = 0;
 </script>
 
 <section class="runtime-status" aria-label="Runtime service status">
@@ -76,6 +79,18 @@
   <div>
     <span>Last Event</span>
     <strong>{playbackLastEvent}</strong>
+  </div>
+  <div>
+    <span>Events</span>
+    <strong>{playbackEventCount}</strong>
+  </div>
+  <div>
+    <span>Events/Sec</span>
+    <strong>{playbackEventsPerSecond.toFixed(1)}</strong>
+  </div>
+  <div>
+    <span>Last Batch</span>
+    <strong>{playbackLastBatchSize}</strong>
   </div>
 </section>
 

@@ -502,6 +502,9 @@
       playbackQueuedEvents={playbackStatus.queuedEventCount}
       playbackBeat={playbackStatus.currentBeat}
       playbackLastEvent={formatPlaybackEvent(playbackStatus.lastEmittedEvent)}
+      playbackEventCount={playbackStatus.statistics.eventCount}
+      playbackEventsPerSecond={playbackStatus.statistics.eventsPerSecond}
+      playbackLastBatchSize={playbackStatus.outputManager.lastEventCount}
     />
 
     <footer class="statusbar">
