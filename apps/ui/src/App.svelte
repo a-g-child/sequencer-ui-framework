@@ -9,6 +9,7 @@
     type Pattern,
     type Track
   } from '@sequencer/core'
+  import { PlaybackService, type PlaybackEvent, type PlaybackServiceStatus } from '@sequencer/playback'
   import { AppController } from './lib/app-controller'
   import {
     buildInspectorView,
@@ -35,6 +36,7 @@
   
 
   const app = new SequencerApplication()
+  const playback = app.services.add(new PlaybackService())
   const controller = new AppController(app)
   const store = app.documentStore
   controller.selectInitialTrack()
@@ -69,6 +71,7 @@
   let audioEngineStatus = 'idle'
   let midiStatus = 'idle'
   let preferencesStatus = 'not loaded'
+  let playbackStatus: PlaybackServiceStatus = playback.status
   let issues = validateDocument(store.document)
   let canUndo = store.history.canUndo()
   let canRedo = store.history.canRedo()
@@ -134,6 +137,21 @@
     if (event.type === 'preferences:loaded') {
       preferencesStatus = 'loaded'
     }
+
+    if (event.type === 'playback:status-changed') {
+      playbackStatus =
+        (event.payload as PlaybackServiceStatus | undefined) ?? playbackStatus
+    }
+  }
+
+  function formatPlaybackEvent(event: PlaybackEvent | undefined): string {
+    if (!event) return 'none'
+
+    if (event.type === 'note:on' || event.type === 'note:off') {
+      return `${event.type} ${event.pitch}`
+    }
+
+    return event.type
   }
 
   function findTrackForPattern(pattern: Pattern | undefined): Track | undefined {
@@ -389,6 +407,10 @@
       {audioEngineStatus}
       {midiStatus}
       {preferencesStatus}
+      playbackRunning={playbackStatus.running}
+      playbackQueuedEvents={playbackStatus.queuedEventCount}
+      playbackBeat={playbackStatus.currentBeat}
+      playbackLastEvent={formatPlaybackEvent(playbackStatus.lastEmittedEvent)}
     />
 
     <footer class="statusbar">

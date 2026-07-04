@@ -5,6 +5,10 @@
   export let audioEngineStatus = 'idle';
   export let midiStatus = 'idle';
   export let preferencesStatus = 'not loaded';
+  export let playbackRunning = false;
+  export let playbackQueuedEvents = 0;
+  export let playbackBeat = 0;
+  export let playbackLastEvent = 'none';
 </script>
 
 <section class="runtime-status" aria-label="Runtime service status">
@@ -32,6 +36,22 @@
     <span>Preferences</span>
     <strong>{preferencesStatus}</strong>
   </div>
+  <div>
+    <span>Scheduler</span>
+    <strong>{playbackRunning ? 'running' : 'stopped'}</strong>
+  </div>
+  <div>
+    <span>Queued</span>
+    <strong>{playbackQueuedEvents}</strong>
+  </div>
+  <div>
+    <span>Scheduler Beat</span>
+    <strong>{playbackBeat.toFixed(2)}</strong>
+  </div>
+  <div>
+    <span>Last Event</span>
+    <strong>{playbackLastEvent}</strong>
+  </div>
 </section>
 
 <style>
@@ -42,7 +62,7 @@
     background: var(--surface);
     box-shadow: var(--elevation-raised);
     display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: var(--spacing-compact);
   }
 
