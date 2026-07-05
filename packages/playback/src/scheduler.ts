@@ -19,6 +19,11 @@ export interface SchedulerStatus {
   readonly queuedEventCount: number
   readonly currentBeat: BeatTime
   readonly lastEmittedEvent?: PlaybackEvent
+  readonly lookaheadDepthBeats: BeatTime
+  readonly maxLookaheadDepthBeats: BeatTime
+  readonly lookaheadDepthMs: number
+  readonly maxLookaheadDepthMs: number
+  readonly largestEventBatch: number
 }
 
 export interface TypeScriptSchedulerOptions {
@@ -34,6 +39,11 @@ export class TypeScriptScheduler implements Scheduler {
   private readonly emittedEventIds = new Set<string>()
   private queuedEventCount = 0
   private lastEmittedEvent?: PlaybackEvent
+  private lookaheadDepthBeats = 0
+  private maxLookaheadDepthBeats = 0
+  private lookaheadDepthMs = 0
+  private maxLookaheadDepthMs = 0
+  private largestEventBatch = 0
 
   constructor(private readonly options: TypeScriptSchedulerOptions = {}) {}
 
@@ -42,7 +52,12 @@ export class TypeScriptScheduler implements Scheduler {
       running: this.running,
       queuedEventCount: this.queuedEventCount,
       currentBeat: this.currentBeat,
-      lastEmittedEvent: this.lastEmittedEvent
+      lastEmittedEvent: this.lastEmittedEvent,
+      lookaheadDepthBeats: this.lookaheadDepthBeats,
+      maxLookaheadDepthBeats: this.maxLookaheadDepthBeats,
+      lookaheadDepthMs: this.lookaheadDepthMs,
+      maxLookaheadDepthMs: this.maxLookaheadDepthMs,
+      largestEventBatch: this.largestEventBatch
     }
   }
 
@@ -64,6 +79,8 @@ export class TypeScriptScheduler implements Scheduler {
     this.scheduledUntilBeat = 0
     this.currentTimeMs = 0
     this.queuedEventCount = 0
+    this.lookaheadDepthBeats = 0
+    this.lookaheadDepthMs = 0
     this.emittedEventIds.clear()
   }
 
@@ -89,6 +106,16 @@ export class TypeScriptScheduler implements Scheduler {
     const windowBeats = window > 64 ? msToBeats(window, this.model.tempoMap) : window
     const fromBeat = this.scheduledUntilBeat
     const toBeat = Math.max(fromBeat, this.currentBeat + windowBeats)
+    this.lookaheadDepthBeats = Math.max(0, toBeat - this.currentBeat)
+    this.maxLookaheadDepthBeats = Math.max(
+      this.maxLookaheadDepthBeats,
+      this.lookaheadDepthBeats
+    )
+    this.lookaheadDepthMs = beatsToMs(this.lookaheadDepthBeats, this.model.tempoMap)
+    this.maxLookaheadDepthMs = Math.max(
+      this.maxLookaheadDepthMs,
+      this.lookaheadDepthMs
+    )
     const events = this.buildEvents(fromBeat, toBeat)
 
     const emittedEvents: PlaybackEvent[] = []
@@ -103,6 +130,7 @@ export class TypeScriptScheduler implements Scheduler {
 
     this.scheduledUntilBeat = toBeat
     this.queuedEventCount = emittedEvents.length
+    this.largestEventBatch = Math.max(this.largestEventBatch, emittedEvents.length)
 
     return emittedEvents
   }

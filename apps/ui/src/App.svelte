@@ -84,6 +84,7 @@
   let preferencesStatus = 'not loaded'
   let clockStatus: ClockServiceStatus = clock.status
   let playbackStatus: PlaybackServiceStatus = playback.status
+  let renderModelRebuildMs = 0
   let issues = validateDocument(store.document)
   let canUndo = store.history.canUndo()
   let canRedo = store.history.canRedo()
@@ -247,6 +248,10 @@
     }
 
     syncView()
+  }
+
+  function setRenderModelRebuildTime(durationMs: number) {
+    renderModelRebuildMs = durationMs
   }
 
   function localPlayheadBeat(
@@ -456,6 +461,7 @@
         onLoopClipChange={toggleActivePatternClipLoop}
         onLoopRegionChange={setActivePatternClipLoopRegion}
         onClipBoundsChange={setActivePatternClipBounds}
+        onRenderModelRebuild={setRenderModelRebuildTime}
         {automationTargets}
         onEditorChange={(editor) => {
           activeEditor = editor;
@@ -505,6 +511,14 @@
       playbackEventCount={playbackStatus.statistics.eventCount}
       playbackEventsPerSecond={playbackStatus.statistics.eventsPerSecond}
       playbackLastBatchSize={playbackStatus.outputManager.lastEventCount}
+      schedulerJitterMs={playbackStatus.statistics.schedulerJitterMs}
+      schedulerLatencyMs={playbackStatus.statistics.schedulerLatencyMs}
+      maxLookaheadDepthMs={playbackStatus.statistics.maxLookaheadDepthMs}
+      largestEventBatch={playbackStatus.statistics.largestEventBatch}
+      lateEventCount={playbackStatus.statistics.lateEventCount}
+      missedEventCount={playbackStatus.statistics.missedEventCount}
+      playbackModelRebuildMs={playbackStatus.statistics.playbackModelRebuildMs}
+      {renderModelRebuildMs}
     />
 
     <footer class="statusbar">

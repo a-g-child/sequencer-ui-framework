@@ -62,7 +62,12 @@ export class PlaybackService implements Service, DocumentObserver {
       running: false,
       queuedEventCount: 0,
       currentBeat: 0,
-      lastEmittedEvent: undefined
+      lastEmittedEvent: undefined,
+      lookaheadDepthBeats: 0,
+      maxLookaheadDepthBeats: 0,
+      lookaheadDepthMs: 0,
+      maxLookaheadDepthMs: 0,
+      largestEventBatch: 0
     }
 
     return {
@@ -89,11 +94,13 @@ export class PlaybackService implements Service, DocumentObserver {
   private rebuildModel(): void {
     if (!this.context) return
 
+    const startedAt = nowMs()
     this.model = this.builder.build(
       this.context.documentStore.document,
       this.runtimeBpm
     )
     this.scheduler.setModel(this.model)
+    this.statisticsOutput.recordPlaybackModelRebuild(nowMs() - startedAt)
     this.emitStatus()
   }
 
@@ -126,8 +133,16 @@ export class PlaybackService implements Service, DocumentObserver {
     }
 
     if (event.type === 'clock:tick') {
-      const events = this.scheduler.tick(event.payload as ClockState)
+      const state = event.payload as ClockState
+      const events = this.scheduler.tick(state)
+      const dispatchTimeMs = nowMs()
 
+      this.statisticsOutput.recordSchedulerFrame({
+        clockTimeMs: state.timeMs,
+        dispatchTimeMs,
+        events,
+        schedulerStatus: this.status
+      })
       this.outputManager.handleEvents(events)
       this.emitStatus()
     }
@@ -153,3 +168,7 @@ export class PlaybackService implements Service, DocumentObserver {
 }
 
 export type { PlaybackEvent }
+
+function nowMs(): number {
+  return globalThis.performance?.now() ?? Date.now()
+}

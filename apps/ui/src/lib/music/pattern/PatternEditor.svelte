@@ -13,6 +13,9 @@
   import type { RenderInteractionItem } from '../../framework/editor';
   import PatternCanvas from './PatternCanvas.svelte';
   import { PatternEditorSession } from './PatternEditorSession';
+  import {
+    getLastPatternRenderModelBuildTimeMs
+  } from './PatternRenderModelBuilder';
   import type {
     PatternPointerResult,
     PatternRendererId
@@ -36,6 +39,7 @@
   export let onLoopRegionChange: ((loopStart: number, loopLength: number) => void) | undefined = undefined;
   export let onClipBoundsChange: ((clipStart: number, clipLength: number) => void) | undefined = undefined;
   export let onEditorChange: (editor: EditorKind) => void;
+  export let onRenderModelRebuild: ((durationMs: number) => void) | undefined = undefined;
   export let syncView: () => void;
   export let height: string | number | undefined = undefined;
   export let width: string | number | undefined = undefined;
@@ -101,6 +105,9 @@
   $: renderModel = session && pianoRoll
     ? session.buildRenderModel(pianoRoll)
     : undefined;
+  $: if (renderModel && onRenderModelRebuild) {
+    onRenderModelRebuild(getLastPatternRenderModelBuildTimeMs());
+  }
 
   onMount(() => {
     window.addEventListener('keydown', handleKeyDown);

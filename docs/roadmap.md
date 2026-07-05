@@ -121,6 +121,57 @@ valuable once the editor can create patterns that are enjoyable to hear.
 - MIDI output
 - Preview playback
 
+## Phase 8: Real Outputs
+
+This phase is not about inventing more architecture. It is about making the
+scheduler talk to the outside world through the output architecture that now
+exists.
+
+Every item in this phase should be another `PlaybackOutput`.
+
+- Web MIDI output for the current TypeScript runtime
+- CoreMIDI, WinMM, and ALSA abstraction later in native code
+- Simple software instrument, even a sine-wave synth, to prove the pipeline
+- Metronome or click track
+- MIDI clock output
+
+The scheduler should remain unchanged. It emits playback events. Outputs decide
+how to execute them.
+
+## Phase 9: Voice and Audio
+
+This is where C++ or Rust starts earning its keep.
+
+Audio should enter through the output boundary:
+
+```text
+AudioOutput
+  -> VoiceManager
+  -> DSP Graph
+  -> Audio Device
+```
+
+The scheduler still knows nothing about oscillators, voices, buffers, or audio
+drivers.
+
+Voice allocation belongs inside `AudioOutput`, not in the scheduler.
+
+## Phase 10: Plugin Host
+
+Once real outputs and audio exist, the plugin host can become another consumer
+in the playback chain.
+
+```text
+PlaybackEvent
+  -> Plugin
+  -> Audio
+  -> Output
+```
+
+The plugin host should not require a new scheduler shape. It should consume
+playback events, transform or generate audio, and pass execution onward through
+the same output-side architecture.
+
 ## Target Shape
 
 ```text

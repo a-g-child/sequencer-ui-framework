@@ -17,6 +17,14 @@
   export let playbackEventCount = 0;
   export let playbackEventsPerSecond = 0;
   export let playbackLastBatchSize = 0;
+  export let schedulerJitterMs = 0;
+  export let schedulerLatencyMs = 0;
+  export let maxLookaheadDepthMs = 0;
+  export let largestEventBatch = 0;
+  export let lateEventCount = 0;
+  export let missedEventCount = 0;
+  export let playbackModelRebuildMs = 0;
+  export let renderModelRebuildMs = 0;
 </script>
 
 <section class="runtime-status" aria-label="Runtime service status">
@@ -91,6 +99,38 @@
   <div>
     <span>Last Batch</span>
     <strong>{playbackLastBatchSize}</strong>
+  </div>
+  <div>
+    <span>Largest Batch</span>
+    <strong>{largestEventBatch}</strong>
+  </div>
+  <div>
+    <span>Latency</span>
+    <strong>{schedulerLatencyMs.toFixed(2)}ms</strong>
+  </div>
+  <div>
+    <span>Jitter</span>
+    <strong>{schedulerJitterMs.toFixed(2)}ms</strong>
+  </div>
+  <div>
+    <span>Lookahead</span>
+    <strong>{maxLookaheadDepthMs.toFixed(1)}ms</strong>
+  </div>
+  <div>
+    <span>Late</span>
+    <strong>{lateEventCount}</strong>
+  </div>
+  <div>
+    <span>Missed</span>
+    <strong>{missedEventCount}</strong>
+  </div>
+  <div>
+    <span>Playback Build</span>
+    <strong>{playbackModelRebuildMs.toFixed(2)}ms</strong>
+  </div>
+  <div>
+    <span>Render Build</span>
+    <strong>{renderModelRebuildMs.toFixed(2)}ms</strong>
   </div>
 </section>
 

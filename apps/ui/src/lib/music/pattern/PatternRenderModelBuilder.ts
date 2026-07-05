@@ -15,6 +15,12 @@ export type PatternRenderModelBuilderInput = {
   renderer: PatternRenderer<PianoRollView>;
 };
 
+let lastPatternRenderModelBuildTimeMs = 0;
+
+export function getLastPatternRenderModelBuildTimeMs(): number {
+  return lastPatternRenderModelBuildTimeMs;
+}
+
 export class PatternRenderModelBuilder
   implements
     RenderModelBuilder<
@@ -23,10 +29,11 @@ export class PatternRenderModelBuilder
     >
 {
   build(input: PatternRenderModelBuilderInput): PatternRenderModel {
+    const startedAt = nowMs();
     const { document, session, renderer } = input;
     const visibleLength = session.visibleLength(document);
 
-    return renderer.render({
+    const renderModel = renderer.render({
       viewModel: document,
       viewport: session.viewport,
       grid: session.grid,
@@ -44,5 +51,12 @@ export class PatternRenderModelBuilder
       overlayRectangles: session.overlayRectangles(),
       scale: session.scale
     });
+
+    lastPatternRenderModelBuildTimeMs = nowMs() - startedAt;
+    return renderModel;
   }
+}
+
+function nowMs(): number {
+  return globalThis.performance?.now() ?? Date.now();
 }
