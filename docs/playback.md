@@ -98,12 +98,48 @@ architecture.
 
 Outputs consume `PlaybackEvent` objects.
 
-The first output is `ConsoleMidiOutput`, which logs MIDI-style note events. More
-outputs can be added for Web MIDI, audio engines, native device bridges, tests,
-recording, or diagnostics.
+The first output is `ConsoleOutput`, which logs playback events for debugging.
+More outputs can be added for Web MIDI, audio engines, native device bridges,
+tests, recording, robotics, or diagnostics.
 
 Outputs should not read the document. They should not read render models. They
 receive scheduled event objects and decide how to handle them.
+
+## Clips And Tracks
+
+The document can represent track-owned MIDI clip slots independently from live
+editor state.
+
+Document relationship:
+
+```text
+Track
+  -> TrackClipSlot
+  -> MidiClip
+  -> Pattern
+```
+
+Document state includes:
+
+- track exists
+- clip exists
+- track to clip relationship exists
+- arrangement placement exists
+
+Session state includes:
+
+- active clip in the editor
+- armed clip
+- previewed clip
+- launched clip
+
+`PatternEditorSession.activeClipId` is live session state. It is not persisted
+as document truth unless a future arrangement, launch scene, or saved session
+model explicitly chooses to persist it.
+
+Current playback still consumes arranged placements. A future playback mode can
+choose between arrangement playback and live active, armed, or launched clips
+without changing the clip document model.
 
 ## Events
 
@@ -146,4 +182,3 @@ the scheduler through the scheduler interface.
 
 UI code should talk only to `PlaybackService` and read service status. It should
 not call scheduler methods directly.
-
