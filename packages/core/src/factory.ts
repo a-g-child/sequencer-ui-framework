@@ -1,7 +1,9 @@
 import type {
+  MidiClip,
   Pattern,
   PatternPlacement,
-  Track
+  Track,
+  TrackClipSlot
 } from "./project";
 import type { SequencerDocument } from "./document";
 import type { BeatTime } from "./events";
@@ -20,13 +22,48 @@ export function createPattern(name = "Pattern A", length = 16): Pattern {
   };
 }
 
+export function createMidiClip(
+  pattern: Pattern["id"],
+  name = "Clip",
+  length = 16,
+  loopEnabled = true,
+  loopStart = 0,
+  loopLength = length
+): MidiClip {
+  return {
+    id: createId("clip"),
+    name,
+    pattern,
+    length,
+    loopEnabled,
+    loopStart,
+    loopLength
+  };
+}
+
 export function createTrack(name = "Track 1", target?: string): Track {
   return {
     id: createId("track"),
     name,
+    clips: [],
     placements: [],
     parameters: [],
     target
+  };
+}
+
+export function createTrackClipSlot(
+  source: Track["id"],
+  target: MidiClip["id"],
+  slotIndex: number,
+  name = `Slot ${slotIndex + 1}`
+): TrackClipSlot {
+  return {
+    id: createId("clip_slot"),
+    name,
+    source,
+    target,
+    slotIndex
   };
 }
 
@@ -63,14 +100,18 @@ export function createTimeline(length = 16): Timeline {
 
 export function createDocument(name = "Sequencer"): SequencerDocument {
   const pattern = createPattern();
+  const midiClip = createMidiClip(pattern.id, "Clip 1", pattern.length);
   const track = createTrack("Track 1");
   const patterns = new Registry<Pattern>();
+  const midiClips = new Registry<MidiClip>();
   const tracks = new Registry<Track>();
   const timeline = createTimeline();
 
+  track.clips.push(createTrackClipSlot(track.id, midiClip.id, 0, midiClip.name));
   track.placements.push(
     createPatternPlacement(track.id, pattern.id, 0, pattern.length)
   );
+  midiClips.add(midiClip);
   patterns.add(pattern);
   tracks.add(track);
 
@@ -80,6 +121,7 @@ export function createDocument(name = "Sequencer"): SequencerDocument {
     bpm: 120,
     timeline,
     tracks,
+    midiClips,
     patterns,
     parameterDefinitions: new Registry<ParameterDefinition>(),
     parameters: new Registry<Parameter>()

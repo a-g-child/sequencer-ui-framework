@@ -36,6 +36,8 @@ export function validateDocument(document: SequencerDocument): ValidationIssue[]
   }
 
   for (const track of document.tracks.values()) {
+    track.clips ??= [];
+
     for (const parameterId of track.parameters) {
       if (!document.parameters.has(parameterId)) {
         issues.push({
@@ -44,6 +46,44 @@ export function validateDocument(document: SequencerDocument): ValidationIssue[]
           entityId: track.id
         });
       }
+    }
+
+    const slotIndexes = new Set<number>();
+
+    for (const slot of track.clips) {
+      if (!document.midiClips.has(slot.target)) {
+        issues.push({
+          level: "error",
+          message: `Track clip slot references missing clip: ${slot.target}`,
+          entityId: slot.id
+        });
+      }
+
+      if (slot.source !== track.id) {
+        issues.push({
+          level: "error",
+          message: "Track clip slot source does not match parent track",
+          entityId: slot.id
+        });
+      }
+
+      if (slot.slotIndex < 0) {
+        issues.push({
+          level: "error",
+          message: "Track clip slot index cannot be negative",
+          entityId: slot.id
+        });
+      }
+
+      if (slotIndexes.has(slot.slotIndex)) {
+        issues.push({
+          level: "warning",
+          message: "Track has duplicate clip slot indexes",
+          entityId: slot.id
+        });
+      }
+
+      slotIndexes.add(slot.slotIndex);
     }
 
     for (const placement of track.placements) {
@@ -101,6 +141,40 @@ export function validateDocument(document: SequencerDocument): ValidationIssue[]
           entityId: placement.id
         });
       }
+    }
+  }
+
+  for (const clip of document.midiClips.values()) {
+    if (!document.patterns.has(clip.pattern)) {
+      issues.push({
+        level: "error",
+        message: `MIDI clip references missing pattern: ${clip.pattern}`,
+        entityId: clip.id
+      });
+    }
+
+    if (clip.length <= 0) {
+      issues.push({
+        level: "error",
+        message: "MIDI clip length must be greater than zero",
+        entityId: clip.id
+      });
+    }
+
+    if (clip.loopStart < 0 || clip.loopStart > clip.length) {
+      issues.push({
+        level: "error",
+        message: "MIDI clip loop start must be within the clip",
+        entityId: clip.id
+      });
+    }
+
+    if (clip.loopLength <= 0 || clip.loopStart + clip.loopLength > clip.length) {
+      issues.push({
+        level: "error",
+        message: "MIDI clip loop length must fit within the clip",
+        entityId: clip.id
+      });
     }
   }
 

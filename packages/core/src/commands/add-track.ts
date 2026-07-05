@@ -3,14 +3,17 @@ import { addDefaultTrackParameters } from "../default-parameters";
 import type { SequencerDocument } from "../document";
 import type { BeatTime } from "../events";
 import {
+  createMidiClip,
   createPattern,
   createPatternPlacement,
-  createTrack
+  createTrack,
+  createTrackClipSlot
 } from "../factory";
 import type { Parameter, ParameterDefinition } from "../parameter";
 import type {
   Pattern,
-  Track
+  Track,
+  MidiClip
 } from "../project";
 
 export class AddTrackCommand implements Command {
@@ -18,6 +21,7 @@ export class AddTrackCommand implements Command {
 
   private track?: Track;
   private pattern?: Pattern;
+  private midiClip?: MidiClip;
   private parameterDefinitions: ParameterDefinition[] = [];
   private parameters: Parameter[] = [];
 
@@ -29,8 +33,9 @@ export class AddTrackCommand implements Command {
   ) {}
 
   execute(document: SequencerDocument): void {
-    if (this.track && this.pattern) {
+    if (this.track && this.pattern && this.midiClip) {
       document.patterns.add(this.pattern);
+      document.midiClips.add(this.midiClip);
       document.tracks.add(this.track);
 
       for (const definition of this.parameterDefinitions) {
@@ -45,7 +50,9 @@ export class AddTrackCommand implements Command {
     }
 
     const pattern = createPattern(this.patternName, this.patternLength);
+    const midiClip = createMidiClip(pattern.id, this.patternName, pattern.length);
     const track = createTrack(this.trackName);
+    const clipSlot = createTrackClipSlot(track.id, midiClip.id, 0, midiClip.name);
     const placement = createPatternPlacement(
       track.id,
       pattern.id,
@@ -59,13 +66,16 @@ export class AddTrackCommand implements Command {
       document.parameters.values().map((parameter) => parameter.id)
     );
 
+    track.clips.push(clipSlot);
     track.placements.push(placement);
+    document.midiClips.add(midiClip);
     document.patterns.add(pattern);
     document.tracks.add(track);
     addDefaultTrackParameters(document, track);
 
     this.track = track;
     this.pattern = pattern;
+    this.midiClip = midiClip;
     this.parameterDefinitions = document.parameterDefinitions
       .values()
       .filter((definition) => !existingDefinitionIds.has(definition.id));
@@ -75,9 +85,10 @@ export class AddTrackCommand implements Command {
   }
 
   undo(document: SequencerDocument): void {
-    if (!this.track || !this.pattern) return;
+    if (!this.track || !this.pattern || !this.midiClip) return;
 
     document.tracks.remove(this.track.id);
+    document.midiClips.remove(this.midiClip.id);
     document.patterns.remove(this.pattern.id);
 
     for (const parameter of this.parameters) {

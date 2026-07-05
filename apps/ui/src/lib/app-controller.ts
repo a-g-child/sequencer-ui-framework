@@ -434,6 +434,16 @@ export class AppController {
     return placement?.placement.loop ?? true
   }
 
+  clipIdForPattern(patternId: string | undefined): string | undefined {
+    if (!patternId) return undefined
+
+    const clip = this.app.documentStore.document.midiClips
+      .values()
+      .find((candidate) => candidate.pattern === patternId)
+
+    return clip?.id
+  }
+
   patternClipLoopRegion(patternId: string | undefined): ClipLoopRegion {
     if (!patternId) {
       return { clipStart: 0, clipLength: 0, loopStart: 0, loopLength: 0 }

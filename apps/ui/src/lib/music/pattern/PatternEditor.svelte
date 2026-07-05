@@ -31,6 +31,7 @@
   export let controller: AppController;
   export let pianoRoll: PianoRollView | undefined;
   export let activeEditor: EditorKind;
+  export let activeClipId: string | undefined = undefined;
   export let playheadBeat: number | undefined = undefined;
   export let clipLength: number | undefined = undefined;
   export let loopClip = true;
@@ -100,6 +101,10 @@
   ) {
     session.setActiveRenderer(activeEditor);
     invalidateSession();
+  }
+
+  $: if (session && session.activeClipId !== activeClipId) {
+    session.setActiveClip(activeClipId);
   }
 
   $: renderModel = session && pianoRoll

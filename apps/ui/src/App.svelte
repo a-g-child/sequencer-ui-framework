@@ -454,6 +454,7 @@
         {controller}
         {pianoRoll}
         {activeEditor}
+        activeClipId={controller.clipIdForPattern(activePattern?.id)}
         playheadBeat={activePatternPlayheadBeat}
         loopClip={activePatternClipLoop}
         loopRegion={activePatternClipLoopRegion}

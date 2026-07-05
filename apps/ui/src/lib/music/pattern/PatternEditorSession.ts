@@ -1,3 +1,4 @@
+import type { EntityId } from '@sequencer/core';
 import type { AppController } from '../../app-controller';
 import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model';
 import {
@@ -112,6 +113,7 @@ export class PatternEditorSession implements EditorSession {
 
   activeTool: PatternTool;
   activeRendererId: PatternRendererId = 'piano-roll';
+  activeClipId: EntityId | undefined;
   viewport: PatternViewport = resetViewport();
   interactionContext: PatternInteractionContext | undefined;
   isPanning = false;
@@ -249,6 +251,10 @@ export class PatternEditorSession implements EditorSession {
     this.activeRendererId = id;
     this.clearHover();
     this.refreshOverlay();
+  }
+
+  setActiveClip(clipId: EntityId | undefined): void {
+    this.activeClipId = clipId;
   }
 
   setScaleRoot(root: number): void {
