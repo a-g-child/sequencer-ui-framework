@@ -14,9 +14,11 @@ import {
   MidiOutputStub,
   OutputManager,
   StatisticsOutput,
+  WebAudioOutput,
   type OutputManagerStatus
 } from './output'
 import type { PlaybackOutputStatistics } from './output/StatisticsOutput'
+import type { WebAudioWaveform } from './output/WebAudioOutput'
 import {
   samplePlaybackAutomationValues,
   TypeScriptScheduler,
@@ -46,6 +48,7 @@ export class PlaybackService implements Service, DocumentObserver {
   private readonly scheduler: Scheduler & { readonly status?: SchedulerStatus }
   private readonly outputManager = new OutputManager()
   private readonly statisticsOutput = new StatisticsOutput()
+  private readonly webAudioOutput = new WebAudioOutput()
   private unsubscribeServiceEvents?: () => void
 
   constructor(scheduler?: Scheduler & { readonly status?: SchedulerStatus }) {
@@ -141,6 +144,26 @@ export class PlaybackService implements Service, DocumentObserver {
     return this.liveClips.state.activeClipByTrackId[trackId]?.clipId
   }
 
+  async setWebAudioEnabled(enabled: boolean): Promise<void> {
+    if (enabled) {
+      await this.outputManager.connect(this.webAudioOutput.id)
+    } else {
+      await this.outputManager.disconnect(this.webAudioOutput.id)
+    }
+
+    this.emitStatus()
+  }
+
+  setWebAudioWaveform(waveform: WebAudioWaveform): void {
+    this.webAudioOutput.setWaveform(waveform)
+    this.emitStatus()
+  }
+
+  setWebAudioVolume(volume: number): void {
+    this.webAudioOutput.setVolume(volume)
+    this.emitStatus()
+  }
+
   private rebuildModel(): void {
     if (!this.context) return
 
@@ -217,6 +240,7 @@ export class PlaybackService implements Service, DocumentObserver {
 
     await this.outputManager.register(new ConsoleOutput())
     await this.outputManager.register(new MidiOutputStub(), false)
+    await this.outputManager.register(this.webAudioOutput, false)
     await this.outputManager.register(new EventLoggerOutput(), false)
     await this.outputManager.register(this.statisticsOutput)
   }

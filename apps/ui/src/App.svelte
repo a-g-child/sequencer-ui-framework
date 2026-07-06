@@ -16,7 +16,8 @@
     type ClipLaunchQuantize,
     type PlaybackEvent,
     type PlaybackRuntimeParameterValue,
-    type PlaybackServiceStatus
+    type PlaybackServiceStatus,
+    type WebAudioWaveform
   } from '@sequencer/playback'
   import { AppController, type TrackClipView } from './lib/app-controller'
   import {
@@ -99,6 +100,9 @@
   let preferencesStatus = 'not loaded'
   let clockStatus: ClockServiceStatus = clock.status
   let playbackStatus: PlaybackServiceStatus = playback.status
+  let webAudioEnabled = playbackStatus.outputManager.activeOutputIds.includes('web-audio')
+  let webAudioWaveform: WebAudioWaveform = 'sine'
+  let webAudioVolume = 0.2
   let runtimeParameterValues: Record<string, ParameterValue> = {}
   let automatedRuntimeParameterIds = new Set<string>()
   let renderModelRebuildMs = 0
@@ -213,6 +217,8 @@
     if (event.type === 'playback:status-changed') {
       playbackStatus =
         (event.payload as PlaybackServiceStatus | undefined) ?? playbackStatus
+      webAudioEnabled =
+        playbackStatus.outputManager.activeOutputIds.includes('web-audio')
       refreshSelectedTrackClips()
     }
 
@@ -360,6 +366,28 @@
     const bpm = readNumberValue(event)
 
     controller.setRuntimeBpm(bpm)
+  }
+
+  async function toggleWebAudioOutput(event: Event) {
+    const enabled = (event.currentTarget as HTMLInputElement).checked
+
+    webAudioEnabled = enabled
+    await playback.setWebAudioEnabled(enabled)
+    playbackStatus = playback.status
+  }
+
+  function setWebAudioWaveform(event: Event) {
+    const waveform = (event.currentTarget as HTMLSelectElement).value as WebAudioWaveform
+
+    webAudioWaveform = waveform
+    playback.setWebAudioWaveform(waveform)
+  }
+
+  function setWebAudioVolume(event: Event) {
+    const volume = readNumberValue(event)
+
+    webAudioVolume = volume
+    playback.setWebAudioVolume(volume)
   }
 
   function toggleActivePatternClipLoop(loop: boolean) {
@@ -650,6 +678,39 @@
       onBpmChange={setRuntimeBpm}
     />
 
+    <div class="audio-output-panel" aria-label="Audio output">
+      <label class="audio-toggle">
+        <span>Audio</span>
+        <input
+          type="checkbox"
+          checked={webAudioEnabled}
+          on:change={toggleWebAudioOutput}
+        />
+      </label>
+
+      <label>
+        <span>Wave</span>
+        <select value={webAudioWaveform} on:change={setWebAudioWaveform}>
+          <option value="sine">Sine</option>
+          <option value="square">Square</option>
+          <option value="sawtooth">Saw</option>
+          <option value="triangle">Triangle</option>
+        </select>
+      </label>
+
+      <label>
+        <span>Vol</span>
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value={webAudioVolume}
+          on:input={setWebAudioVolume}
+        />
+      </label>
+    </div>
+
     <div class="toolbar" aria-label="Document operations">
       <button type="button" on:click={addTrack}>Add Track</button>
       <button type="button" on:click={undo} disabled={!canUndo}>Undo</button>
@@ -855,6 +916,39 @@
     display: grid;
     gap: var(--spacing-xl);
     min-width: 0;
+  }
+
+  .audio-output-panel {
+    min-height: var(--transport-min-height);
+    padding: var(--spacing-sm);
+    border: var(--border-width) solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    display: grid;
+    grid-template-columns: auto minmax(88px, 1fr) minmax(92px, 1fr);
+    align-items: center;
+    gap: var(--spacing-sm);
+  }
+
+  .audio-output-panel label {
+    min-width: 0;
+    display: grid;
+    gap: var(--spacing-2xs);
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .audio-output-panel select,
+  .audio-output-panel input[type='range'] {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .audio-toggle {
+    grid-template-columns: auto auto;
+    align-items: center;
   }
 
   .clip-panel {
