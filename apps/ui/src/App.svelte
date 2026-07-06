@@ -14,9 +14,10 @@
     PlaybackService,
     type ClockServiceStatus,
     type PlaybackEvent,
+    type PlaybackRuntimeParameterValue,
     type PlaybackServiceStatus
   } from '@sequencer/playback'
-  import { AppController } from './lib/app-controller'
+  import { AppController, type TrackClipView } from './lib/app-controller'
   import {
     buildInspectorView,
     type InspectorView
@@ -63,6 +64,9 @@
   let inspector: InspectorView = buildInspectorView(store)
   let timeline: TimelineView = buildTimelineView(store)
   let activePattern: Pattern | undefined = store.document.patterns.values()[0]
+  let activeClipId: string | undefined = controller.clipIdForPattern(
+    activePattern?.id
+  )
   let activePatternTrack: Track | undefined = findTrackForPattern(activePattern)
   let pianoRoll: PianoRollView | undefined = activePattern
     ? buildPianoRollView(activePattern)
@@ -84,16 +88,26 @@
   let preferencesStatus = 'not loaded'
   let clockStatus: ClockServiceStatus = clock.status
   let playbackStatus: PlaybackServiceStatus = playback.status
+  let runtimeParameterValues: Record<string, ParameterValue> = {}
+  let automatedRuntimeParameterIds = new Set<string>()
   let renderModelRebuildMs = 0
   let issues = validateDocument(store.document)
   let canUndo = store.history.canUndo()
   let canRedo = store.history.canRedo()
+  let selectedTrackClips: TrackClipView[] = controller.trackClips(
+    selectedTrackId,
+    activeClipId
+  )
   let activeEditor: EditorKind = 'piano-roll';
   $: activePatternPlayheadBeat = localPlayheadBeat(
     transportPlaying,
     transportBeat,
     activePatternClipLoop,
     activePatternClipLoopRegion
+  )
+  $: displayedInspector = applyRuntimeParameterValues(
+    inspector,
+    runtimeParameterValues
   )
   function rebuildInspector() {
     selected = store.selection.current()
@@ -105,9 +119,13 @@
   function syncView() {
     tracks = store.document.tracks.values()
     timeline = buildTimelineView(store)
-    activePattern = activePattern
-      ? store.document.patterns.find(activePattern.id)
-      : store.document.patterns.values()[0]
+    rebuildInspector()
+    activeClipId = resolveActiveClipId(activeClipId)
+    activePattern =
+      findPatternForClip(activeClipId) ??
+      (activePattern
+        ? store.document.patterns.find(activePattern.id)
+        : store.document.patterns.values()[0])
     activePatternTrack = findTrackForPattern(activePattern)
     pianoRoll = activePattern ? buildPianoRollView(activePattern) : undefined
     automationTargets = buildPatternAutomationTargets(
@@ -115,7 +133,7 @@
     )
     activePatternClipLoop = controller.isPatternClipLooping(activePattern?.id)
     activePatternClipLoopRegion = controller.patternClipLoopRegion(activePattern?.id)
-    rebuildInspector()
+    selectedTrackClips = controller.trackClips(selectedTrackId, activeClipId)
     issues = validateDocument(store.document)
     canUndo = store.history.canUndo()
     canRedo = store.history.canRedo()
@@ -140,6 +158,11 @@
     if (event.type === 'clock:tempo-changed') {
       const payload = event.payload as { bpm?: number } | undefined
       transportBpm = payload?.bpm ?? transportBpm
+    }
+
+    if (event.type === 'clock:stopped') {
+      runtimeParameterValues = {}
+      automatedRuntimeParameterIds = new Set()
     }
 
     if (event.type === 'audio-engine:status-changed') {
@@ -173,6 +196,57 @@
       playbackStatus =
         (event.payload as PlaybackServiceStatus | undefined) ?? playbackStatus
     }
+
+    if (event.type === 'playback:runtime-parameters') {
+      reflectRuntimeParameterValues(
+        (event.payload as readonly PlaybackRuntimeParameterValue[] | undefined) ?? []
+      )
+    }
+  }
+
+  function reflectRuntimeParameterValues(
+    values: readonly PlaybackRuntimeParameterValue[]
+  ) {
+    const nextValues = { ...runtimeParameterValues }
+    const nextAutomationIds = new Set(values.map((value) => value.parameterId))
+
+    for (const parameterId of automatedRuntimeParameterIds) {
+      if (!nextAutomationIds.has(parameterId)) {
+        delete nextValues[parameterId]
+      }
+    }
+
+    for (const value of values) {
+      nextValues[value.parameterId] = value.value
+    }
+
+    automatedRuntimeParameterIds = nextAutomationIds
+    runtimeParameterValues = nextValues
+  }
+
+  function applyRuntimeParameterValues(
+    view: InspectorView,
+    values: Record<string, ParameterValue>
+  ): InspectorView {
+    if (view.properties.length === 0) return view
+
+    return {
+      ...view,
+      properties: view.properties.map((property) => {
+        const value = values[property.parameter.id]
+
+        if (value === undefined) return property
+
+        return {
+          ...property,
+          parameter: {
+            ...property.parameter,
+            value
+          },
+          value
+        }
+      })
+    }
   }
 
   function formatPlaybackEvent(event: PlaybackEvent | undefined): string {
@@ -182,6 +256,10 @@
       return `${event.type} ${event.pitch}`
     }
 
+    if (event.type === 'automation:set') {
+      return `${event.type} ${event.value.toFixed(2)}`
+    }
+
     return event.type
   }
 
@@ -189,8 +267,39 @@
     if (!pattern) return undefined
 
     return store.document.tracks.values().find((track) =>
-      track.placements.some((placement) => placement.target === pattern.id)
+      track.placements.some((placement) => placement.target === pattern.id) ||
+      track.clips.some((slot) => {
+        const clip = store.document.midiClips.find(slot.target)
+
+        return clip?.pattern === pattern.id
+      })
     )
+  }
+
+  function findPatternForClip(clipId: string | undefined): Pattern | undefined {
+    const patternId = controller.patternIdForClip(clipId)
+
+    return patternId ? store.document.patterns.find(patternId) : undefined
+  }
+
+  function resolveActiveClipId(
+    currentClipId: string | undefined
+  ): string | undefined {
+    const selectedClips = controller.trackClips(selectedTrackId, currentClipId)
+
+    if (selectedClips.some((clip) => clip.id === currentClipId)) {
+      return currentClipId
+    }
+
+    if (selectedClips[0]) {
+      return selectedClips[0].id
+    }
+
+    if (currentClipId && store.document.midiClips.find(currentClipId)) {
+      return currentClipId
+    }
+
+    return store.document.midiClips.values()[0]?.id
   }
 
   function buildTrackParameterViews(track: Track | undefined) {
@@ -275,7 +384,33 @@
 
   function selectTrack(track: Track) {
     controller.selectTrack(track)
-    rebuildInspector()
+    activeClipId = undefined
+    syncView()
+  }
+
+  function selectClip(clip: TrackClipView) {
+    activeClipId = clip.id
+    syncView()
+  }
+
+  function addClipToSelectedTrack() {
+    const clipId = controller.createClipForTrack(selectedTrackId)
+
+    if (clipId) {
+      activeClipId = clipId
+    }
+
+    syncView()
+  }
+
+  function removeClip(clip: TrackClipView) {
+    if (!controller.deleteClip(clip.id)) return
+
+    if (activeClipId === clip.id) {
+      activeClipId = undefined
+    }
+
+    syncView()
   }
 
   function selectPlacement(placement: TimelinePlacementView) {
@@ -300,6 +435,10 @@
   }
 
   function setParameterValue(parameterId: string, value: ParameterValue) {
+    runtimeParameterValues = {
+      ...runtimeParameterValues,
+      [parameterId]: value
+    }
     controller.setParameterValue(parameterId, value)
     syncView()
   }
@@ -317,6 +456,10 @@
   }
 
   function setNumberPreview(parameterId: string, value: number) {
+    runtimeParameterValues = {
+      ...runtimeParameterValues,
+      [parameterId]: value
+    }
     numberDrafts = {
       ...numberDrafts,
       [parameterId]: value
@@ -338,6 +481,10 @@
     )
 
     controller.commitNumberValue(parameterId, value)
+    runtimeParameterValues = {
+      ...runtimeParameterValues,
+      [parameterId]: value
+    }
     syncView()
   }
 
@@ -441,6 +588,49 @@
         </button>
       {/each}
     </div>
+
+    {#if selectedTrackId}
+      <section class="clip-panel" aria-label="Selected track clips">
+        <div class="pane-heading">
+          <h2>Clips</h2>
+          <button
+            type="button"
+            class="icon-button"
+            aria-label="Add clip"
+            title="Add clip"
+            on:click={addClipToSelectedTrack}
+          >
+            +
+          </button>
+        </div>
+
+        <div class="clip-list">
+          {#each selectedTrackClips as clip (clip.id)}
+            <div class:active={clip.active} class="clip-row">
+              <button
+                type="button"
+                class="clip-select"
+                aria-pressed={clip.active}
+                on:click={() => selectClip(clip)}
+              >
+                <span>{clip.name}</span>
+                <small>Slot {clip.slotIndex + 1}</small>
+              </button>
+
+              <button
+                type="button"
+                class="clip-remove"
+                aria-label={`Remove ${clip.name}`}
+                title="Remove clip"
+                on:click={() => removeClip(clip)}
+              >
+                &times;
+              </button>
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/if}
   </svelte:fragment>
   
   <svelte:fragment slot="center">
@@ -454,7 +644,7 @@
         {controller}
         {pianoRoll}
         {activeEditor}
-        activeClipId={controller.clipIdForPattern(activePattern?.id)}
+        {activeClipId}
         playheadBeat={activePatternPlayheadBeat}
         loopClip={activePatternClipLoop}
         loopRegion={activePatternClipLoopRegion}
@@ -472,7 +662,7 @@
       />
 
       <InspectorPanel
-        {inspector}
+        inspector={displayedInspector}
         selectedType={selected?.type ?? 'track'}
         bind:draftName
         onRenameTrack={renameSelectedTrack}
@@ -536,5 +726,58 @@
     display: grid;
     gap: var(--spacing-xl);
     min-width: 0;
+  }
+
+  .clip-panel {
+    display: grid;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-lg);
+  }
+
+  .icon-button {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: inline-grid;
+    place-items: center;
+  }
+
+  .clip-list {
+    display: grid;
+    gap: var(--spacing-xs);
+  }
+
+  .clip-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 32px;
+    align-items: stretch;
+    gap: var(--spacing-xs);
+  }
+
+  .clip-select {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+    justify-items: start;
+    text-align: left;
+  }
+
+  .clip-select span,
+  .clip-select small {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .clip-row.active .clip-select {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  .clip-remove {
+    width: 32px;
+    padding: 0;
   }
 </style>

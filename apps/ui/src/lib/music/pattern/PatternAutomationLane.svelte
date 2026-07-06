@@ -17,6 +17,7 @@
   export let points: AutomationCurvePoint[] = [];
   export let onTargetChange: (parameterId: string) => void;
   export let onPointsChange: (points: AutomationCurvePoint[]) => void;
+  export let onPointsCommit: (points: AutomationCurvePoint[]) => void;
 
   const laneHeight = 64;
   const hitRadius = 14;
@@ -70,6 +71,7 @@
       const nextPoints = [...points, point].sort((left, right) => left.beat - right.beat);
 
       onPointsChange(nextPoints);
+      onPointsCommit(nextPoints);
       activePointIndex = nextPoints.findIndex((item) => item === point);
       return;
     }
@@ -87,8 +89,14 @@
   }
 
   function endAutomationPointer(event: PointerEvent): void {
+    let nextPoints = points;
+
     if (activePointIndex !== undefined && target && pointerMoved) {
-      moveActivePoint(event, target);
+      nextPoints = moveActivePoint(event, target);
+    }
+
+    if (pointerMoved) {
+      onPointsCommit(nextPoints);
     }
 
     activePointIndex = undefined;
@@ -99,8 +107,8 @@
   function moveActivePoint(
     event: PointerEvent,
     automationTarget: PatternAutomationTarget
-  ): void {
-    if (activePointIndex === undefined) return;
+  ): AutomationCurvePoint[] {
+    if (activePointIndex === undefined) return points;
 
     const nextPoint = pointFromPointer(event, automationTarget);
     const pointId = points[activePointIndex];
@@ -110,6 +118,7 @@
 
     onPointsChange(nextPoints);
     activePointIndex = nextPoints.findIndex((point) => point === nextPoint);
+    return nextPoints;
   }
 
   function startLongPressTimer(): void {
@@ -118,7 +127,10 @@
     longPressTimer = setTimeout(() => {
       if (activePointIndex === undefined || pointerMoved) return;
 
-      onPointsChange(points.filter((_, index) => index !== activePointIndex));
+      const nextPoints = points.filter((_, index) => index !== activePointIndex);
+
+      onPointsChange(nextPoints);
+      onPointsCommit(nextPoints);
       activePointIndex = undefined;
     }, longPressMs);
   }

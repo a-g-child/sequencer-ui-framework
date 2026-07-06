@@ -12,7 +12,13 @@ import {
   type OutputManagerStatus
 } from './output'
 import type { PlaybackOutputStatistics } from './output/StatisticsOutput'
-import { TypeScriptScheduler, type Scheduler, type SchedulerStatus } from './scheduler'
+import {
+  samplePlaybackAutomationValues,
+  TypeScriptScheduler,
+  type PlaybackRuntimeParameterValue,
+  type Scheduler,
+  type SchedulerStatus
+} from './scheduler'
 
 export interface PlaybackServiceStatus extends SchedulerStatus {
   readonly modelId: string
@@ -144,6 +150,8 @@ export class PlaybackService implements Service, DocumentObserver {
         schedulerStatus: this.status
       })
       this.outputManager.handleEvents(events)
+      this.emitPlaybackEvents(events)
+      this.emitRuntimeParameterValues(state)
       this.emitStatus()
     }
   }
@@ -162,6 +170,28 @@ export class PlaybackService implements Service, DocumentObserver {
       type: 'playback:status-changed',
       serviceId: this.id,
       payload: this.status
+    })
+  }
+
+  private emitPlaybackEvents(events: readonly PlaybackEvent[]): void {
+    if (events.length === 0) return
+
+    this.context?.events.emit({
+      type: 'playback:events',
+      serviceId: this.id,
+      payload: events
+    })
+  }
+
+  private emitRuntimeParameterValues(state: ClockState): void {
+    if (!this.model) return
+
+    const values = samplePlaybackAutomationValues(this.model, state.beat)
+
+    this.context?.events.emit<readonly PlaybackRuntimeParameterValue[]>({
+      type: 'playback:runtime-parameters',
+      serviceId: this.id,
+      payload: values
     })
   }
 

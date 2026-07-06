@@ -18,6 +18,7 @@ export interface PlaybackModel {
   readonly tracks: readonly PlaybackTrack[]
   readonly clips: readonly PlaybackClip[]
   readonly notes: readonly PlaybackNote[]
+  readonly automations: readonly PlaybackAutomation[]
 }
 
 export interface PlaybackTrack {
@@ -54,6 +55,18 @@ export interface PlaybackNote {
   readonly duration: BeatTime
 }
 
+export interface PlaybackAutomation {
+  readonly id: string
+  readonly sourceEventId: string
+  readonly trackId: string
+  readonly clipId: string
+  readonly patternId: string
+  readonly parameterId: string
+  readonly parameterKey?: string
+  readonly value: number
+  readonly beat: BeatTime
+}
+
 export function createEmptyPlaybackModel(bpm = 120): PlaybackModel {
   return freezePlaybackModel({
     id: 'playback-empty',
@@ -65,7 +78,8 @@ export function createEmptyPlaybackModel(bpm = 120): PlaybackModel {
     },
     tracks: [],
     clips: [],
-    notes: []
+    notes: [],
+    automations: []
   })
 }
 
@@ -73,11 +87,13 @@ export function freezePlaybackModel(model: PlaybackModel): PlaybackModel {
   model.tracks.forEach(Object.freeze)
   model.clips.forEach(Object.freeze)
   model.notes.forEach(Object.freeze)
+  model.automations.forEach(Object.freeze)
   Object.freeze(model.tempoMap.changes)
   Object.freeze(model.tempoMap)
   Object.freeze(model.tracks)
   Object.freeze(model.clips)
   Object.freeze(model.notes)
+  Object.freeze(model.automations)
 
   return Object.freeze(model)
 }

@@ -63,6 +63,7 @@
   let showAutomationLane = false;
   let selectedAutomationTargetId = '';
   let automationPointsByTarget: Record<string, AutomationCurvePoint[]> = {};
+  let automationRevision = '';
 
   $: if (
     automationTargets.length > 0 &&
@@ -105,6 +106,24 @@
 
   $: if (session && session.activeClipId !== activeClipId) {
     session.setActiveClip(activeClipId);
+  }
+
+  $: nextAutomationRevision =
+    `${pianoRoll?.patternId ?? ''}:${selectedAutomationTargetId}`;
+  $: if (
+    controller &&
+    pianoRoll &&
+    selectedAutomationTargetId &&
+    nextAutomationRevision !== automationRevision
+  ) {
+    automationRevision = nextAutomationRevision;
+    automationPointsByTarget = {
+      ...automationPointsByTarget,
+      [selectedAutomationTargetId]: controller.patternAutomationPoints(
+        pianoRoll.patternId,
+        selectedAutomationTargetId
+      )
+    };
   }
 
   $: renderModel = session && pianoRoll
@@ -256,6 +275,21 @@
     };
   }
 
+  function commitAutomationPoints(points: AutomationCurvePoint[]) {
+    if (!pianoRoll || !selectedAutomationTargetId) return;
+
+    if (
+      controller.setPatternAutomationPoints(
+        pianoRoll.patternId,
+        selectedAutomationTargetId,
+        points
+      )
+    ) {
+      syncView();
+      invalidateSession();
+    }
+  }
+
   function setScaleRoot(root: number) {
     session.setScaleRoot(root);
     session.applyViewport(session.viewport, pianoRoll);
@@ -361,6 +395,7 @@
         automationPoints={automationPointsByTarget[selectedAutomationTargetId] ?? []}
         onAutomationTargetChange={setAutomationTarget}
         onAutomationPointsChange={setAutomationPoints}
+        onAutomationPointsCommit={commitAutomationPoints}
         onViewportWidthChange={handleViewportWidthChange}
         onViewportHeightChange={handleViewportHeightChange}
         onWheel={handlePatternWheel}

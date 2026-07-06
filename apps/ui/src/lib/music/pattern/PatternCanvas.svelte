@@ -33,6 +33,7 @@
   export let automationPoints: AutomationCurvePoint[] = [];
   export let onAutomationTargetChange: (parameterId: string) => void;
   export let onAutomationPointsChange: (points: AutomationCurvePoint[]) => void;
+  export let onAutomationPointsCommit: (points: AutomationCurvePoint[]) => void;
   export let onViewportWidthChange: (width: number) => void;
   export let onViewportHeightChange: (height: number) => void;
   export let onWheel: (event: WheelEvent) => void;
@@ -330,6 +331,7 @@
           points={automationPoints}
           onTargetChange={onAutomationTargetChange}
           onPointsChange={onAutomationPointsChange}
+          onPointsCommit={onAutomationPointsCommit}
         />
       {/if}
     </div>

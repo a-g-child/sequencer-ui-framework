@@ -1,8 +1,11 @@
 import {
   AddTrackOperation,
   CompositeOperation,
+  CreateClipForTrackOperation,
+  DeleteClipOperation,
   MovePatternPlacementOperation,
   RenameEntityOperation,
+  RenameClipOperation,
   ResizePatternPlacementOperation,
   SetParameterValueOperation,
   SetPatternPlacementLoopOperation,
@@ -21,6 +24,7 @@ import {
   DeleteNotesOperation,
   MoveNoteOperation,
   ResizeNoteOperation,
+  SetPatternAutomationOperation,
   type CreateNoteInput,
   type NoteClipboard,
   type NoteClipboardItem
@@ -35,6 +39,21 @@ export type ClipLoopRegion = {
   clipLength: BeatTime
   loopStart: BeatTime
   loopLength: BeatTime
+}
+
+export type TrackClipView = {
+  id: string
+  slotId: string
+  trackId: string
+  patternId: string
+  name: string
+  slotIndex: number
+  active: boolean
+}
+
+export type PatternAutomationPoint = {
+  beat: BeatTime
+  value: number
 }
 
 export class AppController {
@@ -431,7 +450,9 @@ export class AppController {
 
     const placement = this.findFirstPlacementForPattern(patternId)
 
-    return placement?.placement.loop ?? true
+    if (placement) return placement.placement.loop ?? true
+
+    return this.findFirstClipForPattern(patternId)?.loopEnabled ?? true
   }
 
   clipIdForPattern(patternId: string | undefined): string | undefined {
@@ -444,6 +465,122 @@ export class AppController {
     return clip?.id
   }
 
+  patternIdForClip(clipId: string | undefined): string | undefined {
+    if (!clipId) return undefined
+
+    return this.app.documentStore.document.midiClips.find(clipId)?.pattern
+  }
+
+  trackClips(
+    trackId: string | undefined,
+    activeClipId: string | undefined
+  ): TrackClipView[] {
+    if (!trackId) return []
+
+    const document = this.app.documentStore.document
+    const track = document.tracks.find(trackId)
+
+    if (!track) return []
+
+    return [...track.clips]
+      .sort((a, b) => a.slotIndex - b.slotIndex)
+      .flatMap((slot): TrackClipView[] => {
+        const clip = document.midiClips.find(slot.target)
+
+        if (!clip) return []
+
+        return [
+          {
+            id: clip.id,
+            slotId: slot.id,
+            trackId: track.id,
+            patternId: clip.pattern,
+            name: slot.name || clip.name,
+            slotIndex: slot.slotIndex,
+            active: clip.id === activeClipId
+          }
+        ]
+      })
+  }
+
+  createClipForTrack(trackId: string | undefined): string | undefined {
+    if (!trackId) return undefined
+
+    const track = this.app.documentStore.document.tracks.find(trackId)
+
+    if (!track) return undefined
+
+    const clipName = `Clip ${track.clips.length + 1}`
+    const operation = new CreateClipForTrackOperation(trackId, clipName, 4)
+
+    this.app.documentStore.execute(operation)
+    return operation.clip.id
+  }
+
+  deleteClip(clipId: string | undefined): boolean {
+    if (!clipId || !this.app.documentStore.document.midiClips.find(clipId)) {
+      return false
+    }
+
+    this.app.documentStore.execute(new DeleteClipOperation(clipId))
+    return true
+  }
+
+  renameClip(clipId: string | undefined, nextName: string): boolean {
+    const name = nextName.trim()
+
+    if (!clipId || !name) return false
+
+    const clip = this.app.documentStore.document.midiClips.find(clipId)
+
+    if (!clip || clip.name === name) return false
+
+    this.app.documentStore.execute(new RenameClipOperation(clipId, name))
+    return true
+  }
+
+  patternAutomationPoints(
+    patternId: string | undefined,
+    parameterId: string | undefined
+  ): PatternAutomationPoint[] {
+    if (!patternId || !parameterId) return []
+
+    const pattern = this.app.documentStore.document.patterns.find(patternId)
+
+    if (!pattern) return []
+
+    return pattern.events
+      .filter(
+        (event) =>
+          event.target === parameterId &&
+          (event.type === 'set' || event.type === 'ramp') &&
+          typeof event.value === 'number'
+      )
+      .map((event) => ({
+        beat: event.time,
+        value: event.value as number
+      }))
+      .sort((left, right) => left.beat - right.beat)
+  }
+
+  setPatternAutomationPoints(
+    patternId: string | undefined,
+    parameterId: string | undefined,
+    points: readonly PatternAutomationPoint[]
+  ): boolean {
+    if (!patternId || !parameterId) return false
+
+    const pattern = this.app.documentStore.document.patterns.find(patternId)
+    const parameter = this.app.documentStore.document.parameters.find(parameterId)
+
+    if (!pattern || !parameter) return false
+
+    this.app.documentStore.execute(
+      new SetPatternAutomationOperation(patternId, parameterId, points)
+    )
+    return true
+  }
+
   patternClipLoopRegion(patternId: string | undefined): ClipLoopRegion {
     if (!patternId) {
       return { clipStart: 0, clipLength: 0, loopStart: 0, loopLength: 0 }
@@ -452,7 +589,23 @@ export class AppController {
     const placement = this.findFirstPlacementForPattern(patternId)
 
     if (!placement) {
-      return { clipStart: 0, clipLength: 0, loopStart: 0, loopLength: 0 }
+      const clip = this.findFirstClipForPattern(patternId)
+
+      if (!clip) {
+        return { clipStart: 0, clipLength: 0, loopStart: 0, loopLength: 0 }
+      }
+
+      const clipLength = Math.max(0.25, clip.length)
+      const loopStart = Math.min(
+        Math.max(0, clip.loopStart),
+        Math.max(0, clipLength)
+      )
+      const loopLength = Math.min(
+        Math.max(0.25, clip.loopLength),
+        Math.max(0.25, clipLength - loopStart)
+      )
+
+      return { clipStart: 0, clipLength, loopStart, loopLength }
     }
 
     const clipLength = this.patternClipLength(patternId, placement.placement.length)
@@ -487,8 +640,18 @@ export class AppController {
     return undefined
   }
 
+  private findFirstClipForPattern(patternId: string) {
+    return this.app.documentStore.document.midiClips
+      .values()
+      .find((clip) => clip.pattern === patternId)
+  }
+
   private patternClipLength(patternId: string, placementLength: number | undefined): number {
-    return placementLength ?? this.app.documentStore.document.patterns.get(patternId).length
+    return (
+      placementLength ??
+      this.findFirstClipForPattern(patternId)?.length ??
+      this.app.documentStore.document.patterns.get(patternId).length
+    )
   }
 
   createNote(

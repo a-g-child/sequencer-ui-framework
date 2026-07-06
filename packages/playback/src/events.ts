@@ -1,6 +1,11 @@
 import type { BeatTime } from '@sequencer/core'
 
-export type PlaybackEvent = NoteOnEvent | NoteOffEvent | TempoChangeEvent | TransportEvent
+export type PlaybackEvent =
+  | NoteOnEvent
+  | NoteOffEvent
+  | AutomationEvent
+  | TempoChangeEvent
+  | TransportEvent
 
 export interface PlaybackEventBase {
   readonly id: string
@@ -22,6 +27,14 @@ export interface NoteOffEvent extends PlaybackEventBase {
   readonly noteId: string
   readonly pitch: number
   readonly velocity: 0
+}
+
+export interface AutomationEvent extends PlaybackEventBase {
+  readonly type: 'automation:set'
+  readonly automationId: string
+  readonly parameterId: string
+  readonly parameterKey?: string
+  readonly value: number
 }
 
 export interface TempoChangeEvent extends PlaybackEventBase {

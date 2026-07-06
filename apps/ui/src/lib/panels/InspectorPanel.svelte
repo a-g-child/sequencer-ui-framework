@@ -55,6 +55,7 @@
 
     return String(parameter.value);
   }
+
 </script>
 
 {#if inspector.type === 'track'}
@@ -73,12 +74,13 @@
 
   <div class="property-list">
     {#each inspector.properties as property (property.parameter.id)}
+      {@const value = property.value}
       <div class="property-row">
         <label for={`property-${property.parameter.id}`}>
           {property.definition.name}
         </label>
 
-        {#if property.definition.kind === 'number' && typeof property.value === 'number'}
+        {#if property.definition.kind === 'number' && typeof value === 'number'}
           <div class="number-property">
             <input
               id={`property-${property.parameter.id}`}
@@ -86,7 +88,7 @@
               min={property.definition.min}
               max={property.definition.max}
               step={property.definition.step}
-              value={property.value}
+              value={value}
               on:input={(event) =>
                 onSetNumberPreview(
                   property.parameter.id,
@@ -104,7 +106,7 @@
               min={property.definition.min}
               max={property.definition.max}
               step={property.definition.step}
-              value={property.value}
+              value={value}
               on:input={(event) =>
                 onSetNumberPreview(
                   property.parameter.id,
@@ -117,12 +119,12 @@
                 )}
             />
           </div>
-        {:else if property.definition.kind === 'boolean' && typeof property.value === 'boolean'}
+        {:else if property.definition.kind === 'boolean' && typeof value === 'boolean'}
           <input
             id={`property-${property.parameter.id}`}
             class="checkbox-property"
             type="checkbox"
-            checked={property.value}
+            checked={value}
             on:change={(event) =>
               onSetParameterValue(
                 property.parameter.id,
@@ -132,7 +134,7 @@
         {:else if property.definition.kind === 'choice'}
           <select
             id={`property-${property.parameter.id}`}
-            value={String(property.value)}
+            value={String(value)}
             on:change={(event) =>
               onSetParameterValue(
                 property.parameter.id,
@@ -143,10 +145,10 @@
               <option value={String(option.value)}>{option.label}</option>
             {/each}
           </select>
-        {:else if property.definition.kind === 'text' && typeof property.value === 'string'}
+        {:else if property.definition.kind === 'text' && typeof value === 'string'}
           <input
             id={`property-${property.parameter.id}`}
-            value={property.value}
+            value={value}
             on:input={(event) =>
               onSetParameterValue(
                 property.parameter.id,

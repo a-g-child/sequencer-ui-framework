@@ -1,12 +1,13 @@
-import type { SequencerDocument } from '@sequencer/core'
+import type { SequencerDocument, TimelineEvent } from '@sequencer/core'
 import { getEffectiveBeat, getEffectiveVelocity, isNoteEvent } from '@sequencer/music'
-import { freezePlaybackModel, type PlaybackClip, type PlaybackModel, type PlaybackNote, type PlaybackTrack } from './model'
+import { freezePlaybackModel, type PlaybackAutomation, type PlaybackClip, type PlaybackModel, type PlaybackNote, type PlaybackTrack } from './model'
 
 export class PlaybackModelBuilder {
   build(document: SequencerDocument, bpm = document.bpm): PlaybackModel {
     const tracks: PlaybackTrack[] = []
     const clips: PlaybackClip[] = []
     const notes: PlaybackNote[] = []
+    const automations: PlaybackAutomation[] = []
 
     document.tracks.values().forEach((track, trackIndex) => {
       const playbackTrack: PlaybackTrack = {
@@ -51,30 +52,54 @@ export class PlaybackModelBuilder {
           clips.push(clip)
 
           for (const event of pattern.events) {
-            if (!isNoteEvent(event)) continue
+            if (isNoteEvent(event)) {
+              const effectiveBeat = getEffectiveBeat(event)
+              if (effectiveBeat >= pattern.length || effectiveBeat >= clipLength) {
+                continue
+              }
 
-            const effectiveBeat = getEffectiveBeat(event)
-            if (effectiveBeat >= pattern.length || effectiveBeat >= clipLength) {
+              const beat = clipStart + effectiveBeat
+              const maximumDuration =
+                loop && effectiveBeat >= loopStart && effectiveBeat < loopStart + loopLength
+                  ? loopStart + loopLength - effectiveBeat
+                  : clipLength - effectiveBeat
+              const duration = Math.max(0, Math.min(event.duration, maximumDuration))
+
+              notes.push({
+                id: `${clip.id}:${event.id}`,
+                sourceNoteId: event.id,
+                trackId: track.id,
+                clipId: clip.id,
+                patternId: pattern.id,
+                pitch: event.value.pitch,
+                velocity: getEffectiveVelocity(event),
+                beat,
+                duration
+              })
               continue
             }
 
-            const beat = clipStart + effectiveBeat
-            const maximumDuration =
-              loop && effectiveBeat >= loopStart && effectiveBeat < loopStart + loopLength
-                ? loopStart + loopLength - effectiveBeat
-                : clipLength - effectiveBeat
-            const duration = Math.max(0, Math.min(event.duration, maximumDuration))
+            if (!isAutomationEvent(event)) continue
 
-            notes.push({
+            if (event.time >= pattern.length || event.time >= clipLength) {
+              continue
+            }
+
+            const parameter = document.parameters.find(event.target)
+            const definition = parameter
+              ? document.parameterDefinitions.find(parameter.definitionId)
+              : undefined
+
+            automations.push({
               id: `${clip.id}:${event.id}`,
-              sourceNoteId: event.id,
+              sourceEventId: event.id,
               trackId: track.id,
               clipId: clip.id,
               patternId: pattern.id,
-              pitch: event.value.pitch,
-              velocity: getEffectiveVelocity(event),
-              beat,
-              duration
+              parameterId: event.target,
+              parameterKey: definition?.key,
+              value: event.value,
+              beat: clipStart + event.time
             })
           }
         }
@@ -82,6 +107,7 @@ export class PlaybackModelBuilder {
     })
 
     notes.sort((a, b) => a.beat - b.beat || a.pitch - b.pitch)
+    automations.sort((a, b) => a.beat - b.beat || a.parameterId.localeCompare(b.parameterId))
     clips.sort((a, b) => a.start - b.start)
 
     return freezePlaybackModel({
@@ -94,9 +120,20 @@ export class PlaybackModelBuilder {
       },
       tracks,
       clips,
-      notes
+      notes,
+      automations
     })
   }
+}
+
+function isAutomationEvent(
+  event: TimelineEvent
+): event is TimelineEvent<number> & { target: string } {
+  return (
+    (event.type === 'set' || event.type === 'ramp') &&
+    typeof event.target === 'string' &&
+    typeof event.value === 'number'
+  )
 }
 
 function clampLoopStart(loopStart: number, clipLength: number): number {
