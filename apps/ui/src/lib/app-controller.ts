@@ -49,6 +49,7 @@ export type TrackClipView = {
   name: string
   slotIndex: number
   active: boolean
+  playbackActive: boolean
 }
 
 export type PatternAutomationPoint = {
@@ -473,7 +474,8 @@ export class AppController {
 
   trackClips(
     trackId: string | undefined,
-    activeClipId: string | undefined
+    activeClipId: string | undefined,
+    playbackActiveClipId: string | undefined
   ): TrackClipView[] {
     if (!trackId) return []
 
@@ -497,7 +499,8 @@ export class AppController {
             patternId: clip.pattern,
             name: slot.name || clip.name,
             slotIndex: slot.slotIndex,
-            active: clip.id === activeClipId
+            active: clip.id === activeClipId,
+            playbackActive: clip.id === playbackActiveClipId
           }
         ]
       })

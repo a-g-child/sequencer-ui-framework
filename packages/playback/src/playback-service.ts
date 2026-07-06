@@ -34,6 +34,7 @@ export class PlaybackService implements Service, DocumentObserver {
   private context?: ServiceContext
   private model?: PlaybackModel
   private runtimeBpm?: number
+  private activeClipByTrackId: Record<string, string | undefined> = {}
   private readonly builder = new PlaybackModelBuilder()
   private readonly scheduler: Scheduler & { readonly status?: SchedulerStatus }
   private readonly outputManager = new OutputManager()
@@ -97,13 +98,31 @@ export class PlaybackService implements Service, DocumentObserver {
     this.rebuildModel()
   }
 
+  setActiveClipForTrack(trackId: string, clipId: string | undefined): void {
+    const nextActiveClipByTrackId = { ...this.activeClipByTrackId }
+
+    if (clipId) {
+      nextActiveClipByTrackId[trackId] = clipId
+    } else {
+      delete nextActiveClipByTrackId[trackId]
+    }
+
+    this.activeClipByTrackId = nextActiveClipByTrackId
+    this.rebuildModel()
+  }
+
+  activeClipForTrack(trackId: string): string | undefined {
+    return this.activeClipByTrackId[trackId]
+  }
+
   private rebuildModel(): void {
     if (!this.context) return
 
     const startedAt = nowMs()
     this.model = this.builder.build(
       this.context.documentStore.document,
-      this.runtimeBpm
+      this.runtimeBpm,
+      { activeClipByTrackId: this.activeClipByTrackId }
     )
     this.scheduler.setModel(this.model)
     this.statisticsOutput.recordPlaybackModelRebuild(nowMs() - startedAt)

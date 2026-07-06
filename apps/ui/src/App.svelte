@@ -67,6 +67,7 @@
   let activeClipId: string | undefined = controller.clipIdForPattern(
     activePattern?.id
   )
+  let playbackActiveClipByTrackId: Record<string, string | undefined> = {}
   let activePatternTrack: Track | undefined = findTrackForPattern(activePattern)
   let pianoRoll: PianoRollView | undefined = activePattern
     ? buildPianoRollView(activePattern)
@@ -96,7 +97,8 @@
   let canRedo = store.history.canRedo()
   let selectedTrackClips: TrackClipView[] = controller.trackClips(
     selectedTrackId,
-    activeClipId
+    activeClipId,
+    playbackActiveClipByTrackId[selectedTrackId]
   )
   let activeEditor: EditorKind = 'piano-roll';
   $: activePatternPlayheadBeat = localPlayheadBeat(
@@ -133,7 +135,11 @@
     )
     activePatternClipLoop = controller.isPatternClipLooping(activePattern?.id)
     activePatternClipLoopRegion = controller.patternClipLoopRegion(activePattern?.id)
-    selectedTrackClips = controller.trackClips(selectedTrackId, activeClipId)
+    selectedTrackClips = controller.trackClips(
+      selectedTrackId,
+      activeClipId,
+      playbackActiveClipByTrackId[selectedTrackId]
+    )
     issues = validateDocument(store.document)
     canUndo = store.history.canUndo()
     canRedo = store.history.canRedo()
@@ -285,7 +291,11 @@
   function resolveActiveClipId(
     currentClipId: string | undefined
   ): string | undefined {
-    const selectedClips = controller.trackClips(selectedTrackId, currentClipId)
+    const selectedClips = controller.trackClips(
+      selectedTrackId,
+      currentClipId,
+      playbackActiveClipByTrackId[selectedTrackId]
+    )
 
     if (selectedClips.some((clip) => clip.id === currentClipId)) {
       return currentClipId
@@ -393,6 +403,18 @@
     syncView()
   }
 
+  function togglePlaybackActiveClip(clip: TrackClipView) {
+    const currentClipId = playbackActiveClipByTrackId[clip.trackId]
+    const nextClipId = currentClipId === clip.id ? undefined : clip.id
+
+    playbackActiveClipByTrackId = {
+      ...playbackActiveClipByTrackId,
+      [clip.trackId]: nextClipId
+    }
+    playback.setActiveClipForTrack(clip.trackId, nextClipId)
+    syncView()
+  }
+
   function addClipToSelectedTrack() {
     const clipId = controller.createClipForTrack(selectedTrackId)
 
@@ -408,6 +430,14 @@
 
     if (activeClipId === clip.id) {
       activeClipId = undefined
+    }
+
+    if (playbackActiveClipByTrackId[clip.trackId] === clip.id) {
+      playbackActiveClipByTrackId = {
+        ...playbackActiveClipByTrackId,
+        [clip.trackId]: undefined
+      }
+      playback.setActiveClipForTrack(clip.trackId, undefined)
     }
 
     syncView()
@@ -609,6 +639,18 @@
             <div class:active={clip.active} class="clip-row">
               <button
                 type="button"
+                class:armed={clip.playbackActive}
+                class="clip-active-badge"
+                aria-pressed={clip.playbackActive}
+                aria-label={`Set ${clip.name} as playback clip`}
+                title={clip.playbackActive ? 'Playback clip' : 'Set as playback clip'}
+                on:click={() => togglePlaybackActiveClip(clip)}
+              >
+                Play
+              </button>
+
+              <button
+                type="button"
                 class="clip-select"
                 aria-pressed={clip.active}
                 on:click={() => selectClip(clip)}
@@ -749,9 +791,23 @@
 
   .clip-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 32px;
+    grid-template-columns: 48px minmax(0, 1fr) 32px;
     align-items: stretch;
     gap: var(--spacing-xs);
+  }
+
+  .clip-active-badge {
+    width: 48px;
+    padding: 0 var(--spacing-xs);
+    font-size: var(--font-size-xs);
+    font-weight: 700;
+    color: var(--muted);
+  }
+
+  .clip-active-badge.armed {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--surface-0);
   }
 
   .clip-select {
