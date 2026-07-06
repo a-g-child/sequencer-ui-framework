@@ -13,6 +13,7 @@
     ClockService,
     PlaybackService,
     type ClockServiceStatus,
+    type ClipLaunchQuantize,
     type PlaybackEvent,
     type PlaybackRuntimeParameterValue,
     type PlaybackServiceStatus
@@ -47,6 +48,16 @@
   const playback = app.services.add(new PlaybackService())
   const controller = new AppController(app)
   const store = app.documentStore
+  const launchQuantizeOptions: Array<{
+    id: ClipLaunchQuantize
+    label: string
+  }> = [
+    { id: 'none', label: 'None' },
+    { id: 'beat', label: 'Beat' },
+    { id: 'bar', label: 'Bar' },
+    { id: '2-bars', label: '2 Bars' },
+    { id: '4-bars', label: '4 Bars' }
+  ]
   controller.selectInitialTrack()
   onMount(() => {
     const unsubscribe = app.serviceEvents.subscribe(handleServiceEvent)
@@ -67,7 +78,6 @@
   let activeClipId: string | undefined = controller.clipIdForPattern(
     activePattern?.id
   )
-  let playbackActiveClipByTrackId: Record<string, string | undefined> = {}
   let activePatternTrack: Track | undefined = findTrackForPattern(activePattern)
   let pianoRoll: PianoRollView | undefined = activePattern
     ? buildPianoRollView(activePattern)
@@ -98,7 +108,8 @@
   let selectedTrackClips: TrackClipView[] = controller.trackClips(
     selectedTrackId,
     activeClipId,
-    playbackActiveClipByTrackId[selectedTrackId]
+    playbackStatus.liveClips.activeClipByTrackId[selectedTrackId]?.clipId,
+    playbackStatus.liveClips.pendingLaunchByTrackId[selectedTrackId]
   )
   let activeEditor: EditorKind = 'piano-roll';
   $: activePatternPlayheadBeat = localPlayheadBeat(
@@ -138,7 +149,8 @@
     selectedTrackClips = controller.trackClips(
       selectedTrackId,
       activeClipId,
-      playbackActiveClipByTrackId[selectedTrackId]
+      playbackStatus.liveClips.activeClipByTrackId[selectedTrackId]?.clipId,
+      playbackStatus.liveClips.pendingLaunchByTrackId[selectedTrackId]
     )
     issues = validateDocument(store.document)
     canUndo = store.history.canUndo()
@@ -201,6 +213,7 @@
     if (event.type === 'playback:status-changed') {
       playbackStatus =
         (event.payload as PlaybackServiceStatus | undefined) ?? playbackStatus
+      refreshSelectedTrackClips()
     }
 
     if (event.type === 'playback:runtime-parameters') {
@@ -228,6 +241,15 @@
 
     automatedRuntimeParameterIds = nextAutomationIds
     runtimeParameterValues = nextValues
+  }
+
+  function refreshSelectedTrackClips() {
+    selectedTrackClips = controller.trackClips(
+      selectedTrackId,
+      activeClipId,
+      playbackStatus.liveClips.activeClipByTrackId[selectedTrackId]?.clipId,
+      playbackStatus.liveClips.pendingLaunchByTrackId[selectedTrackId]
+    )
   }
 
   function applyRuntimeParameterValues(
@@ -294,7 +316,8 @@
     const selectedClips = controller.trackClips(
       selectedTrackId,
       currentClipId,
-      playbackActiveClipByTrackId[selectedTrackId]
+      playbackStatus.liveClips.activeClipByTrackId[selectedTrackId]?.clipId,
+      playbackStatus.liveClips.pendingLaunchByTrackId[selectedTrackId]
     )
 
     if (selectedClips.some((clip) => clip.id === currentClipId)) {
@@ -404,14 +427,21 @@
   }
 
   function togglePlaybackActiveClip(clip: TrackClipView) {
-    const currentClipId = playbackActiveClipByTrackId[clip.trackId]
-    const nextClipId = currentClipId === clip.id ? undefined : clip.id
-
-    playbackActiveClipByTrackId = {
-      ...playbackActiveClipByTrackId,
-      [clip.trackId]: nextClipId
+    if (clip.pendingLaunch) {
+      playback.cancelClipLaunch(clip.trackId)
+      refreshSelectedTrackClips()
+      return
     }
-    playback.setActiveClipForTrack(clip.trackId, nextClipId)
+
+    if (clip.playbackActive) {
+      playback.clearActiveClipForTrack(clip.trackId)
+      refreshSelectedTrackClips()
+      return
+    }
+
+    playback.requestClipLaunch(clip.trackId, clip.id)
+    playbackStatus = playback.status
+    refreshSelectedTrackClips()
     syncView()
   }
 
@@ -432,12 +462,12 @@
       activeClipId = undefined
     }
 
-    if (playbackActiveClipByTrackId[clip.trackId] === clip.id) {
-      playbackActiveClipByTrackId = {
-        ...playbackActiveClipByTrackId,
-        [clip.trackId]: undefined
-      }
-      playback.setActiveClipForTrack(clip.trackId, undefined)
+    if (
+      playbackStatus.liveClips.activeClipByTrackId[clip.trackId]?.clipId === clip.id ||
+      playbackStatus.liveClips.pendingLaunchByTrackId[clip.trackId]?.clipId === clip.id
+    ) {
+      playback.clearActiveClipForTrack(clip.trackId)
+      playbackStatus = playback.status
     }
 
     syncView()
@@ -566,6 +596,33 @@
     return Number((event.currentTarget as HTMLInputElement).value)
   }
 
+  function formatBeat(beat: number | undefined): string {
+    if (beat === undefined) return '--'
+
+    return Number.isInteger(beat) ? String(beat) : beat.toFixed(2)
+  }
+
+  function setLaunchQuantize(quantize: ClipLaunchQuantize) {
+    playback.setClipLaunchQuantize(quantize)
+    playbackStatus = playback.status
+    refreshSelectedTrackClips()
+  }
+
+  function launchQuantizeLabel(quantize: ClipLaunchQuantize): string {
+    return launchQuantizeOptions.find((option) => option.id === quantize)?.label ?? 'Bar'
+  }
+
+  function selectedTrackQueuedLaunch(): string {
+    const pendingLaunch =
+      playbackStatus.liveClips.pendingLaunchByTrackId[selectedTrackId]
+
+    if (!pendingLaunch) return 'None'
+
+    const clip = selectedTrackClips.find((item) => item.id === pendingLaunch.clipId)
+
+    return `${clip?.name ?? 'Clip'} @ beat ${formatBeat(pendingLaunch.launchAtBeat)}`
+  }
+
   function undo() {
     controller.undo()
     syncView()
@@ -634,19 +691,49 @@
           </button>
         </div>
 
+        <div class="clip-launch-controls" aria-label="Clip launch quantize">
+          {#each launchQuantizeOptions as option (option.id)}
+            <button
+              type="button"
+              class:active={playbackStatus.liveClips.launchQuantize === option.id}
+              on:click={() => setLaunchQuantize(option.id)}
+            >
+              {option.label}
+            </button>
+          {/each}
+        </div>
+
+        <div class="clip-launch-status" aria-label="Clip launch status">
+          <span>
+            Launch quantize: {launchQuantizeLabel(playbackStatus.liveClips.launchQuantize)}
+          </span>
+          <span>Queued: {selectedTrackQueuedLaunch()}</span>
+        </div>
+
         <div class="clip-list">
           {#each selectedTrackClips as clip (clip.id)}
             <div class:active={clip.active} class="clip-row">
               <button
                 type="button"
                 class:armed={clip.playbackActive}
+                class:queued={clip.pendingLaunch}
                 class="clip-active-badge"
-                aria-pressed={clip.playbackActive}
-                aria-label={`Set ${clip.name} as playback clip`}
-                title={clip.playbackActive ? 'Playback clip' : 'Set as playback clip'}
+                aria-pressed={clip.playbackActive || clip.pendingLaunch}
+                aria-label={`Launch ${clip.name}`}
+                title={clip.pendingLaunch
+                  ? `Queued for beat ${formatBeat(clip.launchAtBeat)}`
+                  : clip.playbackActive
+                    ? 'Playback clip'
+                    : 'Launch clip'}
                 on:click={() => togglePlaybackActiveClip(clip)}
               >
-                Play
+                {#if clip.pendingLaunch}
+                  {formatBeat(clip.launchAtBeat)}
+                {:else if clip.playbackActive}
+                  Play
+                {:else}
+                  Cue
+                {/if}
               </button>
 
               <button
@@ -789,6 +876,42 @@
     gap: var(--spacing-xs);
   }
 
+  .clip-launch-controls {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: var(--spacing-xs);
+  }
+
+  .clip-launch-controls button {
+    min-width: 0;
+    min-height: 26px;
+    padding: 0 var(--spacing-xs);
+    font-size: var(--font-size-xs);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .clip-launch-controls button.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  .clip-launch-status {
+    display: grid;
+    gap: var(--spacing-2xs);
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    line-height: 1.35;
+  }
+
+  .clip-launch-status span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .clip-row {
     display: grid;
     grid-template-columns: 48px minmax(0, 1fr) 32px;
@@ -808,6 +931,12 @@
     border-color: var(--accent);
     background: var(--accent);
     color: var(--surface-0);
+  }
+
+  .clip-active-badge.queued {
+    border-color: var(--accent-strong);
+    background: var(--accent-soft);
+    color: var(--accent);
   }
 
   .clip-select {

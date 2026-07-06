@@ -1,9 +1,11 @@
 import type { Pattern, SequencerDocument, TimelineEvent } from '@sequencer/core'
 import { getEffectiveBeat, getEffectiveVelocity, isNoteEvent } from '@sequencer/music'
 import { freezePlaybackModel, type PlaybackAutomation, type PlaybackClip, type PlaybackModel, type PlaybackNote, type PlaybackTrack } from './model'
+import type { ActiveClipLaunch } from './live-clips'
 
 export interface PlaybackModelBuilderOptions {
   readonly activeClipByTrackId?: Readonly<Record<string, string | undefined>>
+  readonly activeClipsByTrackId?: Readonly<Record<string, ActiveClipLaunch | undefined>>
 }
 
 export class PlaybackModelBuilder {
@@ -26,7 +28,8 @@ export class PlaybackModelBuilder {
       }
       tracks.push(playbackTrack)
 
-      const activeClipId = options.activeClipByTrackId?.[track.id]
+      const activeLaunch = options.activeClipsByTrackId?.[track.id]
+      const activeClipId = activeLaunch?.clipId ?? options.activeClipByTrackId?.[track.id]
       const activeClipSlot = activeClipId
         ? track.clips.find((slot) => slot.target === activeClipId)
         : undefined
@@ -51,7 +54,7 @@ export class PlaybackModelBuilder {
             trackId: track.id,
             patternId: pattern.id,
             name: activeClipSlot.name || activeClip.name,
-            start: 0,
+            start: activeLaunch?.launchedAtBeat ?? 0,
             length: clipLength,
             loop,
             loopStart,

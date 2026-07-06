@@ -2,6 +2,11 @@ import type { DocumentObserver, Operation, Service, ServiceContext, ServiceEvent
 import { PlaybackModelBuilder } from './builder'
 import type { ClockState } from './clock'
 import type { PlaybackEvent } from './events'
+import {
+  LiveClipService,
+  type ClipLaunchQuantize,
+  type LiveClipState
+} from './live-clips'
 import type { PlaybackModel } from './model'
 import {
   ConsoleOutput,
@@ -23,6 +28,7 @@ import {
 export interface PlaybackServiceStatus extends SchedulerStatus {
   readonly modelId: string
   readonly noteCount: number
+  readonly liveClips: LiveClipState
   readonly outputManager: OutputManagerStatus
   readonly statistics: PlaybackOutputStatistics
 }
@@ -34,8 +40,9 @@ export class PlaybackService implements Service, DocumentObserver {
   private context?: ServiceContext
   private model?: PlaybackModel
   private runtimeBpm?: number
-  private activeClipByTrackId: Record<string, string | undefined> = {}
+  private latestClockState: ClockState | undefined
   private readonly builder = new PlaybackModelBuilder()
+  private readonly liveClips = new LiveClipService('bar')
   private readonly scheduler: Scheduler & { readonly status?: SchedulerStatus }
   private readonly outputManager = new OutputManager()
   private readonly statisticsOutput = new StatisticsOutput()
@@ -81,6 +88,7 @@ export class PlaybackService implements Service, DocumentObserver {
       ...status,
       modelId: this.model?.id ?? '',
       noteCount: this.model?.notes.length ?? 0,
+      liveClips: this.liveClips.state,
       outputManager: this.outputManager.status,
       statistics: this.statisticsOutput.statistics
     }
@@ -98,21 +106,39 @@ export class PlaybackService implements Service, DocumentObserver {
     this.rebuildModel()
   }
 
-  setActiveClipForTrack(trackId: string, clipId: string | undefined): void {
-    const nextActiveClipByTrackId = { ...this.activeClipByTrackId }
-
-    if (clipId) {
-      nextActiveClipByTrackId[trackId] = clipId
-    } else {
-      delete nextActiveClipByTrackId[trackId]
-    }
-
-    this.activeClipByTrackId = nextActiveClipByTrackId
+  requestClipLaunch(
+    trackId: string,
+    clipId: string,
+    launchQuantize: ClipLaunchQuantize | number = this.liveClips.state.launchQuantizeBeats
+  ): void {
+    this.liveClips.requestLaunch(
+      trackId,
+      clipId,
+      this.latestClockState ?? this.createStoppedClockState(),
+      launchQuantize
+    )
     this.rebuildModel()
+    this.emitStatus()
+  }
+
+  cancelClipLaunch(trackId: string): void {
+    this.liveClips.cancelLaunch(trackId)
+    this.emitStatus()
+  }
+
+  setClipLaunchQuantize(launchQuantize: ClipLaunchQuantize | number): void {
+    this.liveClips.setLaunchQuantize(launchQuantize)
+    this.emitStatus()
+  }
+
+  clearActiveClipForTrack(trackId: string): void {
+    this.liveClips.clearActiveClip(trackId)
+    this.rebuildModel()
+    this.emitStatus()
   }
 
   activeClipForTrack(trackId: string): string | undefined {
-    return this.activeClipByTrackId[trackId]
+    return this.liveClips.state.activeClipByTrackId[trackId]?.clipId
   }
 
   private rebuildModel(): void {
@@ -122,7 +148,7 @@ export class PlaybackService implements Service, DocumentObserver {
     this.model = this.builder.build(
       this.context.documentStore.document,
       this.runtimeBpm,
-      { activeClipByTrackId: this.activeClipByTrackId }
+      { activeClipsByTrackId: this.liveClips.state.activeClipByTrackId }
     )
     this.scheduler.setModel(this.model)
     this.statisticsOutput.recordPlaybackModelRebuild(nowMs() - startedAt)
@@ -134,31 +160,42 @@ export class PlaybackService implements Service, DocumentObserver {
 
     if (event.type === 'clock:started') {
       const state = event.payload as ClockState
+      this.latestClockState = state
       this.runtimeBpm = state.bpm
+      this.liveClips.applyDueLaunches(state)
       this.rebuildModel()
       this.scheduler.start(state.beat)
       this.emitStatus()
     }
 
     if (event.type === 'clock:stopped') {
+      this.latestClockState = event.payload as ClockState
       this.scheduler.stop()
       this.emitStatus()
     }
 
     if (event.type === 'clock:seeked') {
       const state = event.payload as ClockState
+      this.latestClockState = state
       this.scheduler.seek(state.beat)
       this.emitStatus()
     }
 
     if (event.type === 'clock:tempo-changed') {
       const state = event.payload as ClockState
+      this.latestClockState = state
       this.runtimeBpm = state.bpm
       this.rebuildModel()
     }
 
     if (event.type === 'clock:tick') {
       const state = event.payload as ClockState
+      this.latestClockState = state
+
+      if (this.liveClips.applyDueLaunches(state)) {
+        this.rebuildModel()
+      }
+
       const events = this.scheduler.tick(state)
       const dispatchTimeMs = nowMs()
 
@@ -212,6 +249,16 @@ export class PlaybackService implements Service, DocumentObserver {
       serviceId: this.id,
       payload: values
     })
+  }
+
+  private createStoppedClockState(): ClockState {
+    return {
+      running: false,
+      beat: this.scheduler.status?.currentBeat ?? 0,
+      bpm: this.runtimeBpm ?? this.context?.documentStore.document.bpm ?? 120,
+      timeMs: nowMs(),
+      sourceId: 'playback'
+    }
   }
 
 }
