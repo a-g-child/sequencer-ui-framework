@@ -333,32 +333,149 @@ The document should retain:
 
 Unavailable execution is a runtime condition, not a document deletion.
 
-## Suggested Milestones
+## Phase 9 Native Runtime Spike
 
-### 1. Native Scheduler Adapter
+The next native investment should be an adapter spike, not a full native audio
+engine.
 
-Keep the TypeScript scheduler as reference. Add an adapter with the same public
-contract and prove equivalence with shared tests.
+The spike should prove that native execution can be introduced without changing
+creative contracts.
 
-### 2. Native Event Clock
+### 1. Shared Serializable Schemas
 
-Move timing-sensitive scheduling into Rust or C++ while keeping event emission
-in the same `PlaybackEvent` shape.
+Define the shared plain-data schemas that cross the native boundary:
 
-### 3. Native Audio Command Bridge
+- `PlaybackModel`
+- `ClockState`
+- `PlaybackEvent`
+- `DeviceCommand`
 
-Introduce a command queue from runtime devices to a native audio engine. Start
-with `voice:start`, `voice:release`, `parameter:set`, and `panic`.
+These should be boring, serializable data shapes. They should not contain
+document objects, mutable registries, class instances, DOM objects, Svelte
+state, or functions.
 
-### 4. Native Basic Synth Executor
+The useful test is:
 
-Keep `BasicSynthRuntimeDevice` and its descriptors in TypeScript. Replace only
-the sound executor with a native oscillator/envelope/filter implementation.
+```text
+Can this shape be sent to Rust, C++, WebAssembly, IPC, or an embedded runtime
+without teaching that runtime about the editor?
+```
 
-### 5. Native Device Factories
+### 2. NativeSchedulerAdapter
 
-Allow the device registry to choose between WebAudio, native, external MIDI,
-hardware-module, or missing factories for the same descriptor.
+Add a `NativeSchedulerAdapter` in TypeScript with the same interface as the
+current scheduler.
+
+The first implementation should wrap the TypeScript scheduler:
+
+```text
+PlaybackService
+  -> NativeSchedulerAdapter
+  -> TypeScriptScheduler
+```
+
+This proves that playback can swap scheduler implementations without touching
+the document, `PlaybackModelBuilder`, UI, runtime devices, or outputs.
+
+Later, the adapter can call WebAssembly or a native runtime:
+
+```text
+PlaybackService
+  -> NativeSchedulerAdapter
+  -> Rust/WASM scheduler
+```
+
+The adapter is the seam. The scheduler interface is the contract.
+
+### 3. NativeAudioAdapter
+
+Add a `NativeAudioAdapter` that accepts `DeviceCommand[]`.
+
+The first implementation should do no DSP. It can log, acknowledge, count, and
+report command diagnostics.
+
+This proves the bridge before introducing real-time audio constraints.
+
+### 4. VoiceAction To DeviceCommand
+
+Convert the current voice action stream into a general command stream:
+
+```text
+VoiceAction
+  -> DeviceCommand
+```
+
+Initial commands:
+
+- `voice:start`
+- `voice:release`
+- `voice:steal`
+- `parameter:set`
+- `panic`
+
+The WebAudio path should continue to work. Native audio simply becomes another
+consumer of the same execution command language.
+
+### 5. Scheduler Acceptance Tests
+
+Add shared behavior tests that compare the TypeScript scheduler with the native
+adapter.
+
+For the same `PlaybackModel`, both must emit identical `PlaybackEvent`
+sequences.
+
+The first tests should cover:
+
+- note on and off events
+- looped clips
+- automation samples
+- seek behavior
+- stop behavior
+- deterministic event ids
+- no duplicate events across lookahead windows
+
+The TypeScript scheduler remains the readable specification. Native schedulers
+must match it before optimizing beyond it.
+
+### 6. Native Audio Proof
+
+Only after schemas, adapters, commands, and scheduler equivalence tests exist
+should the project build a native audio proof.
+
+Keep the proof deliberately small:
+
+- one oscillator
+- one envelope
+- one output stream
+- command bridge only
+
+The proof should replace execution, not creative contracts.
+
+## Technology Path
+
+Start with Rust and WebAssembly for the scheduler contract.
+
+That path is easier to test in the current app because the scheduler consumes
+serializable data and emits serializable data. It can be validated without
+native audio drivers, real-time threads, or platform-specific packaging.
+
+Use native Rust or C++ later for actual low-latency audio backends, hardware
+drivers, and embedded runtime devices.
+
+The split is:
+
+```text
+Scheduler first:
+  Rust/WASM
+  serializable data
+  deterministic tests
+
+Audio later:
+  native Rust/C++
+  real-time command queue
+  audio driver
+  DSP engine
+```
 
 ## Non-Goals
 

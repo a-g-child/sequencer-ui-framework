@@ -272,7 +272,7 @@ External devices should use the same runtime device contract:
 - network devices
 - future controller or robotics targets
 
-### Phase 8.5: Native Runtime
+### Phase 8.5: Native Runtime Preparation
 
 Native implementations should replace execution systems behind the same
 contracts:
@@ -282,9 +282,13 @@ contracts:
 - native audio engine
 - native hardware bridges
 
-Plugin hosting should remain postponed until the internal runtime device
-contract is stronger. VST, CLAP, and LV2 can later become adapters rather than
-the foundation.
+Phase 8 should stop at preparation and boundary definition. The first native
+implementation work belongs in Phase 9 as an adapter spike, not as a full audio
+engine rewrite.
+
+Plugin hosting should remain postponed until the internal runtime device and
+native runtime contracts are stronger. VST, CLAP, and LV2 can later become
+adapters rather than the foundation.
 
 ### Historical Phase 8 Notes
 
@@ -385,15 +389,143 @@ routing model as the internal synth and sampler devices.
 The scheduler should remain unchanged. It emits playback events. Devices and
 outputs decide how to execute them.
 
-## Phase 9: Voice and Audio
+## Phase 9: Native Runtime Spike
 
-This is where C++ or Rust starts earning its keep.
+Phase 9 should prove the native seam before building a full native engine.
 
-Audio should enter through the output boundary:
+The goal is not "rewrite the runtime in Rust." The goal is to show that native
+execution can sit under the existing contracts:
 
 ```text
-AudioOutput
-  -> VoiceManager
+Document
+  -> PlaybackModelBuilder
+  -> PlaybackModel
+  -> Scheduler
+  -> PlaybackEvent[]
+  -> RuntimeDevice
+  -> DeviceCommand[]
+  -> Native Adapter
+```
+
+The current TypeScript scheduler and WebAudio executor remain the reference
+implementations. Native adapters must match those contracts before they try to
+outperform them.
+
+### Phase 9.1: Serializable Runtime Schemas
+
+Define shared plain-data shapes for the native boundary:
+
+- `PlaybackModel`
+- `ClockState`
+- `PlaybackEvent`
+- `DeviceCommand`
+
+These schemas should avoid document objects, Svelte state, class instances, and
+runtime registries. They are the data that Rust, C++, WebAssembly, IPC, or a
+future embedded runtime can consume without knowing the editor.
+
+### Phase 9.2: NativeSchedulerAdapter
+
+Add a TypeScript adapter with the same interface as the current scheduler.
+
+The first implementation should wrap the TypeScript scheduler:
+
+```text
+PlaybackService
+  -> NativeSchedulerAdapter
+  -> TypeScriptScheduler
+```
+
+That proves the service can swap scheduler implementations without changing the
+document, model builder, UI, output manager, or runtime device path.
+
+Later the same adapter can call WebAssembly or a native process:
+
+```text
+PlaybackService
+  -> NativeSchedulerAdapter
+  -> WASM / native scheduler
+```
+
+### Phase 9.3: NativeAudioAdapter
+
+Add a native audio adapter that accepts device commands but does no DSP yet.
+
+The first version can log, acknowledge, and expose diagnostics for commands:
+
+- `voice:start`
+- `voice:release`
+- `voice:steal`
+- `parameter:set`
+- `panic`
+
+This proves the command bridge before introducing real-time audio constraints.
+
+### Phase 9.4: VoiceAction To DeviceCommand
+
+Convert the current `VoiceAction` stream into a more general `DeviceCommand`
+stream.
+
+```text
+PlaybackEvent
+  -> RuntimeDevice
+  -> VoiceAction
+  -> DeviceCommand
+  -> Audio Adapter
+```
+
+The bridge should preserve the current WebAudio path while making native audio
+an implementation choice.
+
+### Phase 9.5: Scheduler Acceptance Tests
+
+Add shared behavior tests proving that the TypeScript scheduler and native
+adapter emit identical `PlaybackEvent` sequences for the same `PlaybackModel`.
+
+The tests should cover:
+
+- notes
+- looped clips
+- automation samples
+- seeks
+- stops
+- deterministic event ids
+- no duplicate lookahead events
+
+This makes the TypeScript scheduler the readable specification for any native
+scheduler implementation.
+
+### Phase 9.6: Native Audio Proof
+
+Only after the adapter and tests exist should the project build a native audio
+proof:
+
+- one oscillator
+- one envelope
+- one output stream
+- command bridge only
+
+The proof should replace execution, not the creative contracts.
+
+### Recommended Technology Path
+
+Start with Rust and WebAssembly for the scheduler contract because it can be
+tested inside the current app and CI shape.
+
+Use native Rust or C++ later for low-latency audio, device drivers, and
+hardware-backed runtime devices.
+
+## Phase 10: Native Audio And Device Execution
+
+After Phase 9 proves the adapter seam, native audio can become a serious
+runtime implementation.
+
+Audio should enter through the runtime device and command boundary:
+
+```text
+RuntimeDevice
+  -> DeviceCommand[]
+  -> NativeAudioAdapter
   -> DSP Graph
   -> Audio Device
 ```
@@ -401,9 +533,10 @@ AudioOutput
 The scheduler still knows nothing about oscillators, voices, buffers, or audio
 drivers.
 
-Voice allocation belongs inside `AudioOutput`, not in the scheduler.
+Voice allocation belongs inside runtime devices and reusable audio packages,
+not in the scheduler.
 
-## Phase 10: Plugin Host
+## Phase 11: Plugin Host
 
 Once real outputs and audio exist, the plugin host can become another consumer
 in the playback chain.
