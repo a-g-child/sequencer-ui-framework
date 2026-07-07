@@ -1,4 +1,9 @@
 import type { Parameter, ParameterDefinition } from '@sequencer/core';
+import type {
+  DeviceInstance,
+  DeviceParameterDescriptor,
+  DeviceParameterValue
+} from '@sequencer/device';
 
 export type PatternAutomationTarget = {
   parameter: Parameter<number>;
@@ -7,6 +12,12 @@ export type PatternAutomationTarget = {
   value: number;
   min: number;
   max: number;
+};
+
+export type PatternDeviceAutomationParameter = {
+  device: DeviceInstance;
+  descriptor: DeviceParameterDescriptor;
+  value: DeviceParameterValue;
 };
 
 export type AutomationCurvePoint = {
@@ -25,9 +36,10 @@ export function buildPatternAutomationTargets(
   properties: Array<{
     parameter: Parameter;
     definition: ParameterDefinition;
-  }>
+  }>,
+  deviceParameters: PatternDeviceAutomationParameter[] = []
 ): PatternAutomationTarget[] {
-  return properties.flatMap(({ parameter, definition }) => {
+  const trackTargets = properties.flatMap(({ parameter, definition }) => {
     if (definition.kind !== 'number' || typeof parameter.value !== 'number') {
       return [];
     }
@@ -41,6 +53,47 @@ export function buildPatternAutomationTargets(
       max: definition.max ?? 1
     }];
   });
+
+  const deviceTargets = deviceParameters.flatMap(({ device, descriptor, value }) => {
+    if (descriptor.kind !== 'number' || typeof value !== 'number') {
+      return [];
+    }
+
+    const definition: ParameterDefinition<number> = {
+      id: `device-paramdef:${device.descriptorKey}:${descriptor.key}`,
+      name: descriptor.name,
+      kind: 'number',
+      defaultValue: Number(descriptor.defaultValue),
+      min: descriptor.min,
+      max: descriptor.max,
+      step: descriptor.step,
+      unit: descriptor.unit
+    };
+    const parameter: Parameter<number> = {
+      id: deviceAutomationTargetId(device.id, descriptor.key),
+      name: descriptor.name,
+      definitionId: definition.id,
+      value
+    };
+
+    return [{
+      parameter,
+      definition,
+      label: `${device.name} / ${descriptor.name}`,
+      value,
+      min: descriptor.min ?? 0,
+      max: descriptor.max ?? 1
+    }];
+  });
+
+  return [...trackTargets, ...deviceTargets];
+}
+
+export function deviceAutomationTargetId(
+  deviceInstanceId: string,
+  parameterKey: string
+): string {
+  return `device:${deviceInstanceId}:${parameterKey}`;
 }
 
 export function createConstantAutomationSegment(

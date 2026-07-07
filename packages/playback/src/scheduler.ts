@@ -251,6 +251,7 @@ export class TypeScriptScheduler implements Scheduler {
       readonly trackId: string
       readonly parameterId: string
       readonly parameterKey?: string
+      readonly deviceInstanceId?: string
       readonly value: number
     },
     beat: BeatTime,
@@ -263,7 +264,7 @@ export class TypeScriptScheduler implements Scheduler {
     const track = tracksById.get(automation.trackId)
     const destination = destinationForTrack(
       automation.trackId,
-      track?.deviceInstanceId
+      automation.deviceInstanceId ?? track?.deviceInstanceId
     )
     const repeatSuffix = repeatIndex > 0 ? `:repeat-${repeatIndex}` : ''
 
@@ -284,7 +285,10 @@ export class TypeScriptScheduler implements Scheduler {
 
   private addAutomationSampleEvents(
     events: PlaybackEvent[],
-    tracksById: Map<string, { readonly channel: number }>,
+    tracksById: Map<
+      string,
+      { readonly channel: number; readonly deviceInstanceId?: string }
+    >,
     lane: AutomationLane,
     fromBeat: BeatTime,
     toBeat: BeatTime
@@ -307,6 +311,7 @@ export class TypeScriptScheduler implements Scheduler {
             trackId: lane.trackId,
             parameterId: lane.parameterId,
             parameterKey: lane.parameterKey,
+            deviceInstanceId: lane.deviceInstanceId,
             value
           },
           beat,
@@ -333,6 +338,7 @@ type AutomationLane = {
   readonly clipId: string
   readonly parameterId: string
   readonly parameterKey?: string
+  readonly deviceInstanceId?: string
   readonly clip: PlaybackModel['clips'][number]
   readonly points: readonly {
     readonly beat: BeatTime
@@ -392,6 +398,7 @@ function buildAutomationLanes(model: PlaybackModel): AutomationLane[] {
       clipId: automation.clipId,
       parameterId: automation.parameterId,
       parameterKey: automation.parameterKey,
+      deviceInstanceId: automation.deviceInstanceId,
       clip,
       points: [{ beat: automation.beat, value: automation.value }]
     })

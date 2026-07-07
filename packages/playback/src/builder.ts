@@ -216,10 +216,7 @@ function addPatternPlaybackEvents(context: PatternPlaybackEventContext): void {
       continue
     }
 
-    const parameter = document.parameters.find(event.target)
-    const definition = parameter
-      ? document.parameterDefinitions.find(parameter.definitionId)
-      : undefined
+    const automationTarget = resolveAutomationTarget(document, event.target)
 
     automations.push({
       id: `${clip.id}:${event.id}`,
@@ -228,7 +225,8 @@ function addPatternPlaybackEvents(context: PatternPlaybackEventContext): void {
       clipId: clip.id,
       patternId: pattern.id,
       parameterId: event.target,
-      parameterKey: definition?.key,
+      parameterKey: automationTarget.parameterKey,
+      deviceInstanceId: automationTarget.deviceInstanceId,
       value: event.value,
       beat: clip.start + event.time
     })
@@ -243,6 +241,42 @@ function isAutomationEvent(
     typeof event.target === 'string' &&
     typeof event.value === 'number'
   )
+}
+
+function resolveAutomationTarget(
+  document: SequencerDocument,
+  target: string
+): { parameterKey?: string; deviceInstanceId?: string } {
+  const deviceTarget = parseDeviceAutomationTarget(target)
+
+  if (deviceTarget && document.deviceInstances.has(deviceTarget.deviceInstanceId)) {
+    return deviceTarget
+  }
+
+  const parameter = document.parameters.find(target)
+  const definition = parameter
+    ? document.parameterDefinitions.find(parameter.definitionId)
+    : undefined
+
+  return {
+    parameterKey: definition?.key
+  }
+}
+
+function parseDeviceAutomationTarget(
+  target: string
+): { parameterKey: string; deviceInstanceId: string } | undefined {
+  const [kind, deviceInstanceId, ...parameterKeyParts] = target.split(':')
+  const parameterKey = parameterKeyParts.join(':')
+
+  if (kind !== 'device' || !deviceInstanceId || !parameterKey) {
+    return undefined
+  }
+
+  return {
+    deviceInstanceId,
+    parameterKey
+  }
 }
 
 function clampLoopStart(loopStart: number, clipLength: number): number {

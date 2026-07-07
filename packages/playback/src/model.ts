@@ -64,6 +64,7 @@ export interface PlaybackAutomation {
   readonly patternId: string
   readonly parameterId: string
   readonly parameterKey?: string
+  readonly deviceInstanceId?: string
   readonly value: number
   readonly beat: BeatTime
 }

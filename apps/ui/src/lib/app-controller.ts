@@ -692,9 +692,8 @@ export class AppController {
     if (!patternId || !parameterId) return false
 
     const pattern = this.app.documentStore.document.patterns.find(patternId)
-    const parameter = this.app.documentStore.document.parameters.find(parameterId)
 
-    if (!pattern || !parameter) return false
+    if (!pattern) return false
 
     this.app.documentStore.execute(
       new SetPatternAutomationOperation(patternId, parameterId, points)

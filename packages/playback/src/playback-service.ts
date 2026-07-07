@@ -323,6 +323,7 @@ export class PlaybackService implements Service, DocumentObserver {
 
     if (event.type === 'clock:tick') {
       const state = event.payload as ClockState
+      const previousTimeMs = this.latestClockState?.timeMs ?? state.timeMs
       this.latestClockState = state
 
       const appliedLaunches = this.liveClips.applyDueLaunches(state)
@@ -334,6 +335,7 @@ export class PlaybackService implements Service, DocumentObserver {
 
       const events = this.scheduler.tick(state)
       const dispatchTimeMs = nowMs()
+      this.deviceManager.advance(Math.max(0, state.timeMs - previousTimeMs))
 
       this.statisticsOutput.recordSchedulerFrame({
         clockTimeMs: state.timeMs,

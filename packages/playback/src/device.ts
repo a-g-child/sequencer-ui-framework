@@ -71,6 +71,16 @@ export class PlaybackDeviceManager {
     }
   }
 
+  advance(deltaMs: number): void {
+    if (!Number.isFinite(deltaMs) || deltaMs <= 0) return
+
+    for (const device of this.runtimeDevices.values()) {
+      if (hasAdvance(device)) {
+        device.advance(deltaMs)
+      }
+    }
+  }
+
   processEvents(events: readonly PlaybackEvent[]): VoiceAction[] {
     const voiceActions: VoiceAction[] = []
 
@@ -121,5 +131,16 @@ function hasDiagnostics(
   return (
     'getDiagnostics' in device &&
     typeof device.getDiagnostics === 'function'
+  )
+}
+
+function hasAdvance(
+  device: PlaybackRuntimeDevice
+): device is PlaybackRuntimeDevice & {
+  advance(deltaMs: number): void
+} {
+  return (
+    'advance' in device &&
+    typeof device.advance === 'function'
   )
 }

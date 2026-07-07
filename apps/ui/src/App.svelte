@@ -108,7 +108,8 @@
     ? buildPianoRollView(activePattern)
     : undefined
   let automationTargets = buildPatternAutomationTargets(
-    buildTrackParameterViews(activePatternTrack)
+    buildTrackParameterViews(activePatternTrack),
+    buildSelectedTrackDeviceParameterViews(activePatternTrack)
   )
   let activePatternClipLoop = activeClipId
     ? store.document.midiClips.find(activeClipId)?.loopEnabled ?? true
@@ -182,7 +183,8 @@
     activePatternTrack = findTrackForPattern(activePattern)
     pianoRoll = activePattern ? buildPianoRollView(activePattern) : undefined
     automationTargets = buildPatternAutomationTargets(
-      buildTrackParameterViews(activePatternTrack)
+      buildTrackParameterViews(activePatternTrack),
+      buildSelectedTrackDeviceParameterViews(activePatternTrack)
     )
     activePatternClipLoop = activeClipId
       ? store.document.midiClips.find(activeClipId)?.loopEnabled ?? true
