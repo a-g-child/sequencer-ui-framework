@@ -11,35 +11,146 @@
 
   $: numberValue = Number(value ?? descriptor.defaultValue)
   $: displayValue = Number.isFinite(numberValue) ? numberValue : 0
+  $: minimum = descriptor.min ?? 0
+  $: maximum = descriptor.max ?? 1
+  $: step = descriptor.step ?? 0.01
+  $: normalizedValue = normalizeValue(displayValue, minimum, maximum)
+  $: angle = -135 + normalizedValue * 270
+  $: formattedValue = formatValue(displayValue, step)
+  $: dialStyle = `--dial-angle: ${angle}deg; --dial-fill: ${normalizedValue * 100}%`
 
   function commit(event: Event) {
     const nextValue = Number((event.currentTarget as HTMLInputElement).value)
 
     if (Number.isFinite(nextValue)) {
-      onChange(nextValue)
+      setValue(nextValue)
     }
+  }
+
+  function beginDialDrag(event: PointerEvent) {
+    if (disabled) return
+
+    const target = event.currentTarget as HTMLElement
+
+    target.setPointerCapture(event.pointerId)
+    updateFromPointer(event, target)
+  }
+
+  function dragDial(event: PointerEvent) {
+    if (disabled) return
+
+    const target = event.currentTarget as HTMLElement
+
+    if (!target.hasPointerCapture(event.pointerId)) return
+
+    updateFromPointer(event, target)
+  }
+
+  function handleKeydown(event: KeyboardEvent) {
+    if (disabled) return
+
+    const increment = step || 0.01
+
+    if (event.key === 'ArrowUp' || event.key === 'ArrowRight') {
+      event.preventDefault()
+      setValue(displayValue + increment)
+    }
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') {
+      event.preventDefault()
+      setValue(displayValue - increment)
+    }
+
+    if (event.key === 'Home') {
+      event.preventDefault()
+      setValue(minimum)
+    }
+
+    if (event.key === 'End') {
+      event.preventDefault()
+      setValue(maximum)
+    }
+  }
+
+  function handleWheel(event: WheelEvent) {
+    if (disabled) return
+
+    event.preventDefault()
+    setValue(displayValue + (event.deltaY < 0 ? step : -step))
+  }
+
+  function updateFromPointer(event: PointerEvent, target: HTMLElement) {
+    const bounds = target.getBoundingClientRect()
+    const centerX = bounds.left + bounds.width / 2
+    const centerY = bounds.top + bounds.height / 2
+    const radians = Math.atan2(event.clientY - centerY, event.clientX - centerX)
+    let degrees = radians * 180 / Math.PI + 90
+
+    if (degrees < -180) degrees += 360
+    if (degrees > 180) degrees -= 360
+
+    const clampedAngle = Math.min(135, Math.max(-135, degrees))
+    const nextValue = minimum + ((clampedAngle + 135) / 270) * (maximum - minimum)
+
+    setValue(nextValue)
+  }
+
+  function setValue(nextValue: number) {
+    if (!Number.isFinite(nextValue)) return
+
+    const clampedValue = Math.min(maximum, Math.max(minimum, nextValue))
+    const steppedValue = step > 0
+      ? Math.round(clampedValue / step) * step
+      : clampedValue
+
+    onChange(Number(steppedValue.toFixed(6)))
+  }
+
+  function normalizeValue(current: number, min: number, max: number): number {
+    if (max <= min) return 0
+
+    return Math.min(1, Math.max(0, (current - min) / (max - min)))
+  }
+
+  function formatValue(current: number, currentStep: number): string {
+    if (!Number.isFinite(current)) return '0'
+    if (Math.abs(current) >= 1000) return Math.round(current).toString()
+    if (currentStep >= 1) return Math.round(current).toString()
+    if (currentStep >= 0.1) return current.toFixed(1)
+
+    return current.toFixed(2)
   }
 </script>
 
 <label class="parameter-control">
   <span>{descriptor.name}</span>
   <div class="number-control">
-    <input
-      type="range"
-      min={descriptor.min ?? 0}
-      max={descriptor.max ?? 1}
-      step={descriptor.step ?? 0.01}
-      value={displayValue}
-      on:input={commit}
+    <button
+      type="button"
+      class="dial"
+      style={dialStyle}
+      role="slider"
+      aria-label={descriptor.name}
+      aria-valuemin={minimum}
+      aria-valuemax={maximum}
+      aria-valuenow={displayValue}
       disabled={disabled}
-    />
+      on:pointerdown={beginDialDrag}
+      on:pointermove={dragDial}
+      on:keydown={handleKeydown}
+      on:wheel={handleWheel}
+    >
+      <span class="dial-face">
+        <span class="dial-pointer"></span>
+      </span>
+    </button>
     <input
       class="number-field"
       type="number"
-      min={descriptor.min}
-      max={descriptor.max}
-      step={descriptor.step ?? 0.01}
-      value={displayValue}
+      min={minimum}
+      max={maximum}
+      step={step}
+      value={formattedValue}
       on:change={commit}
       disabled={disabled}
     />
@@ -63,14 +174,55 @@
   .number-control {
     min-width: 0;
     display: grid;
-    grid-template-columns: minmax(72px, 1fr) minmax(56px, 0.55fr) auto;
+    grid-template-columns: auto minmax(54px, 1fr) auto;
     align-items: center;
-    gap: var(--spacing-2xs);
+    gap: var(--spacing-xs);
   }
 
-  .number-control input[type='range'] {
-    min-width: 0;
-    width: 100%;
+  .dial {
+    position: relative;
+    width: 44px;
+    aspect-ratio: 1;
+    padding: 0;
+    border-radius: 50%;
+    border: var(--border-width) solid var(--border);
+    background:
+      conic-gradient(
+        from 225deg,
+        var(--accent) 0 var(--dial-fill),
+        color-mix(in srgb, var(--border) 78%, transparent) var(--dial-fill) 75%,
+        transparent 75% 100%
+      );
+    cursor: ns-resize;
+    touch-action: none;
+  }
+
+  .dial:disabled {
+    cursor: not-allowed;
+    opacity: 0.58;
+  }
+
+  .dial-face {
+    position: absolute;
+    inset: 5px;
+    border-radius: 50%;
+    background:
+      radial-gradient(circle at 50% 42%, var(--surface-elevated), var(--surface));
+    box-shadow:
+      inset 0 0 0 var(--border-width) color-mix(in srgb, var(--text) 9%, transparent),
+      0 1px 0 color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  .dial-pointer {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 2px;
+    height: 13px;
+    border-radius: 999px;
+    background: var(--text);
+    transform-origin: 50% 88%;
+    transform: translate(-50%, -88%) rotate(var(--dial-angle));
   }
 
   .number-field {
