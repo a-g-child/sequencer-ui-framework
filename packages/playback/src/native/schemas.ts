@@ -21,6 +21,7 @@ export interface DeviceCommandBase {
   readonly deviceInstanceId?: string
   readonly trackId?: string
   readonly sourceActionType?: string
+  readonly reason?: string
   readonly timeMs: number
 }
 

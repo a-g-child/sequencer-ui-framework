@@ -4,7 +4,10 @@ import type { VoiceAction } from '@sequencer/audio'
 import { NativeAudioAdapter } from '../src/native/NativeAudioAdapter.ts'
 import { NativeSchedulerAdapter } from '../src/native/NativeSchedulerAdapter.ts'
 import type { DeviceCommand } from '../src/native/schemas.ts'
-import { voiceActionsToDeviceCommands } from '../src/native/voice-action-commands.ts'
+import {
+  createPanicDeviceCommand,
+  voiceActionsToDeviceCommands
+} from '../src/native/voice-action-commands.ts'
 import { freezePlaybackModel, type PlaybackModel } from '../src/model.ts'
 import {
   TypeScriptScheduler,
@@ -136,6 +139,38 @@ describe('voiceActionsToDeviceCommands', () => {
         voiceId: 'voice-2'
       }
     ])
+  })
+})
+
+describe('createPanicDeviceCommand', () => {
+  it('creates targetable panic commands for native audio cleanup', () => {
+    assert.deepEqual(
+      createPanicDeviceCommand({
+        reason: 'clip-stop',
+        trackId: 'track-1',
+        timeMs: 250
+      }),
+      {
+        id: 'track-1:panic:clip-stop:250',
+        type: 'panic',
+        trackId: 'track-1',
+        reason: 'clip-stop',
+        timeMs: 250
+      }
+    )
+
+    assert.deepEqual(
+      createPanicDeviceCommand({
+        reason: 'runtime-panic',
+        timeMs: 500
+      }),
+      {
+        id: 'all:panic:runtime-panic:500',
+        type: 'panic',
+        reason: 'runtime-panic',
+        timeMs: 500
+      }
+    )
   })
 })
 

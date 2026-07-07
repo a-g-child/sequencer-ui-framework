@@ -41,6 +41,36 @@ export function voiceActionToDeviceCommand(
   }
 }
 
+export function createPanicDeviceCommand(options: {
+  readonly reason: string
+  readonly timeMs: number
+  readonly deviceInstanceId?: string
+  readonly trackId?: string
+}): DeviceCommand {
+  const command: DeviceCommand = {
+    id: panicCommandId(options),
+    type: 'panic',
+    reason: options.reason,
+    timeMs: options.timeMs
+  }
+
+  if (options.deviceInstanceId) {
+    return {
+      ...command,
+      deviceInstanceId: options.deviceInstanceId
+    }
+  }
+
+  if (options.trackId) {
+    return {
+      ...command,
+      trackId: options.trackId
+    }
+  }
+
+  return command
+}
+
 function deviceCommandId(
   action: VoiceAction,
   deviceInstanceId: string | undefined
@@ -48,4 +78,15 @@ function deviceCommandId(
   const prefix = deviceInstanceId ? `${deviceInstanceId}:` : ''
 
   return `${prefix}${action.voiceId}:${action.type}:${action.timeMs}`
+}
+
+function panicCommandId(options: {
+  readonly reason: string
+  readonly timeMs: number
+  readonly deviceInstanceId?: string
+  readonly trackId?: string
+}): string {
+  const target = options.deviceInstanceId ?? options.trackId ?? 'all'
+
+  return `${target}:panic:${options.reason}:${options.timeMs}`
 }

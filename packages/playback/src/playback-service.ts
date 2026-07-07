@@ -19,6 +19,7 @@ import {
 } from './live-clips'
 import type { PlaybackModel } from './model'
 import { NativeAudioAdapter } from './native/NativeAudioAdapter.ts'
+import { createPanicDeviceCommand } from './native/voice-action-commands.ts'
 import {
   ConsoleOutput,
   EventLoggerOutput,
@@ -100,6 +101,7 @@ export class PlaybackService implements Service, DocumentObserver {
   }
 
   async shutdown(): Promise<void> {
+    this.panicRuntimeVoices()
     this.scheduler.stop()
     await this.deviceManager.disconnectAll()
     await this.outputManager.disconnectAll()
@@ -230,6 +232,12 @@ export class PlaybackService implements Service, DocumentObserver {
   private panicRuntimeVoices(): void {
     this.outputManager.panic()
     this.deviceManager.panic()
+    this.nativeAudioAdapter.handleCommands([
+      createPanicDeviceCommand({
+        reason: 'runtime-panic',
+        timeMs: nowMs()
+      })
+    ])
   }
 
   requestClipLaunch(
@@ -269,7 +277,7 @@ export class PlaybackService implements Service, DocumentObserver {
 
     this.liveClips.clearActiveClip(trackId)
     if (previousClipId) {
-      this.outputManager.panicTrack(trackId)
+      this.panicTrackRuntimeVoices(trackId, 'clip-stop')
     }
     this.rebuildModel()
     this.emitStatus()
@@ -283,6 +291,7 @@ export class PlaybackService implements Service, DocumentObserver {
     if (enabled) {
       await this.outputManager.connect(this.webAudioOutput.id)
     } else {
+      this.panicRuntimeVoices()
       await this.outputManager.disconnect(this.webAudioOutput.id)
     }
 
@@ -334,7 +343,18 @@ export class PlaybackService implements Service, DocumentObserver {
   ): void {
     if (!previousClipId || previousClipId === nextClipId) return
 
+    this.panicTrackRuntimeVoices(trackId, 'clip-switch')
+  }
+
+  private panicTrackRuntimeVoices(trackId: string, reason: string): void {
     this.outputManager.panicTrack(trackId)
+    this.nativeAudioAdapter.handleCommands([
+      createPanicDeviceCommand({
+        reason,
+        trackId,
+        timeMs: nowMs()
+      })
+    ])
   }
 
   private clearTrackVoicesForAppliedLaunches(
@@ -368,8 +388,7 @@ export class PlaybackService implements Service, DocumentObserver {
     if (event.type === 'clock:stopped') {
       this.latestClockState = event.payload as ClockState
       this.scheduler.stop()
-      this.outputManager.panic()
-      this.deviceManager.panic()
+      this.panicRuntimeVoices()
       this.liveClips.resetLaunchOrigins(0)
       this.rebuildModel()
       this.emitStatus()
@@ -441,6 +460,9 @@ export class PlaybackService implements Service, DocumentObserver {
   private async rebuildRuntimeDevices(): Promise<void> {
     if (!this.context) return
 
+    if (this.deviceManager.status.runtimeDeviceCount > 0) {
+      this.panicRuntimeVoices()
+    }
     await this.deviceManager.disconnectAll()
     this.deviceManager.buildFromInstances(
       this.context.documentStore.document.deviceInstances.values()
