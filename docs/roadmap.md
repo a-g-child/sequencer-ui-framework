@@ -121,22 +121,134 @@ valuable once the editor can create patterns that are enjoyable to hear.
 - MIDI output
 - Preview playback
 
-## Phase 8: Real Outputs
+## Phase 8: Device And Routing Foundation
 
-This phase is not about inventing more architecture. It is about making the
-scheduler talk to the outside world through the output architecture that now
-exists.
+This phase should turn the placeholder engine into a reliable playable
+groovebox. The framework shape is now strong enough; the next investment should
+make clips, tracks, devices, playback, and outputs connect through one
+execution path.
 
-Every item in this phase should be another `PlaybackOutput`.
+Priority order:
 
-- Web MIDI output for the current TypeScript runtime
-- CoreMIDI, WinMM, and ALSA abstraction later in native code
-- Simple software instrument, even a sine-wave synth, to prove the pipeline
-- Metronome or click track
-- MIDI clock output
+1. Device model
+2. Output routing
+3. Web MIDI
+4. Better internal synth and sampler proofs
+5. Clip matrix UX polish
+6. Scheduler diagnostics
 
-The scheduler should remain unchanged. It emits playback events. Outputs decide
-how to execute them.
+Device model comes first because it becomes the bridge between clips, tracks,
+MIDI, synths, samplers, and future hardware modules. Without it, Web Audio,
+MIDI, and samplers will each grow their own routing assumptions.
+
+The target path is:
+
+```text
+Clip
+  -> Track
+  -> Device
+  -> PlaybackEvent
+  -> Output
+```
+
+This replaces the weaker shape where clips effectively target playback outputs
+directly.
+
+### Device Package
+
+Add `packages/device` with the vocabulary before expanding execution behavior:
+
+- `DeviceDescriptor`
+- `DeviceInstance`
+- `DeviceCapability`
+- `DevicePort`
+- `DeviceParameter`
+- `DeviceRegistry`
+
+The first implementation should be simple, but the contract should be strong
+enough for software devices, external MIDI devices, attached hardware modules,
+network instruments, robotics targets, and lighting targets to become peers.
+
+### Document Device Assignment
+
+The document should be able to persist track-level device assignment:
+
+```text
+Track
+  -> DeviceInstance
+  -> DeviceDescriptor
+  -> Capabilities
+  -> Parameters
+```
+
+The document stores creative assignment and parameter intent. It should not
+store derived runtime routing state.
+
+Missing devices should stay in the document as missing assignments, not deleted
+creative work.
+
+### Playback Destination
+
+`PlaybackEvent` should carry destination information derived from the document
+and device assignment:
+
+```text
+PlaybackEvent.destination
+  trackId
+  deviceId
+  outputId?
+  channel?
+```
+
+The scheduler still emits deterministic events. It should not know how the
+destination is executed.
+
+### OutputManager Routing
+
+`OutputManager` should route events by destination instead of only broadcasting
+every event to every active output.
+
+Initial routing behavior:
+
+- route events to the output selected by destination
+- use track and device assignment when no explicit output is present
+- default to `WebAudioOutput` or `ConsoleOutput` when no route is configured
+- keep fan-out available for diagnostics outputs such as event logging and
+  statistics
+
+### Internal Device Stubs
+
+Add basic devices behind the device contract:
+
+- `BasicSynthDevice`
+- `BasicSamplerDevice`
+- `ExternalMidiDevice`
+
+These should be proof devices, not final instruments. A basic synth behind the
+right device contract is more valuable than a polished synth with private
+routing assumptions.
+
+### Simple UI
+
+Add enough UI to prove the model:
+
+- track device selector
+- device parameter panel
+- output status
+
+The UI should present creative devices, not technical transport details. A
+hardware module should appear as a new device option rather than a low-level
+USB or MIDI event.
+
+### Web MIDI
+
+After device routing exists, add `WebMidiOutput` as another `PlaybackOutput`.
+
+`ExternalMidiDevice` should target that output through the same destination and
+routing model as the internal synth and sampler devices.
+
+The scheduler should remain unchanged. It emits playback events. Devices and
+outputs decide how to execute them.
 
 ## Phase 9: Voice and Audio
 

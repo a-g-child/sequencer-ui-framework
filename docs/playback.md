@@ -10,7 +10,19 @@ Document
   -> PlaybackModelBuilder
   -> PlaybackModel
   -> Scheduler
+  -> PlaybackEvent
+  -> OutputManager
   -> PlaybackOutput
+```
+
+As device routing matures, the intended creative path is:
+
+```text
+Clip
+  -> Track
+  -> Device
+  -> PlaybackEvent
+  -> Output
 ```
 
 ## Boundary
@@ -162,8 +174,23 @@ Note events include:
 - channel or track
 - beat
 - scheduled time in milliseconds
+- destination
 
 This event stream is the boundary between scheduling and output behavior.
+
+Destination information should be derived before execution and carried on the
+event:
+
+```text
+PlaybackEvent.destination
+  trackId
+  deviceId
+  outputId?
+  channel?
+```
+
+The scheduler may use destination data to preserve deterministic event identity,
+but it should not interpret device internals or output implementation details.
 
 ## Service Integration
 

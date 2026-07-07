@@ -10,16 +10,18 @@
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json"
   },
   "devDependencies": {
+    "@sequencer/core": "file:../../packages/core",
+    "@sequencer/music": "file:../../packages/music",
+    "@sequencer/playback": "file:../../packages/playback",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@tsconfig/svelte": "^5.0.8",
     "@types/node": "^24.13.2",
-    "@sequencer/playback": "file:../../packages/playback",
     "svelte": "^5.56.3",
     "svelte-check": "^4.6.0",
     "typescript": "~6.0.2",
-    "vite": "^8.1.0",
-    "@sequencer/core": "file:../../packages/core",
-    "@sequencer/music": "file:../../packages/music"
+    "vite": "^8.1.0"
+  },
+  "dependencies": {
+    "@sequencer/device": "file:../../packages/device"
   }
-
 }

@@ -57,16 +57,21 @@ Outputs understand events.
 ## OutputManager
 
 `OutputManager` owns registered outputs, tracks active outputs, receives
-scheduled playback events, and fans each batch out to active outputs.
+scheduled playback events, and routes each batch to active outputs.
 
 ```text
 Scheduler
   -> PlaybackEvents
   -> OutputManager
-  -> every active PlaybackOutput
+  -> routed PlaybackOutput
 ```
 
 The scheduler does not know which outputs exist.
+
+Early diagnostic outputs can still observe every event. Creative outputs should
+receive events through routing so internal synths, samplers, MIDI ports,
+hardware modules, robotics targets, and lighting targets do not compete for the
+same undifferentiated event stream.
 
 ## OutputRegistry
 
@@ -118,20 +123,36 @@ interface OutputCapabilities {
 This lets future routing and validation understand that different destinations
 support different event families.
 
-## Future Routing
+## Routing
 
 Routing should remain outside the scheduler.
 
 Future track output assignment might look like:
 
 ```text
-Track 1 -> MIDI Port A
-Track 2 -> Internal Synth
-Track 3 -> Robot Arm
+Track 1 -> Basic Synth -> Web Audio
+Track 2 -> Sampler -> Web Audio
+Track 3 -> External MIDI Device -> Web MIDI
+Track 4 -> Robot Arm -> Network Output
 ```
 
 The scheduler still emits playback events. Routing decides which output receives
 which events.
+
+The destination carried by a playback event should be enough for
+`OutputManager` to route it:
+
+```text
+PlaybackEvent.destination
+  trackId
+  deviceId
+  outputId?
+  channel?
+```
+
+If no explicit output route exists, the manager can fall back to a default
+creative output such as `WebAudioOutput` or a diagnostic output such as
+`ConsoleOutput`.
 
 ## Future Audio
 
@@ -192,4 +213,3 @@ class MyOutput implements PlaybackOutput
 
 Register it with the output registry, connect it through the output manager, and
 the scheduler remains untouched.
-
