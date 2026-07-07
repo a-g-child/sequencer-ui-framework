@@ -123,10 +123,10 @@ export class BasicSynthRuntimeDevice<
 
   private getEnvelope(): AdsrEnvelope {
     return {
-      attack: numberParameter(this.parameters, 'attack', 0.01),
-      decay: numberParameter(this.parameters, 'decay', 0.15),
+      attack: millisecondsParameter(this.parameters, 'attack', 10),
+      decay: millisecondsParameter(this.parameters, 'decay', 150),
       sustain: numberParameter(this.parameters, 'sustain', 0.7),
-      release: numberParameter(this.parameters, 'release', 0.2)
+      release: millisecondsParameter(this.parameters, 'release', 200)
     };
   }
 
@@ -212,6 +212,16 @@ function clampUnit(value: number): number {
   if (!Number.isFinite(value)) return 0;
 
   return Math.min(1, Math.max(0, value));
+}
+
+function millisecondsParameter(
+  parameters: BasicSynthRuntimeDevice['parameters'],
+  key: string,
+  fallbackMs: number
+): number {
+  const valueMs = numberParameter(parameters, key, fallbackMs);
+
+  return Math.min(3000, Math.max(0, valueMs)) / 1000;
 }
 
 function latestActivePitch(

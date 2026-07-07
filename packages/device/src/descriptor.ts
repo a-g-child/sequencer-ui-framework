@@ -40,6 +40,7 @@ export type DeviceParameterDescriptor = {
   min?: number;
   max?: number;
   step?: number;
+  scale?: 'linear' | 'logarithmic';
   options?: { label: string; value: string }[];
   unit?: string;
 };

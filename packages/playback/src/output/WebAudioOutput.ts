@@ -461,10 +461,10 @@ function normalizeVoiceEnvelope(
   envelope: VoiceActionEnvelope | undefined
 ): NonNullable<VoiceActionEnvelope> {
   return {
-    attack: clampSeconds(envelope?.attack ?? 0.01, 5),
-    decay: clampSeconds(envelope?.decay ?? 0.15, 5),
+    attack: clampSeconds(envelope?.attack ?? 0.01, 3),
+    decay: clampSeconds(envelope?.decay ?? 0.15, 3),
     sustain: clampUnit(envelope?.sustain ?? 0.7),
-    release: clampSeconds(envelope?.release ?? 0.2, 10)
+    release: clampSeconds(envelope?.release ?? 0.2, 3)
   }
 }
 

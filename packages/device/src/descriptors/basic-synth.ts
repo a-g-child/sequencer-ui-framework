@@ -49,22 +49,24 @@ export const BASIC_SYNTH_DESCRIPTOR: DeviceDescriptor = {
       key: 'attack',
       name: 'Attack',
       kind: 'number',
-      defaultValue: 0.01,
+      defaultValue: 10,
       min: 0,
-      max: 5,
-      step: 0.01,
-      unit: 's'
+      max: 3000,
+      step: 1,
+      scale: 'logarithmic',
+      unit: 'ms'
     },
     {
       id: 'decay',
       key: 'decay',
       name: 'Decay',
       kind: 'number',
-      defaultValue: 0.15,
+      defaultValue: 150,
       min: 0,
-      max: 5,
-      step: 0.01,
-      unit: 's'
+      max: 3000,
+      step: 1,
+      scale: 'logarithmic',
+      unit: 'ms'
     },
     {
       id: 'sustain',
@@ -81,11 +83,12 @@ export const BASIC_SYNTH_DESCRIPTOR: DeviceDescriptor = {
       key: 'release',
       name: 'Release',
       kind: 'number',
-      defaultValue: 0.2,
+      defaultValue: 200,
       min: 0,
-      max: 10,
-      step: 0.01,
-      unit: 's'
+      max: 3000,
+      step: 1,
+      scale: 'logarithmic',
+      unit: 'ms'
     },
     {
       id: 'cutoff',

@@ -14,7 +14,8 @@
   $: minimum = descriptor.min ?? 0
   $: maximum = descriptor.max ?? 1
   $: step = descriptor.step ?? 0.01
-  $: normalizedValue = normalizeValue(displayValue, minimum, maximum)
+  $: scale = descriptor.scale ?? 'linear'
+  $: normalizedValue = normalizeValue(displayValue, minimum, maximum, scale)
   $: angle = -135 + normalizedValue * 270
   $: formattedValue = formatValue(displayValue, step)
   $: dialStyle = `--dial-angle: ${angle}deg; --dial-fill: ${normalizedValue * 100}%`
@@ -90,7 +91,12 @@
     if (degrees > 180) degrees -= 360
 
     const clampedAngle = Math.min(135, Math.max(-135, degrees))
-    const nextValue = minimum + ((clampedAngle + 135) / 270) * (maximum - minimum)
+    const nextValue = valueFromNormalized(
+      (clampedAngle + 135) / 270,
+      minimum,
+      maximum,
+      scale
+    )
 
     setValue(nextValue)
   }
@@ -106,10 +112,34 @@
     onChange(Number(steppedValue.toFixed(6)))
   }
 
-  function normalizeValue(current: number, min: number, max: number): number {
+  function normalizeValue(
+    current: number,
+    min: number,
+    max: number,
+    currentScale: DeviceParameterDescriptor['scale']
+  ): number {
     if (max <= min) return 0
 
-    return Math.min(1, Math.max(0, (current - min) / (max - min)))
+    const linearValue = Math.min(1, Math.max(0, (current - min) / (max - min)))
+
+    if (currentScale !== 'logarithmic') return linearValue
+
+    return Math.pow(linearValue, 1 / 3)
+  }
+
+  function valueFromNormalized(
+    normalized: number,
+    min: number,
+    max: number,
+    currentScale: DeviceParameterDescriptor['scale']
+  ): number {
+    const clampedValue = Math.min(1, Math.max(0, normalized))
+
+    if (currentScale !== 'logarithmic') {
+      return min + clampedValue * (max - min)
+    }
+
+    return min + Math.pow(clampedValue, 3) * (max - min)
   }
 
   function formatValue(current: number, currentStep: number): string {
