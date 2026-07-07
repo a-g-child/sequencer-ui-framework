@@ -18,6 +18,12 @@ export interface PlaybackDeviceManagerStatus {
   readonly connectedDeviceCount: number
 }
 
+export interface PlaybackDeviceDiagnostics {
+  readonly id: string
+  readonly status: PlaybackRuntimeDevice['status']
+  readonly diagnostics?: unknown
+}
+
 export class PlaybackDeviceManager {
   readonly devices = new DeviceRegistry<PlaybackEvent>()
   readonly runtimeDevices = new RuntimeDeviceRegistry<PlaybackEvent>()
@@ -86,6 +92,14 @@ export class PlaybackDeviceManager {
 
     return voiceActions
   }
+
+  getDiagnostics(): PlaybackDeviceDiagnostics[] {
+    return this.runtimeDevices.values().map((device) => ({
+      id: device.instanceId,
+      status: device.status,
+      diagnostics: hasDiagnostics(device) ? device.getDiagnostics() : undefined
+    }))
+  }
 }
 
 function hasVoiceActions(
@@ -96,5 +110,16 @@ function hasVoiceActions(
   return (
     'consumeVoiceActions' in device &&
     typeof device.consumeVoiceActions === 'function'
+  )
+}
+
+function hasDiagnostics(
+  device: PlaybackRuntimeDevice
+): device is PlaybackRuntimeDevice & {
+  getDiagnostics(): unknown
+} {
+  return (
+    'getDiagnostics' in device &&
+    typeof device.getDiagnostics === 'function'
   )
 }

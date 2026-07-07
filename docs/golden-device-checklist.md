@@ -113,7 +113,7 @@ automation all converge here.
 - [ ] peak meter
 - [ ] latency
 - [x] stolen voice count
-- [ ] runtime device status in UI
+- [x] runtime voice counts in UI
 - [ ] missing device status in UI
 
 ## Runtime
@@ -124,6 +124,7 @@ automation all converge here.
 - [x] voice actions bridge runtime devices to WebAudio
 - [x] Basic Synth reads waveform and volume from runtime parameters
 - [x] Basic Synth exposes runtime parameter advance hook
+- [x] runtime voice diagnostics in playback status
 - [ ] runtime state reporting
 - [ ] hot reconnect
 - [ ] replace software implementation with hardware implementation

@@ -1122,6 +1122,12 @@
     playbackEventCount={playbackStatus.statistics.eventCount}
     playbackEventsPerSecond={playbackStatus.statistics.eventsPerSecond}
     playbackLastBatchSize={playbackStatus.outputManager.lastEventCount}
+    voiceActive={playbackStatus.voice?.active ?? 0}
+    voiceReleased={playbackStatus.voice?.released ?? 0}
+    voiceStolen={playbackStatus.voice?.stolen ?? 0}
+    voiceTotalStarted={playbackStatus.voice?.totalStarted ?? 0}
+    voiceTotalReleased={playbackStatus.voice?.totalReleased ?? 0}
+    voiceTotalStolen={playbackStatus.voice?.totalStolen ?? 0}
     schedulerJitterMs={playbackStatus.statistics.schedulerJitterMs}
     schedulerLatencyMs={playbackStatus.statistics.schedulerLatencyMs}
     maxLookaheadDepthMs={playbackStatus.statistics.maxLookaheadDepthMs}

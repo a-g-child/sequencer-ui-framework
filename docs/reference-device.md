@@ -151,6 +151,10 @@ PlaybackEvent
 WebAudio should create and release oscillator nodes from `VoiceAction`s. It
 should not decide which musical voices exist.
 
+Voice diagnostics should flow back through playback status so the Runtime panel
+can show active, released, stolen, and total voice counts while testing
+polyphony and stealing.
+
 ## Runtime Parameters
 
 Descriptors explain what parameters exist. Runtime parameters explain how a

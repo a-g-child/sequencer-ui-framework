@@ -17,6 +17,12 @@
   export let playbackEventCount = 0;
   export let playbackEventsPerSecond = 0;
   export let playbackLastBatchSize = 0;
+  export let voiceActive = 0;
+  export let voiceReleased = 0;
+  export let voiceStolen = 0;
+  export let voiceTotalStarted = 0;
+  export let voiceTotalReleased = 0;
+  export let voiceTotalStolen = 0;
   export let schedulerJitterMs = 0;
   export let schedulerLatencyMs = 0;
   export let maxLookaheadDepthMs = 0;
@@ -99,6 +105,14 @@
   <div>
     <span>Last Batch</span>
     <strong>{playbackLastBatchSize}</strong>
+  </div>
+  <div>
+    <span>Voices</span>
+    <strong>{voiceActive} active, {voiceReleased} released, {voiceStolen} stolen</strong>
+  </div>
+  <div>
+    <span>Voice Totals</span>
+    <strong>{voiceTotalStarted} started, {voiceTotalReleased} released, {voiceTotalStolen} stolen</strong>
   </div>
   <div>
     <span>Largest Batch</span>

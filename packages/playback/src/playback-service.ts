@@ -47,11 +47,21 @@ export interface PlaybackServiceStatus extends SchedulerStatus {
   readonly liveClips: LiveClipState
   readonly outputManager: OutputManagerStatus
   readonly deviceManager: PlaybackDeviceManagerStatus
+  readonly voice?: PlaybackVoiceStatus
   readonly statistics: PlaybackOutputStatistics
   readonly webAudio: {
     readonly defaultSettings: WebAudioOscillatorSettings
     readonly trackSettings: Readonly<Record<string, WebAudioOscillatorSettings>>
   }
+}
+
+export interface PlaybackVoiceStatus {
+  readonly active: number
+  readonly released: number
+  readonly stolen: number
+  readonly totalStarted: number
+  readonly totalReleased: number
+  readonly totalStolen: number
 }
 
 export class PlaybackService implements Service, DocumentObserver {
@@ -116,8 +126,27 @@ export class PlaybackService implements Service, DocumentObserver {
       liveClips: this.liveClips.state,
       outputManager: this.outputManager.status,
       deviceManager: this.deviceManager.status,
+      voice: this.voiceStatus(),
       statistics: this.statisticsOutput.statistics,
       webAudio: this.webAudioOutput.settings
+    }
+  }
+
+  private voiceStatus(): PlaybackVoiceStatus | undefined {
+    const voiceStats = this.deviceManager
+      .getDiagnostics()
+      .map((entry) => voiceStatsFromDiagnostics(entry.diagnostics))
+      .find((stats) => stats !== undefined)
+
+    if (!voiceStats) return undefined
+
+    return {
+      active: voiceStats.activeVoices,
+      released: voiceStats.releasedVoices,
+      stolen: voiceStats.stolenVoices,
+      totalStarted: voiceStats.totalStarted,
+      totalReleased: voiceStats.totalReleased,
+      totalStolen: voiceStats.totalStolen
     }
   }
 
@@ -437,4 +466,47 @@ function normalizeRuntimeVolume(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 0.25
 
   return Math.min(1, Math.max(0, value))
+}
+
+function voiceStatsFromDiagnostics(
+  diagnostics: unknown
+): {
+  readonly activeVoices: number
+  readonly releasedVoices: number
+  readonly stolenVoices: number
+  readonly totalStarted: number
+  readonly totalReleased: number
+  readonly totalStolen: number
+} | undefined {
+  if (
+    typeof diagnostics !== 'object' ||
+    diagnostics === null ||
+    !('voices' in diagnostics)
+  ) {
+    return undefined
+  }
+
+  const voices = diagnostics.voices
+
+  if (typeof voices !== 'object' || voices === null) return undefined
+
+  if (
+    !hasNumber(voices, 'activeVoices') ||
+    !hasNumber(voices, 'releasedVoices') ||
+    !hasNumber(voices, 'stolenVoices') ||
+    !hasNumber(voices, 'totalStarted') ||
+    !hasNumber(voices, 'totalReleased') ||
+    !hasNumber(voices, 'totalStolen')
+  ) {
+    return undefined
+  }
+
+  return voices
+}
+
+function hasNumber<T extends string>(
+  value: object,
+  key: T
+): value is Record<T, number> {
+  return key in value && typeof value[key as keyof typeof value] === 'number'
 }
