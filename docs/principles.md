@@ -4,6 +4,27 @@ These are not APIs, implementation notes, or current architecture decisions.
 They are the project DNA: the ideas that should keep shaping the sequencer as
 the codebase grows.
 
+## Three Pillars
+
+Sequencer is centred on three orthogonal ideas:
+
+```text
+Creative Intent
+      |
+  Document
+  Devices
+  Playback
+```
+
+The document answers what the creator intended.
+
+Devices answer how that intent can be realised.
+
+Playback answers when it should happen.
+
+Each pillar should stay independent enough to be replaced, extended, and
+recombined without collapsing into the others.
+
 ## Preserve Intent
 
 Documents store creative intent.
@@ -48,6 +69,22 @@ output should consume the same playback events.
 
 Replacing an implementation should not require replacing the document,
 operations, models, services, UI, or surrounding architecture.
+
+## Execution Is Replaceable
+
+Documents describe intent.
+
+Builders derive runtime models.
+
+Runtime models are consumed by replaceable execution systems.
+
+Schedulers, renderers, outputs, and devices may be substituted without changing
+the creative document.
+
+This lets a JavaScript scheduler become a native scheduler, Web Audio become
+native audio, a software synth become a hardware module, an internal clock
+become an external clock, and a console output become a MIDI output without
+rewriting the creative model.
 
 ## Physical And Software Are Peers
 
