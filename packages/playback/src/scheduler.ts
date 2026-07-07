@@ -1,11 +1,12 @@
 import type { BeatTime } from '@sequencer/core'
-import type { ClockState } from './clock'
-import type { PlaybackEvent } from './events'
-import type { PlaybackModel } from './model'
-import { createEmptyPlaybackModel } from './model'
-import { beatsToMs, msToBeats } from './tempo'
+import type { ClockState } from './clock.ts'
+import type { PlaybackEvent } from './events.ts'
+import type { PlaybackModel } from './model.ts'
+import { createEmptyPlaybackModel } from './model.ts'
+import { beatsToMs, msToBeats } from './tempo.ts'
 
 export interface Scheduler {
+  readonly status: SchedulerStatus
   setModel(model: PlaybackModel): void
   start(position: BeatTime): void
   stop(): void
@@ -41,6 +42,7 @@ export type PlaybackRuntimeParameterValue = {
 
 export class TypeScriptScheduler implements Scheduler {
   private model: PlaybackModel = createEmptyPlaybackModel()
+  private readonly options: TypeScriptSchedulerOptions
   private running = false
   private currentBeat = 0
   private currentTimeMs = 0
@@ -54,7 +56,9 @@ export class TypeScriptScheduler implements Scheduler {
   private maxLookaheadDepthMs = 0
   private largestEventBatch = 0
 
-  constructor(private readonly options: TypeScriptSchedulerOptions = {}) {}
+  constructor(options: TypeScriptSchedulerOptions = {}) {
+    this.options = options
+  }
 
   get status(): SchedulerStatus {
     return {

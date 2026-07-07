@@ -4,6 +4,9 @@
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "scripts": {
+    "test": "node --experimental-transform-types --experimental-specifier-resolution=node --test tests/*.test.ts"
+  },
   "dependencies": {
     "@sequencer/audio": "file:../audio",
     "@sequencer/core": "file:../core",
