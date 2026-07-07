@@ -167,8 +167,10 @@ export class WebAudioOutput implements PlaybackOutput {
           : normalizeFilter({ ...currentSettings.filter, ...settings.filter })
     }
 
+    if (settingsEqual(currentSettings, nextSettings)) return
+
     this.trackSettings.set(trackId, nextSettings)
-    this.updateActiveTrackVoices(trackId, nextSettings)
+    this.updateActiveTrackVoices(trackId, currentSettings, nextSettings)
   }
 
   trackSettingsFor(trackId: string | undefined): WebAudioOscillatorSettings {
@@ -358,9 +360,17 @@ export class WebAudioOutput implements PlaybackOutput {
 
   private updateActiveTrackVoices(
     trackId: string,
+    previousSettings: WebAudioOscillatorSettings,
     settings: WebAudioOscillatorSettings
   ): void {
     if (!this.context) return
+
+    const waveformChanged = previousSettings.waveform !== settings.waveform
+    const volumeChanged = previousSettings.volume !== settings.volume
+    const filterChanged = !filterSettingsEqual(
+      previousSettings.filter,
+      settings.filter
+    )
 
     for (const [key, voice] of this.voices.entries()) {
       if (voice.trackId !== trackId) continue
@@ -370,18 +380,26 @@ export class WebAudioOutput implements PlaybackOutput {
         continue
       }
 
-      voice.oscillator.type = settings.waveform
-      configureFilter(
-        voice.filter,
-        settings.filter,
-        voice.pitch,
-        this.context.currentTime
-      )
-      voice.gain.gain.setTargetAtTime(
-        voice.amplitude * settings.volume * settings.adsr.sustain,
-        this.context.currentTime,
-        0.01
-      )
+      if (waveformChanged) {
+        voice.oscillator.type = settings.waveform
+      }
+
+      if (filterChanged) {
+        configureFilter(
+          voice.filter,
+          settings.filter,
+          voice.pitch,
+          this.context.currentTime
+        )
+      }
+
+      if (volumeChanged) {
+        voice.gain.gain.setTargetAtTime(
+          voice.amplitude * settings.volume * settings.adsr.sustain,
+          this.context.currentTime,
+          0.01
+        )
+      }
     }
   }
 }
@@ -448,6 +466,42 @@ function normalizeVoiceEnvelope(
     sustain: clampUnit(envelope?.sustain ?? 0.7),
     release: clampSeconds(envelope?.release ?? 0.2, 10)
   }
+}
+
+function settingsEqual(
+  left: WebAudioOscillatorSettings,
+  right: WebAudioOscillatorSettings
+): boolean {
+  return (
+    left.enabled === right.enabled &&
+    left.waveform === right.waveform &&
+    left.volume === right.volume &&
+    adsrSettingsEqual(left.adsr, right.adsr) &&
+    filterSettingsEqual(left.filter, right.filter)
+  )
+}
+
+function adsrSettingsEqual(
+  left: WebAudioAdsrSettings,
+  right: WebAudioAdsrSettings
+): boolean {
+  return (
+    left.attackMs === right.attackMs &&
+    left.decayMs === right.decayMs &&
+    left.sustain === right.sustain &&
+    left.releaseMs === right.releaseMs
+  )
+}
+
+function filterSettingsEqual(
+  left: WebAudioFilterSettings,
+  right: WebAudioFilterSettings
+): boolean {
+  return (
+    left.cutoff === right.cutoff &&
+    left.resonance === right.resonance &&
+    left.keyTracking === right.keyTracking
+  )
 }
 
 function clampMs(value: number): number {

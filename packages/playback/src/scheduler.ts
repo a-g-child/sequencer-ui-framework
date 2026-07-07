@@ -208,12 +208,13 @@ export class TypeScriptScheduler implements Scheduler {
     const track = tracksById.get(note.trackId)
     const destination = destinationForTrack(note.trackId, track?.deviceInstanceId)
     const repeatSuffix = repeatIndex > 0 ? `:repeat-${repeatIndex}` : ''
+    const noteId = `${note.id}${repeatSuffix}`
 
     if (beat >= fromBeat && beat < toBeat) {
       events.push({
         id: `${note.id}${repeatSuffix}:on`,
         type: 'note:on',
-        noteId: note.id,
+        noteId,
         trackId: note.trackId,
         channel: track?.channel,
         destination,
@@ -228,7 +229,7 @@ export class TypeScriptScheduler implements Scheduler {
       events.push({
         id: `${note.id}${repeatSuffix}:off`,
         type: 'note:off',
-        noteId: note.id,
+        noteId,
         trackId: note.trackId,
         channel: track?.channel,
         destination,
