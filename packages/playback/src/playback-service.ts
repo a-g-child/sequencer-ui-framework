@@ -312,8 +312,9 @@ export class PlaybackService implements Service, DocumentObserver {
         events,
         schedulerStatus: this.status
       })
-      this.deviceManager.processEvents(events)
+      const voiceActions = this.deviceManager.processEvents(events)
       this.syncBasicSynthRuntimeParametersToWebAudio()
+      this.webAudioOutput.handleVoiceActions(voiceActions)
       this.outputManager.handleEvents(events)
       this.emitPlaybackEvents(events)
       this.emitRuntimeParameterValues(state)

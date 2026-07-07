@@ -18,6 +18,11 @@ export type StartVoiceOptions = {
   nowMs: number;
 };
 
+export type StartVoiceResult = {
+  voice: Voice;
+  stolenVoice?: Voice;
+};
+
 export class VoiceManager {
   private readonly voices = new Map<VoiceId, Voice>();
 
@@ -29,7 +34,11 @@ export class VoiceManager {
   constructor(private readonly maxVoices = 8) {}
 
   startVoice(options: StartVoiceOptions): Voice {
-    this.ensureCapacity(options.nowMs);
+    return this.startVoiceWithStealing(options).voice;
+  }
+
+  startVoiceWithStealing(options: StartVoiceOptions): StartVoiceResult {
+    const stolenVoice = this.ensureCapacity(options.nowMs);
 
     const voice: Voice = {
       id: `voice-${this.nextId++}`,
@@ -44,7 +53,7 @@ export class VoiceManager {
     this.voices.set(voice.id, voice);
     this.totalStarted += 1;
 
-    return voice;
+    return { voice, stolenVoice };
   }
 
   releaseVoiceByNote(noteId: string, nowMs: number): Voice[] {
@@ -117,19 +126,21 @@ export class VoiceManager {
     this.voices.clear();
   }
 
-  private ensureCapacity(nowMs: number): void {
+  private ensureCapacity(nowMs: number): Voice | undefined {
     const active = this.activeVoices();
 
-    if (active.length < this.maxVoices) return;
+    if (active.length < this.maxVoices) return undefined;
 
     const oldest = [...active].sort(
       (a, b) => a.startedAtMs - b.startedAtMs
     )[0];
 
-    if (!oldest) return;
+    if (!oldest) return undefined;
 
     oldest.state = 'stolen';
     oldest.releasedAtMs = nowMs;
     this.totalStolen += 1;
+
+    return oldest;
   }
 }

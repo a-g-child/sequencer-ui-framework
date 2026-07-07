@@ -137,6 +137,20 @@ max polyphony reached
 This proves voice lifecycle before tying allocation to Web Audio, native audio,
 or DSP.
 
+The next bridge keeps voice decisions in the runtime device while letting Web
+Audio remain a sound executor:
+
+```text
+PlaybackEvent
+  -> BasicSynthRuntimeDevice
+  -> VoiceManager
+  -> VoiceAction
+  -> WebAudioOutput
+```
+
+WebAudio should create and release oscillator nodes from `VoiceAction`s. It
+should not decide which musical voices exist.
+
 ## Runtime Parameters
 
 Descriptors explain what parameters exist. Runtime parameters explain how a

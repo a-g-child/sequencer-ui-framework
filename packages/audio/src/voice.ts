@@ -12,3 +12,16 @@ export type Voice = {
   releasedAtMs?: number;
   state: VoiceState;
 };
+
+export type VoiceAction =
+  | {
+      type: 'voice:start';
+      voiceId: string;
+      trackId?: string;
+      noteId?: string;
+      pitch: number;
+      velocity: number;
+      timeMs: number;
+    }
+  | { type: 'voice:release'; voiceId: string; timeMs: number }
+  | { type: 'voice:steal'; voiceId: string; timeMs: number };

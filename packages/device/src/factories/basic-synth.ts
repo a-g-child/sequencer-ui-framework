@@ -1,4 +1,4 @@
-import { VoiceManager } from '@sequencer/audio';
+import { VoiceManager, type VoiceAction } from '@sequencer/audio';
 import { BASIC_SYNTH_DESCRIPTOR } from '../descriptors/basic-synth';
 import type { DeviceFactory } from '../factory';
 import type { DeviceInstance } from '../instance';
@@ -16,6 +16,8 @@ export class BasicSynthRuntimeDevice<
 > extends BaseRuntimeDevice<TEvent> {
   readonly voices = new VoiceManager(8);
 
+  private pendingVoiceActions: VoiceAction[] = [];
+
   get waveform(): string {
     const value = getRuntimeParameterValue(this.parameters, 'waveform');
 
@@ -29,9 +31,11 @@ export class BasicSynthRuntimeDevice<
   }
 
   processEvents(events: readonly TEvent[]): void {
+    this.pendingVoiceActions = [];
+
     for (const event of events) {
       if (isNoteOnEvent(event)) {
-        this.voices.startVoice({
+        const result = this.voices.startVoiceWithStealing({
           noteId: event.noteId,
           trackId: event.destination?.trackId,
           pitch: event.pitch,
@@ -39,11 +43,41 @@ export class BasicSynthRuntimeDevice<
           nowMs: event.timeMs
         });
 
+        if (result.stolenVoice) {
+          this.pendingVoiceActions.push({
+            type: 'voice:steal',
+            voiceId: result.stolenVoice.id,
+            timeMs: event.timeMs
+          });
+        }
+
+        this.pendingVoiceActions.push({
+          type: 'voice:start',
+          voiceId: result.voice.id,
+          trackId: result.voice.trackId,
+          noteId: result.voice.noteId,
+          pitch: result.voice.pitch,
+          velocity: result.voice.velocity,
+          timeMs: event.timeMs
+        });
+
         continue;
       }
 
       if (isNoteOffEvent(event)) {
-        this.voices.releaseVoiceByNote(event.noteId, event.timeMs);
+        const releasedVoices = this.voices.releaseVoiceByNote(
+          event.noteId,
+          event.timeMs
+        );
+
+        for (const voice of releasedVoices) {
+          this.pendingVoiceActions.push({
+            type: 'voice:release',
+            voiceId: voice.id,
+            timeMs: event.timeMs
+          });
+        }
+
         continue;
       }
 
@@ -65,6 +99,12 @@ export class BasicSynthRuntimeDevice<
     return {
       voices: this.voices.stats()
     };
+  }
+
+  consumeVoiceActions(): VoiceAction[] {
+    const actions = this.pendingVoiceActions;
+    this.pendingVoiceActions = [];
+    return actions;
   }
 }
 

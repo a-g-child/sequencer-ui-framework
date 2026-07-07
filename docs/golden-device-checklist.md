@@ -27,6 +27,7 @@ If the answer is yes, the architecture probably needs another look.
 
 - [x] receives playback events through `PlaybackDeviceManager`
 - [x] events carry `PlaybackEvent.destination.deviceInstanceId`
+- [x] runtime devices emit voice actions
 - [x] live clip launching feeds playback events
 - [x] automation events exist in playback
 - [ ] parameter automation is bound to runtime parameters
@@ -49,6 +50,8 @@ If the answer is yes, the architecture probably needs another look.
 - [x] voice manager
 - [x] voice allocator
 - [x] voice stealing
+- [x] runtime device emits voice start/release/steal actions
+- [x] WebAudio executes voice actions instead of allocating from notes
 - [ ] mono mode
 - [ ] poly mode
 - [ ] glide
@@ -118,6 +121,7 @@ automation all converge here.
 - [x] runtime device abstraction
 - [x] playback-side runtime device adapter
 - [x] playback events routed to runtime devices
+- [x] voice actions bridge runtime devices to WebAudio
 - [x] Basic Synth reads waveform and volume from runtime parameters
 - [x] Basic Synth exposes runtime parameter advance hook
 - [ ] runtime state reporting

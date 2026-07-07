@@ -5,6 +5,7 @@ import {
   type DeviceInstance,
   type RuntimeDevice
 } from '@sequencer/device'
+import type { VoiceAction } from '@sequencer/audio'
 import type { PlaybackEvent } from './events'
 
 export type PlaybackRuntimeDevice = RuntimeDevice<PlaybackEvent>
@@ -64,8 +65,10 @@ export class PlaybackDeviceManager {
     }
   }
 
-  processEvents(events: readonly PlaybackEvent[]): void {
-    if (events.length === 0) return
+  processEvents(events: readonly PlaybackEvent[]): VoiceAction[] {
+    const voiceActions: VoiceAction[] = []
+
+    if (events.length === 0) return voiceActions
 
     for (const device of this.runtimeDevices.values()) {
       const deviceEvents = events.filter(
@@ -75,6 +78,23 @@ export class PlaybackDeviceManager {
       if (deviceEvents.length === 0) continue
 
       device.processEvents(deviceEvents)
+
+      if (hasVoiceActions(device)) {
+        voiceActions.push(...device.consumeVoiceActions())
+      }
     }
+
+    return voiceActions
   }
+}
+
+function hasVoiceActions(
+  device: PlaybackRuntimeDevice
+): device is PlaybackRuntimeDevice & {
+  consumeVoiceActions(): VoiceAction[]
+} {
+  return (
+    'consumeVoiceActions' in device &&
+    typeof device.consumeVoiceActions === 'function'
+  )
 }

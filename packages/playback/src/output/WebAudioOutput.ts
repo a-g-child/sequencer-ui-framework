@@ -1,3 +1,4 @@
+import type { VoiceAction } from '@sequencer/audio'
 import type { PlaybackEvent } from '../events'
 import { noteOnlyCapabilities } from './OutputEvent'
 import type { PlaybackOutput } from './PlaybackOutput'
@@ -162,15 +163,23 @@ export class WebAudioOutput implements PlaybackOutput {
   }
 
   handleEvents(events: PlaybackEvent[]): void {
+    void events
+  }
+
+  handleVoiceActions(actions: readonly VoiceAction[]): void {
     if (!this.context || !this.masterGain) return
 
-    for (const event of events) {
-      if (event.type === 'note:on') {
-        this.startVoice(event)
+    for (const action of actions) {
+      if (action.type === 'voice:start') {
+        this.startVoice(action)
       }
 
-      if (event.type === 'note:off') {
-        this.stopVoice(scheduledVoiceKey(event), event.timeMs)
+      if (action.type === 'voice:release') {
+        this.stopVoice(action.voiceId, action.timeMs)
+      }
+
+      if (action.type === 'voice:steal') {
+        this.stopVoice(action.voiceId, action.timeMs)
       }
     }
   }
@@ -207,11 +216,13 @@ export class WebAudioOutput implements PlaybackOutput {
     }
   }
 
-  private startVoice(event: Extract<PlaybackEvent, { type: 'note:on' }>): void {
+  private startVoice(
+    action: Extract<VoiceAction, { type: 'voice:start' }>
+  ): void {
     if (!this.context || !this.masterGain) return
 
-    const key = scheduledVoiceKey(event)
-    const settings = this.settingsForTrack(event.trackId)
+    const key = action.voiceId
+    const settings = this.settingsForTrack(action.trackId)
 
     if (!settings.enabled) return
 
@@ -222,14 +233,14 @@ export class WebAudioOutput implements PlaybackOutput {
 
     const oscillator = this.context.createOscillator()
     const gain = this.context.createGain()
-    const startTime = this.outputTime(event.timeMs)
+    const startTime = this.outputTime(action.timeMs)
     const attackTime = startTime + settings.adsr.attackMs / 1000
     const decayTime = attackTime + settings.adsr.decayMs / 1000
-    const peakGain = clampUnit(event.velocity) * settings.volume
+    const peakGain = clampUnit(action.velocity) * settings.volume
     const sustainGain = peakGain * settings.adsr.sustain
 
     oscillator.type = settings.waveform
-    oscillator.frequency.value = midiNoteToFrequency(event.pitch)
+    oscillator.frequency.value = midiNoteToFrequency(action.pitch)
     gain.gain.setValueAtTime(0, startTime)
     gain.gain.linearRampToValueAtTime(peakGain, attackTime)
     gain.gain.linearRampToValueAtTime(sustainGain, decayTime)
@@ -240,9 +251,9 @@ export class WebAudioOutput implements PlaybackOutput {
     this.voices.set(key, {
       oscillator,
       gain,
-      trackId: event.trackId,
+      trackId: action.trackId,
       startTime,
-      velocity: clampUnit(event.velocity)
+      velocity: clampUnit(action.velocity)
     })
   }
 
@@ -334,12 +345,6 @@ export class WebAudioOutput implements PlaybackOutput {
       )
     }
   }
-}
-
-function scheduledVoiceKey(
-  event: Extract<PlaybackEvent, { type: 'note:on' | 'note:off' }>
-): string {
-  return event.id.replace(/:(on|off)$/, '')
 }
 
 function midiNoteToFrequency(note: number): number {
