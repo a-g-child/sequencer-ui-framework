@@ -121,6 +121,22 @@ packages/audio/
 The voice layer can later support samplers, hardware-backed devices, and native
 runtime implementations without duplicating allocation and lifecycle behavior.
 
+The first voice slice should stay audio-engine independent:
+
+```text
+note:on
+  -> allocate voice
+
+note:off
+  -> release voice
+
+max polyphony reached
+  -> steal oldest active voice
+```
+
+This proves voice lifecycle before tying allocation to Web Audio, native audio,
+or DSP.
+
 ## Runtime Parameters
 
 Descriptors explain what parameters exist. Runtime parameters explain how a

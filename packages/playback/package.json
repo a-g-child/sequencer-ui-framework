@@ -5,6 +5,7 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "dependencies": {
+    "@sequencer/audio": "file:../audio",
     "@sequencer/core": "file:../core",
     "@sequencer/device": "file:../device",
     "@sequencer/music": "file:../music"

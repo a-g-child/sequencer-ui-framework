@@ -46,13 +46,13 @@ If the answer is yes, the architecture probably needs another look.
 
 ## Voices
 
-- [ ] voice manager
-- [ ] voice allocator
-- [ ] voice stealing
+- [x] voice manager
+- [x] voice allocator
+- [x] voice stealing
 - [ ] mono mode
 - [ ] poly mode
 - [ ] glide
-- [ ] deterministic release behavior
+- [x] deterministic release behavior
 
 ## Oscillators
 
@@ -104,11 +104,12 @@ automation all converge here.
 
 ## Diagnostics
 
-- [ ] voice count
+- [x] voice count
 - [ ] CPU usage
 - [ ] clipping
 - [ ] peak meter
 - [ ] latency
+- [x] stolen voice count
 - [ ] runtime device status in UI
 - [ ] missing device status in UI
 

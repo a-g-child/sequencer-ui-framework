@@ -1,3 +1,4 @@
+import { VoiceManager } from '@sequencer/audio';
 import { BASIC_SYNTH_DESCRIPTOR } from '../descriptors/basic-synth';
 import type { DeviceFactory } from '../factory';
 import type { DeviceInstance } from '../instance';
@@ -13,6 +14,8 @@ import { BaseRuntimeDevice } from '../runtime';
 export class BasicSynthRuntimeDevice<
   TEvent = unknown
 > extends BaseRuntimeDevice<TEvent> {
+  readonly voices = new VoiceManager(8);
+
   get waveform(): string {
     const value = getRuntimeParameterValue(this.parameters, 'waveform');
 
@@ -27,6 +30,23 @@ export class BasicSynthRuntimeDevice<
 
   processEvents(events: readonly TEvent[]): void {
     for (const event of events) {
+      if (isNoteOnEvent(event)) {
+        this.voices.startVoice({
+          noteId: event.noteId,
+          trackId: event.destination?.trackId,
+          pitch: event.pitch,
+          velocity: event.velocity,
+          nowMs: event.timeMs
+        });
+
+        continue;
+      }
+
+      if (isNoteOffEvent(event)) {
+        this.voices.releaseVoiceByNote(event.noteId, event.timeMs);
+        continue;
+      }
+
       if (!isParameterEvent(event)) continue;
 
       const parameter = getRuntimeParameter(this.parameters, event.parameterKey);
@@ -39,6 +59,12 @@ export class BasicSynthRuntimeDevice<
 
   advance(deltaMs: number): void {
     advanceRuntimeParameters(this.parameters, deltaMs);
+  }
+
+  getDiagnostics(): { voices: ReturnType<VoiceManager['stats']> } {
+    return {
+      voices: this.voices.stats()
+    };
   }
 }
 
@@ -65,5 +91,46 @@ function isParameterEvent(
     'value' in event &&
     typeof event.parameterKey === 'string' &&
     typeof event.value === 'number'
+  );
+}
+
+function isNoteOnEvent(event: unknown): event is {
+  readonly type: 'note:on';
+  readonly noteId: string;
+  readonly destination?: { readonly trackId?: string };
+  readonly pitch: number;
+  readonly velocity: number;
+  readonly timeMs: number;
+} {
+  return (
+    typeof event === 'object' &&
+    event !== null &&
+    'type' in event &&
+    event.type === 'note:on' &&
+    'noteId' in event &&
+    typeof event.noteId === 'string' &&
+    'pitch' in event &&
+    typeof event.pitch === 'number' &&
+    'velocity' in event &&
+    typeof event.velocity === 'number' &&
+    'timeMs' in event &&
+    typeof event.timeMs === 'number'
+  );
+}
+
+function isNoteOffEvent(event: unknown): event is {
+  readonly type: 'note:off';
+  readonly noteId: string;
+  readonly timeMs: number;
+} {
+  return (
+    typeof event === 'object' &&
+    event !== null &&
+    'type' in event &&
+    event.type === 'note:off' &&
+    'noteId' in event &&
+    typeof event.noteId === 'string' &&
+    'timeMs' in event &&
+    typeof event.timeMs === 'number'
   );
 }
