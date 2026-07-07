@@ -49,6 +49,20 @@ output should consume the same playback events.
 Replacing an implementation should not require replacing the document,
 operations, models, services, UI, or surrounding architecture.
 
+## Physical And Software Are Peers
+
+A creative document should not depend on where a device executes.
+
+Software devices, external MIDI devices, network devices, attached hardware
+modules, and future native devices are interchangeable implementations of the
+same creative abstraction.
+
+Tracks compose intent. Devices realise it. Outputs execute it.
+
+This means a document can reference a device even when that implementation is
+currently unavailable. Missing hardware should be restorable. A disconnected
+module should behave more like a missing plugin than deleted creative work.
+
 ## Framework Before Feature
 
 New domains should extend the framework rather than bypass it.
@@ -79,4 +93,3 @@ job, the project can gain new editors, playback engines, visualizations, and
 runtime backends without turning every feature into a rewrite.
 
 Good boundaries let the sequencer stay playful.
-
