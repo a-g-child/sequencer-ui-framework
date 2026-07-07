@@ -150,19 +150,61 @@ export class PlaybackService implements Service, DocumentObserver {
     }
   }
 
-  onCommandExecuted(_operation: Operation): void {
+  onCommandExecuted(operation: Operation): void {
+    if (this.applyRuntimeDeviceParameterOperation(operation)) {
+      this.syncBasicSynthRuntimeParametersToWebAudio()
+      this.emitStatus()
+      return
+    }
+
     void this.rebuildRuntimeDevices()
     this.rebuildModel()
   }
 
-  onCommandUndone(_operation: Operation): void {
+  onCommandUndone(operation: Operation): void {
+    if (this.applyRuntimeDeviceParameterOperation(operation)) {
+      this.syncBasicSynthRuntimeParametersToWebAudio()
+      this.emitStatus()
+      return
+    }
+
     void this.rebuildRuntimeDevices()
     this.rebuildModel()
   }
 
-  onCommandRedone(_operation: Operation): void {
+  onCommandRedone(operation: Operation): void {
+    if (this.applyRuntimeDeviceParameterOperation(operation)) {
+      this.syncBasicSynthRuntimeParametersToWebAudio()
+      this.emitStatus()
+      return
+    }
+
     void this.rebuildRuntimeDevices()
     this.rebuildModel()
+  }
+
+  private applyRuntimeDeviceParameterOperation(operation: Operation): boolean {
+    if (!isDeviceParameterOperation(operation)) return false
+    if (!this.context) return false
+
+    const device = this.context.documentStore.document.deviceInstances.find(
+      operation.deviceInstanceId
+    )
+    const value = device?.parameterValues[operation.parameterKey]
+
+    if (value === undefined) return false
+
+    const applied = this.deviceManager.setRuntimeParameterValue(
+      operation.deviceInstanceId,
+      operation.parameterKey,
+      value
+    )
+
+    if (applied) {
+      this.deviceManager.advance(20)
+    }
+
+    return applied
   }
 
   requestClipLaunch(
@@ -496,6 +538,21 @@ function normalizeRuntimeKeyTracking(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 0
 
   return Math.min(1, Math.max(0, value))
+}
+
+function isDeviceParameterOperation(
+  operation: Operation
+): operation is Operation & {
+  readonly deviceInstanceId: string
+  readonly parameterKey: string
+} {
+  return (
+    operation.name === 'Set Device Parameter Value' &&
+    'deviceInstanceId' in operation &&
+    typeof operation.deviceInstanceId === 'string' &&
+    'parameterKey' in operation &&
+    typeof operation.parameterKey === 'string'
+  )
 }
 
 function voiceStatsFromDiagnostics(

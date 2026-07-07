@@ -1,8 +1,11 @@
 import {
   DeviceRegistry,
   RuntimeDeviceRegistry,
+  getRuntimeParameter,
+  setRuntimeParameterValue,
   type DeviceFactory,
   type DeviceInstance,
+  type DeviceParameterValue,
   type RuntimeDevice
 } from '@sequencer/device'
 import type { VoiceAction } from '@sequencer/audio'
@@ -79,6 +82,22 @@ export class PlaybackDeviceManager {
         device.advance(deltaMs)
       }
     }
+  }
+
+  setRuntimeParameterValue(
+    deviceInstanceId: string,
+    parameterKey: string,
+    value: DeviceParameterValue
+  ): boolean {
+    const device = this.runtimeDevices.find(deviceInstanceId)
+    const parameter = device
+      ? getRuntimeParameter(device.parameters, parameterKey)
+      : undefined
+
+    if (!parameter) return false
+
+    setRuntimeParameterValue(parameter, value)
+    return true
   }
 
   processEvents(events: readonly PlaybackEvent[]): VoiceAction[] {

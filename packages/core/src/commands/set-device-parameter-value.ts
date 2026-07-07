@@ -10,9 +10,9 @@ export class SetDeviceParameterValueCommand implements Command {
   private hadPreviousValue = false;
 
   constructor(
-    private readonly deviceInstanceId: EntityId,
-    private readonly parameterKey: string,
-    private readonly nextValue: DeviceParameterValue
+    readonly deviceInstanceId: EntityId,
+    readonly parameterKey: string,
+    readonly nextValue: DeviceParameterValue
   ) {}
 
   execute(document: SequencerDocument): void {
