@@ -392,7 +392,6 @@ export class PlaybackService implements Service, DocumentObserver {
       if (!device || device.descriptorKey !== 'basic-synth') continue
 
       this.webAudioOutput.setTrackSettings(track.id, {
-        enabled: true,
         waveform: normalizeWebAudioWaveform(
           getRuntimeParameterEffectiveValue(device.parameters, 'waveform')
         ),

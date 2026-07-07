@@ -318,7 +318,9 @@
 
   function refreshSelectedTrackWebAudioSettings() {
     selectedTrackWebAudioSettings = playback.webAudioTrackSettings(selectedTrackId)
-    webAudioEnabled = selectedTrackWebAudioSettings.enabled
+    webAudioEnabled =
+      selectedTrackWebAudioSettings.enabled &&
+      playbackStatus.outputManager.activeOutputIds.includes('web-audio')
   }
 
   function applyRuntimeParameterValues(
