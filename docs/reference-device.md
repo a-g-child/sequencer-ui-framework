@@ -138,6 +138,7 @@ Runtime parameter state can own:
 
 - current value
 - target value
+- default value
 - smoothed value
 - automated value
 - DSP value
@@ -148,6 +149,18 @@ document, or UI needing to know how the device maps that value internally.
 Parameters are likely to be the hardest and most important part of the golden
 device. Automation, smoothing, modulation, UI editing, MIDI learn, hardware
 encoders, snapshots, and clip automation all become parameter behavior.
+
+The first runtime parameter slice should stay intentionally small:
+
+```text
+DeviceDescriptor default
+  + DeviceInstance override
+  -> RuntimeParameter current / target / default / smoothed-ready value
+  -> RuntimeDevice
+```
+
+Smoothing fields may exist before smoothing behavior. The important milestone is
+that the runtime device reads parameter state from one place.
 
 ## Reference Behavior Tests
 

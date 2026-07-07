@@ -1,4 +1,5 @@
 import type { DeviceId, DeviceInstance } from './instance';
+import type { RuntimeParameter } from './parameter-runtime';
 
 export type RuntimeDeviceStatus = 'idle' | 'connected' | 'missing';
 
@@ -6,6 +7,7 @@ export interface RuntimeDevice<TEvent = unknown> {
   readonly instanceId: DeviceId;
   readonly descriptorKey: string;
   readonly status: RuntimeDeviceStatus;
+  readonly parameters: readonly RuntimeParameter[];
 
   connect(): Promise<void>;
   disconnect(): Promise<void>;
@@ -16,6 +18,7 @@ export class MissingRuntimeDevice<TEvent = unknown>
   implements RuntimeDevice<TEvent>
 {
   readonly status = 'missing';
+  readonly parameters: readonly RuntimeParameter[] = [];
 
   constructor(readonly instance: DeviceInstance) {}
 
@@ -39,7 +42,10 @@ export abstract class BaseRuntimeDevice<TEvent = unknown>
 {
   private connected = false;
 
-  constructor(readonly instance: DeviceInstance) {}
+  constructor(
+    readonly instance: DeviceInstance,
+    readonly parameters: readonly RuntimeParameter[] = []
+  ) {}
 
   get instanceId(): DeviceId {
     return this.instance.id;

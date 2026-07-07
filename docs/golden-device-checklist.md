@@ -84,10 +84,12 @@ it uses the correct runtime architecture.
 
 - [x] descriptor vocabulary
 - [x] document-owned parameter values on device instances
-- [ ] runtime values
-- [ ] current value
-- [ ] target value
-- [ ] smoothed value
+- [x] runtime values
+- [x] current value
+- [x] target value
+- [x] default value
+- [x] smoothing-ready fields
+- [ ] smoothing behavior
 - [ ] automated value
 - [ ] DSP value
 - [ ] descriptor-driven inspector
@@ -114,6 +116,7 @@ automation all converge here.
 - [x] runtime device abstraction
 - [x] playback-side runtime device adapter
 - [x] playback events routed to runtime devices
+- [x] Basic Synth reads waveform and volume from runtime parameters
 - [ ] runtime state reporting
 - [ ] hot reconnect
 - [ ] replace software implementation with hardware implementation

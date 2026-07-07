@@ -1,5 +1,9 @@
 import type { DocumentObserver, Operation, Service, ServiceContext, ServiceEvent } from '@sequencer/core'
-import { BasicSynthFactory, ExternalMidiFactory } from '@sequencer/device'
+import {
+  BasicSynthFactory,
+  ExternalMidiFactory,
+  getRuntimeParameterValue
+} from '@sequencer/device'
 import { PlaybackModelBuilder } from './builder'
 import type { ClockState } from './clock'
 import {
@@ -309,6 +313,7 @@ export class PlaybackService implements Service, DocumentObserver {
         schedulerStatus: this.status
       })
       this.deviceManager.processEvents(events)
+      this.syncBasicSynthRuntimeParametersToWebAudio()
       this.outputManager.handleEvents(events)
       this.emitPlaybackEvents(events)
       this.emitRuntimeParameterValues(state)
@@ -340,7 +345,30 @@ export class PlaybackService implements Service, DocumentObserver {
       this.context.documentStore.document.deviceInstances.values()
     )
     await this.deviceManager.connectAll()
+    this.syncBasicSynthRuntimeParametersToWebAudio()
     this.emitStatus()
+  }
+
+  private syncBasicSynthRuntimeParametersToWebAudio(): void {
+    if (!this.context) return
+
+    for (const track of this.context.documentStore.document.tracks.values()) {
+      if (!track.deviceId) continue
+
+      const device = this.deviceManager.runtimeDevices.find(track.deviceId)
+
+      if (!device || device.descriptorKey !== 'basic-synth') continue
+
+      this.webAudioOutput.setTrackSettings(track.id, {
+        enabled: true,
+        waveform: normalizeWebAudioWaveform(
+          getRuntimeParameterValue(device.parameters, 'waveform')
+        ),
+        volume: normalizeRuntimeVolume(
+          getRuntimeParameterValue(device.parameters, 'volume')
+        )
+      })
+    }
   }
 
   private emitStatus(): void {
@@ -389,4 +417,23 @@ export type { PlaybackEvent }
 
 function nowMs(): number {
   return globalThis.performance?.now() ?? Date.now()
+}
+
+function normalizeWebAudioWaveform(value: unknown): WebAudioWaveform {
+  if (
+    value === 'sine' ||
+    value === 'square' ||
+    value === 'sawtooth' ||
+    value === 'triangle'
+  ) {
+    return value
+  }
+
+  return 'sine'
+}
+
+function normalizeRuntimeVolume(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0.25
+
+  return Math.min(1, Math.max(0, value))
 }
