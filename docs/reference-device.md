@@ -162,6 +162,10 @@ DeviceDescriptor default
 Smoothing fields may exist before smoothing behavior. The important milestone is
 that the runtime device reads parameter state from one place.
 
+The smoothing utility belongs in `@sequencer/device`, not inside a synth. Numeric
+parameters move from current value toward target value over time. Boolean,
+choice, and text parameters snap to their target values immediately.
+
 ## Reference Behavior Tests
 
 The golden device should introduce reference behavior tests for architecture,

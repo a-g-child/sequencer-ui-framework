@@ -2,7 +2,9 @@ import { BASIC_SYNTH_DESCRIPTOR } from '../descriptors/basic-synth';
 import type { DeviceFactory } from '../factory';
 import type { DeviceInstance } from '../instance';
 import {
+  advanceRuntimeParameters,
   createRuntimeParameters,
+  getRuntimeParameter,
   getRuntimeParameterValue,
   setRuntimeParameterValue
 } from '../parameter-runtime';
@@ -27,8 +29,16 @@ export class BasicSynthRuntimeDevice<
     for (const event of events) {
       if (!isParameterEvent(event)) continue;
 
-      setRuntimeParameterValue(this.parameters, event.parameterKey, event.value);
+      const parameter = getRuntimeParameter(this.parameters, event.parameterKey);
+
+      if (parameter) {
+        setRuntimeParameterValue(parameter, event.value);
+      }
     }
+  }
+
+  advance(deltaMs: number): void {
+    advanceRuntimeParameters(this.parameters, deltaMs);
   }
 }
 

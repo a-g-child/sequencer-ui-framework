@@ -89,7 +89,8 @@ it uses the correct runtime architecture.
 - [x] target value
 - [x] default value
 - [x] smoothing-ready fields
-- [ ] smoothing behavior
+- [x] generic smoothing utility
+- [ ] audio/runtime clock advances smoothing
 - [ ] automated value
 - [ ] DSP value
 - [ ] descriptor-driven inspector
@@ -117,6 +118,7 @@ automation all converge here.
 - [x] playback-side runtime device adapter
 - [x] playback events routed to runtime devices
 - [x] Basic Synth reads waveform and volume from runtime parameters
+- [x] Basic Synth exposes runtime parameter advance hook
 - [ ] runtime state reporting
 - [ ] hot reconnect
 - [ ] replace software implementation with hardware implementation

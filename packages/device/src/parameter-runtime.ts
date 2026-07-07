@@ -15,6 +15,7 @@ export type RuntimeParameter = {
   targetValue: RuntimeParameterValue;
   defaultValue: RuntimeParameterValue;
   smoothedValue?: number;
+  smoothingMs?: number;
 };
 
 export function createRuntimeParameters(
@@ -41,22 +42,44 @@ export function getRuntimeParameterValue(
 }
 
 export function setRuntimeParameterValue(
-  parameters: readonly RuntimeParameter[],
-  key: string,
+  parameter: RuntimeParameter,
   value: RuntimeParameterValue
-): RuntimeParameter | undefined {
-  const parameter = getRuntimeParameter(parameters, key);
-
-  if (!parameter) return undefined;
-
-  parameter.value = value;
+): void {
   parameter.targetValue = value;
 
-  if (typeof value === 'number') {
-    parameter.smoothedValue = value;
+  if (typeof value !== 'number') {
+    parameter.value = value;
   }
+}
 
-  return parameter;
+export function advanceRuntimeParameters(
+  parameters: RuntimeParameter[],
+  deltaMs: number
+): void {
+  for (const parameter of parameters) {
+    if (
+      typeof parameter.targetValue !== 'number' ||
+      typeof parameter.smoothedValue !== 'number'
+    ) {
+      parameter.value = parameter.targetValue;
+      continue;
+    }
+
+    const smoothingMs = parameter.smoothingMs ?? 0;
+
+    if (smoothingMs <= 0) {
+      parameter.value = parameter.targetValue;
+      parameter.smoothedValue = parameter.targetValue;
+      continue;
+    }
+
+    const amount = Math.min(1, deltaMs / smoothingMs);
+
+    parameter.smoothedValue +=
+      (parameter.targetValue - parameter.smoothedValue) * amount;
+
+    parameter.value = parameter.smoothedValue;
+  }
 }
 
 function createRuntimeParameter(
@@ -72,6 +95,7 @@ function createRuntimeParameter(
     value,
     targetValue: value,
     defaultValue: descriptor.defaultValue,
-    smoothedValue: typeof value === 'number' ? value : undefined
+    smoothedValue: typeof value === 'number' ? value : undefined,
+    smoothingMs: typeof value === 'number' ? 20 : undefined
   };
 }
