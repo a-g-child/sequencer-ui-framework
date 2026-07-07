@@ -18,6 +18,7 @@ import {
   type LiveClipState
 } from './live-clips'
 import type { PlaybackModel } from './model'
+import { NativeAudioAdapter } from './native/NativeAudioAdapter.ts'
 import {
   ConsoleOutput,
   EventLoggerOutput,
@@ -77,6 +78,7 @@ export class PlaybackService implements Service, DocumentObserver {
   private readonly scheduler: Scheduler & { readonly status?: SchedulerStatus }
   private readonly deviceManager = new PlaybackDeviceManager()
   private readonly outputManager = new OutputManager()
+  private readonly nativeAudioAdapter = new NativeAudioAdapter()
   private readonly statisticsOutput = new StatisticsOutput()
   private readonly webAudioOutput = new WebAudioOutput()
   private unsubscribeServiceEvents?: () => void
@@ -409,9 +411,10 @@ export class PlaybackService implements Service, DocumentObserver {
         events,
         schedulerStatus: this.status
       })
-      const voiceActions = this.deviceManager.processEvents(events)
+      const deviceResult = this.deviceManager.processEvents(events)
       this.syncBasicSynthRuntimeParametersToWebAudio()
-      this.webAudioOutput.handleVoiceActions(voiceActions)
+      this.nativeAudioAdapter.handleCommands(deviceResult.deviceCommands)
+      this.webAudioOutput.handleVoiceActions(deviceResult.voiceActions)
       this.outputManager.handleEvents(events)
       this.emitPlaybackEvents(events)
       this.emitRuntimeParameterValues(state)

@@ -20,6 +20,7 @@ export interface DeviceCommandBase {
   readonly type: string
   readonly deviceInstanceId?: string
   readonly trackId?: string
+  readonly sourceActionType?: string
   readonly timeMs: number
 }
 
@@ -29,6 +30,17 @@ export interface VoiceStartCommand extends DeviceCommandBase {
   readonly noteId?: string
   readonly pitch: number
   readonly velocity: number
+  readonly amplitude?: number
+  readonly envelope?: {
+    readonly attack: number
+    readonly decay: number
+    readonly sustain: number
+    readonly release: number
+  }
+  readonly glide?: {
+    readonly startPitch: number
+    readonly time: number
+  }
 }
 
 export interface VoiceReleaseCommand extends DeviceCommandBase {

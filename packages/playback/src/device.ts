@@ -10,6 +10,8 @@ import {
 } from '@sequencer/device'
 import type { VoiceAction } from '@sequencer/audio'
 import type { PlaybackEvent } from './events'
+import type { DeviceCommand } from './native/schemas.ts'
+import { voiceActionsToDeviceCommands } from './native/voice-action-commands.ts'
 
 export type PlaybackRuntimeDevice = RuntimeDevice<PlaybackEvent>
 export type PlaybackDeviceFactory = DeviceFactory<PlaybackEvent>
@@ -25,6 +27,11 @@ export interface PlaybackDeviceDiagnostics {
   readonly id: string
   readonly status: PlaybackRuntimeDevice['status']
   readonly diagnostics?: unknown
+}
+
+export interface PlaybackDeviceProcessResult {
+  readonly voiceActions: VoiceAction[]
+  readonly deviceCommands: DeviceCommand[]
 }
 
 export class PlaybackDeviceManager {
@@ -108,10 +115,13 @@ export class PlaybackDeviceManager {
     return true
   }
 
-  processEvents(events: readonly PlaybackEvent[]): VoiceAction[] {
+  processEvents(events: readonly PlaybackEvent[]): PlaybackDeviceProcessResult {
     const voiceActions: VoiceAction[] = []
+    const deviceCommands: DeviceCommand[] = []
 
-    if (events.length === 0) return voiceActions
+    if (events.length === 0) {
+      return { voiceActions, deviceCommands }
+    }
 
     for (const device of this.runtimeDevices.values()) {
       const deviceEvents = events.filter(
@@ -123,11 +133,14 @@ export class PlaybackDeviceManager {
       device.processEvents(deviceEvents)
 
       if (hasVoiceActions(device)) {
-        voiceActions.push(...device.consumeVoiceActions())
+        const actions = device.consumeVoiceActions()
+
+        voiceActions.push(...actions)
+        deviceCommands.push(...voiceActionsToDeviceCommands(actions, device.instanceId))
       }
     }
 
-    return voiceActions
+    return { voiceActions, deviceCommands }
   }
 
   getDiagnostics(): PlaybackDeviceDiagnostics[] {

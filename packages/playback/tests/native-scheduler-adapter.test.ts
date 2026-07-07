@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import type { VoiceAction } from '@sequencer/audio'
 import { NativeAudioAdapter } from '../src/native/NativeAudioAdapter.ts'
 import { NativeSchedulerAdapter } from '../src/native/NativeSchedulerAdapter.ts'
 import type { DeviceCommand } from '../src/native/schemas.ts'
+import { voiceActionsToDeviceCommands } from '../src/native/voice-action-commands.ts'
 import { freezePlaybackModel, type PlaybackModel } from '../src/model.ts'
 import {
   TypeScriptScheduler,
@@ -55,6 +57,85 @@ describe('NativeAudioAdapter', () => {
     assert.equal(adapter.status.receivedCommandCount, 2)
     assert.equal(adapter.status.lastCommand, commands[1])
     assert.equal(adapter.acks().length, 2)
+  })
+})
+
+describe('voiceActionsToDeviceCommands', () => {
+  it('converts voice lifecycle actions into native device commands', () => {
+    const actions: VoiceAction[] = [
+      {
+        type: 'voice:start',
+        voiceId: 'voice-1',
+        trackId: 'track-1',
+        noteId: 'note-1',
+        pitch: 60,
+        velocity: 0.8,
+        amplitude: 0.9,
+        envelope: {
+          attack: 0.01,
+          decay: 0.15,
+          sustain: 0.7,
+          release: 0.2
+        },
+        glide: {
+          startPitch: 55,
+          time: 0.05
+        },
+        timeMs: 25
+      },
+      {
+        type: 'voice:release',
+        voiceId: 'voice-1',
+        timeMs: 125
+      },
+      {
+        type: 'voice:steal',
+        voiceId: 'voice-2',
+        timeMs: 130
+      }
+    ]
+
+    assert.deepEqual(voiceActionsToDeviceCommands(actions, 'device-1'), [
+      {
+        id: 'device-1:voice-1:voice:start:25',
+        type: 'voice:start',
+        deviceInstanceId: 'device-1',
+        sourceActionType: 'voice:start',
+        timeMs: 25,
+        trackId: 'track-1',
+        voiceId: 'voice-1',
+        noteId: 'note-1',
+        pitch: 60,
+        velocity: 0.8,
+        amplitude: 0.9,
+        envelope: {
+          attack: 0.01,
+          decay: 0.15,
+          sustain: 0.7,
+          release: 0.2
+        },
+        glide: {
+          startPitch: 55,
+          time: 0.05
+        }
+      },
+      {
+        id: 'device-1:voice-1:voice:release:125',
+        type: 'voice:release',
+        deviceInstanceId: 'device-1',
+        sourceActionType: 'voice:release',
+        timeMs: 125,
+        voiceId: 'voice-1'
+      },
+      {
+        id: 'device-1:voice-2:voice:steal:130',
+        type: 'voice:steal',
+        deviceInstanceId: 'device-1',
+        sourceActionType: 'voice:steal',
+        timeMs: 130,
+        voiceId: 'voice-2'
+      }
+    ])
   })
 })
 
