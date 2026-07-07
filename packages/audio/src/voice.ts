@@ -9,6 +9,11 @@ export type AdsrEnvelope = {
   release: number;
 };
 
+export type Glide = {
+  startPitch: number;
+  time: number;
+};
+
 export type Voice = {
   id: VoiceId;
   noteId?: string;
@@ -31,6 +36,7 @@ export type VoiceAction =
       amplitude?: number;
       timeMs: number;
       envelope?: AdsrEnvelope;
+      glide?: Glide;
     }
   | { type: 'voice:release'; voiceId: string; timeMs: number }
   | { type: 'voice:steal'; voiceId: string; timeMs: number };

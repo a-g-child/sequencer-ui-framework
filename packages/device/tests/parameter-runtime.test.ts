@@ -88,6 +88,8 @@ describe('runtime parameters', () => {
     assert.equal(getRuntimeParameter(parameters, 'cutoff')?.value, 20000);
     assert.equal(getRuntimeParameter(parameters, 'resonance')?.value, 0);
     assert.equal(getRuntimeParameter(parameters, 'keyTracking')?.value, 0);
+    assert.equal(getRuntimeParameter(parameters, 'glideTime')?.value, 0);
+    assert.equal(getRuntimeParameter(parameters, 'glideMode')?.value, 'legato');
     assert.equal(getRuntimeParameter(parameters, 'lfoRate')?.value, 0);
     assert.equal(getRuntimeParameter(parameters, 'lfoDepth')?.value, 0);
     assert.equal(getRuntimeParameter(parameters, 'lfoTarget')?.value, 'off');

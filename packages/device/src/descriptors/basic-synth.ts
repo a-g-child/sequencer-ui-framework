@@ -119,6 +119,29 @@ export const BASIC_SYNTH_DESCRIPTOR: DeviceDescriptor = {
       step: 0.01
     },
     {
+      id: 'glide-time',
+      key: 'glideTime',
+      name: 'Glide',
+      kind: 'number',
+      defaultValue: 0,
+      min: 0,
+      max: 2,
+      step: 0.01,
+      unit: 's'
+    },
+    {
+      id: 'glide-mode',
+      key: 'glideMode',
+      name: 'Glide Mode',
+      kind: 'choice',
+      defaultValue: 'legato',
+      options: [
+        { label: 'Off', value: 'off' },
+        { label: 'Legato', value: 'legato' },
+        { label: 'Always', value: 'always' }
+      ]
+    },
+    {
       id: 'lfo-rate',
       key: 'lfoRate',
       name: 'LFO Rate',

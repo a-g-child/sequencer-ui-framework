@@ -266,7 +266,7 @@ export class WebAudioOutput implements PlaybackOutput {
     const sustainGain = peakGain * envelope.sustain
 
     oscillator.type = settings.waveform
-    oscillator.frequency.value = midiNoteToFrequency(action.pitch)
+    configureOscillatorFrequency(oscillator, action, startTime)
     configureFilter(filter, settings.filter, action.pitch, startTime, true)
     gain.gain.cancelScheduledValues(startTime)
     gain.gain.setValueAtTime(0, startTime)
@@ -388,6 +388,28 @@ export class WebAudioOutput implements PlaybackOutput {
 
 function midiNoteToFrequency(note: number): number {
   return 440 * 2 ** ((note - 69) / 12)
+}
+
+function configureOscillatorFrequency(
+  oscillator: OscillatorNode,
+  action: Extract<VoiceAction, { type: 'voice:start' }>,
+  startTime: number
+): void {
+  const targetFrequency = midiNoteToFrequency(action.pitch)
+  const glideTime = Math.max(0, action.glide?.time ?? 0)
+
+  if (!action.glide || glideTime <= 0) {
+    oscillator.frequency.setValueAtTime(targetFrequency, startTime)
+    return
+  }
+
+  const startFrequency = midiNoteToFrequency(action.glide.startPitch)
+
+  oscillator.frequency.setValueAtTime(startFrequency, startTime)
+  oscillator.frequency.exponentialRampToValueAtTime(
+    targetFrequency,
+    startTime + glideTime
+  )
 }
 
 function clampUnit(value: number): number {

@@ -1,6 +1,7 @@
 import {
   VoiceManager,
   type AdsrEnvelope,
+  type Glide,
   type VoiceAction
 } from '@sequencer/audio';
 import { BASIC_SYNTH_DESCRIPTOR } from '../descriptors/basic-synth';
@@ -23,6 +24,7 @@ export class BasicSynthRuntimeDevice<
 
   private pendingVoiceActions: VoiceAction[] = [];
   private lfoPhase = 0;
+  private lastPitch?: number;
 
   get waveform(): string {
     const value = getRuntimeParameterEffectiveValue(this.parameters, 'waveform');
@@ -41,6 +43,7 @@ export class BasicSynthRuntimeDevice<
 
     for (const event of events) {
       if (isNoteOnEvent(event)) {
+        const glide = this.getGlide(event.destination?.trackId, event.pitch);
         const result = this.voices.startVoiceWithStealing({
           noteId: event.noteId,
           trackId: event.destination?.trackId,
@@ -66,8 +69,10 @@ export class BasicSynthRuntimeDevice<
           velocity: result.voice.velocity,
           amplitude: this.voiceAmplitude(result.voice.velocity),
           timeMs: event.timeMs,
-          envelope: this.getEnvelope()
+          envelope: this.getEnvelope(),
+          glide
         });
+        this.lastPitch = result.voice.pitch;
 
         continue;
       }
@@ -116,6 +121,36 @@ export class BasicSynthRuntimeDevice<
       decay: numberParameter(this.parameters, 'decay', 0.15),
       sustain: numberParameter(this.parameters, 'sustain', 0.7),
       release: numberParameter(this.parameters, 'release', 0.2)
+    };
+  }
+
+  private getGlide(
+    trackId: string | undefined,
+    targetPitch: number
+  ): Glide | undefined {
+    const time = Math.max(0, numberParameter(this.parameters, 'glideTime', 0));
+
+    if (time <= 0) return undefined;
+
+    const mode = getRuntimeParameterEffectiveValue(this.parameters, 'glideMode');
+
+    if (mode === 'off') return undefined;
+
+    const previousPitch = mode === 'always'
+      ? this.lastPitch
+      : latestActivePitch(this.voices.activeVoices(), trackId);
+
+    if (
+      previousPitch === undefined ||
+      previousPitch === targetPitch ||
+      !Number.isFinite(previousPitch)
+    ) {
+      return undefined;
+    }
+
+    return {
+      startPitch: previousPitch,
+      time
     };
   }
 
@@ -171,6 +206,20 @@ function clampUnit(value: number): number {
   if (!Number.isFinite(value)) return 0;
 
   return Math.min(1, Math.max(0, value));
+}
+
+function latestActivePitch(
+  voices: ReturnType<VoiceManager['activeVoices']>,
+  trackId: string | undefined
+): number | undefined {
+  const candidates = trackId
+    ? voices.filter((voice) => voice.trackId === trackId)
+    : voices;
+  const latest = [...candidates].sort(
+    (left, right) => right.startedAtMs - left.startedAtMs
+  )[0];
+
+  return latest?.pitch;
 }
 
 export class BasicSynthFactory<TEvent = unknown>
