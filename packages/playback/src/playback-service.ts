@@ -18,7 +18,11 @@ import {
   type OutputManagerStatus
 } from './output'
 import type { PlaybackOutputStatistics } from './output/StatisticsOutput'
-import type { WebAudioWaveform } from './output/WebAudioOutput'
+import type {
+  WebAudioOscillatorSettings,
+  WebAudioOscillatorSettingsUpdate,
+  WebAudioWaveform
+} from './output/WebAudioOutput'
 import {
   samplePlaybackAutomationValues,
   TypeScriptScheduler,
@@ -33,6 +37,10 @@ export interface PlaybackServiceStatus extends SchedulerStatus {
   readonly liveClips: LiveClipState
   readonly outputManager: OutputManagerStatus
   readonly statistics: PlaybackOutputStatistics
+  readonly webAudio: {
+    readonly defaultSettings: WebAudioOscillatorSettings
+    readonly trackSettings: Readonly<Record<string, WebAudioOscillatorSettings>>
+  }
 }
 
 export class PlaybackService implements Service, DocumentObserver {
@@ -93,7 +101,8 @@ export class PlaybackService implements Service, DocumentObserver {
       noteCount: this.model?.notes.length ?? 0,
       liveClips: this.liveClips.state,
       outputManager: this.outputManager.status,
-      statistics: this.statisticsOutput.statistics
+      statistics: this.statisticsOutput.statistics,
+      webAudio: this.webAudioOutput.settings
     }
   }
 
@@ -162,6 +171,20 @@ export class PlaybackService implements Service, DocumentObserver {
   setWebAudioVolume(volume: number): void {
     this.webAudioOutput.setVolume(volume)
     this.emitStatus()
+  }
+
+  setWebAudioTrackSettings(
+    trackId: string,
+    settings: WebAudioOscillatorSettingsUpdate
+  ): void {
+    this.webAudioOutput.setTrackSettings(trackId, settings)
+    this.emitStatus()
+  }
+
+  webAudioTrackSettings(
+    trackId: string | undefined
+  ): WebAudioOscillatorSettings {
+    return this.webAudioOutput.trackSettingsFor(trackId)
   }
 
   private rebuildModel(): void {

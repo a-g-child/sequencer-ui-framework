@@ -4,15 +4,38 @@ import type { PlaybackOutput } from './PlaybackOutput'
 
 export type WebAudioWaveform = OscillatorType
 
+export interface WebAudioAdsrSettings {
+  readonly attackMs: number
+  readonly decayMs: number
+  readonly sustain: number
+  readonly releaseMs: number
+}
+
+export interface WebAudioOscillatorSettings {
+  readonly enabled: boolean
+  readonly waveform: WebAudioWaveform
+  readonly volume: number
+  readonly adsr: WebAudioAdsrSettings
+}
+
+export type WebAudioOscillatorSettingsUpdate = Partial<
+  Omit<WebAudioOscillatorSettings, 'adsr'>
+> & {
+  readonly adsr?: Partial<WebAudioAdsrSettings>
+}
+
 export interface WebAudioOutputOptions {
+  readonly enabled?: boolean
   readonly waveform?: WebAudioWaveform
   readonly volume?: number
-  readonly releaseMs?: number
+  readonly adsr?: Partial<WebAudioAdsrSettings>
 }
 
 type ActiveVoice = {
   readonly oscillator: OscillatorNode
   readonly gain: GainNode
+  readonly trackId?: string
+  readonly velocity: number
 }
 
 export class WebAudioOutput implements PlaybackOutput {
@@ -22,15 +45,17 @@ export class WebAudioOutput implements PlaybackOutput {
 
   private context?: AudioContext
   private masterGain?: GainNode
-  private waveform: WebAudioWaveform
-  private volume: number
-  private readonly releaseMs: number
+  private defaultSettings: WebAudioOscillatorSettings
+  private readonly trackSettings = new Map<string, WebAudioOscillatorSettings>()
   private readonly voices = new Map<string, ActiveVoice>()
 
   constructor(options: WebAudioOutputOptions = {}) {
-    this.waveform = options.waveform ?? 'sine'
-    this.volume = clampUnit(options.volume ?? 0.2)
-    this.releaseMs = Math.max(5, options.releaseMs ?? 60)
+    this.defaultSettings = {
+      enabled: options.enabled ?? false,
+      waveform: options.waveform ?? 'sine',
+      volume: clampUnit(options.volume ?? 0.2),
+      adsr: normalizeAdsr(options.adsr)
+    }
   }
 
   async connect(): Promise<void> {
@@ -44,7 +69,7 @@ export class WebAudioOutput implements PlaybackOutput {
     if (!this.context) {
       this.context = new AudioContextConstructor()
       this.masterGain = this.context.createGain()
-      this.masterGain.gain.value = this.volume
+      this.masterGain.gain.value = 1
       this.masterGain.connect(this.context.destination)
     }
 
@@ -69,22 +94,72 @@ export class WebAudioOutput implements PlaybackOutput {
   }
 
   setWaveform(waveform: WebAudioWaveform): void {
-    this.waveform = waveform
+    this.defaultSettings = {
+      ...this.defaultSettings,
+      waveform
+    }
 
     for (const voice of this.voices.values()) {
+      if (voice.trackId && this.trackSettings.has(voice.trackId)) continue
+
       voice.oscillator.type = waveform
     }
   }
 
   setVolume(volume: number): void {
-    this.volume = clampUnit(volume)
+    this.defaultSettings = {
+      ...this.defaultSettings,
+      volume: clampUnit(volume)
+    }
 
-    if (this.context && this.masterGain) {
-      this.masterGain.gain.setTargetAtTime(
-        this.volume,
+    if (!this.context) return
+
+    for (const voice of this.voices.values()) {
+      if (voice.trackId && this.trackSettings.has(voice.trackId)) continue
+
+      voice.gain.gain.setTargetAtTime(
+        voice.velocity *
+          this.defaultSettings.volume *
+          this.defaultSettings.adsr.sustain,
         this.context.currentTime,
         0.01
       )
+    }
+  }
+
+  setTrackSettings(
+    trackId: string,
+    settings: WebAudioOscillatorSettingsUpdate
+  ): void {
+    const currentSettings = this.settingsForTrack(trackId)
+    const nextSettings: WebAudioOscillatorSettings = {
+      ...currentSettings,
+      ...settings,
+      volume:
+        settings.volume === undefined
+          ? currentSettings.volume
+          : clampUnit(settings.volume),
+      adsr:
+        settings.adsr === undefined
+          ? currentSettings.adsr
+          : normalizeAdsr({ ...currentSettings.adsr, ...settings.adsr })
+    }
+
+    this.trackSettings.set(trackId, nextSettings)
+    this.updateActiveTrackVoices(trackId, nextSettings)
+  }
+
+  trackSettingsFor(trackId: string | undefined): WebAudioOscillatorSettings {
+    return trackId ? this.settingsForTrack(trackId) : this.defaultSettings
+  }
+
+  get settings(): {
+    readonly defaultSettings: WebAudioOscillatorSettings
+    readonly trackSettings: Readonly<Record<string, WebAudioOscillatorSettings>>
+  } {
+    return {
+      defaultSettings: this.defaultSettings,
+      trackSettings: Object.fromEntries(this.trackSettings.entries())
     }
   }
 
@@ -106,25 +181,35 @@ export class WebAudioOutput implements PlaybackOutput {
     if (!this.context || !this.masterGain) return
 
     const key = voiceKey(event)
+    const settings = this.settingsForTrack(event.trackId)
+
+    if (!settings.enabled) return
 
     this.stopVoice(key, event.timeMs)
 
     const oscillator = this.context.createOscillator()
     const gain = this.context.createGain()
     const startTime = this.outputTime(event.timeMs)
+    const attackTime = startTime + settings.adsr.attackMs / 1000
+    const decayTime = attackTime + settings.adsr.decayMs / 1000
+    const peakGain = clampUnit(event.velocity) * settings.volume
+    const sustainGain = peakGain * settings.adsr.sustain
 
-    oscillator.type = this.waveform
+    oscillator.type = settings.waveform
     oscillator.frequency.value = midiNoteToFrequency(event.pitch)
     gain.gain.setValueAtTime(0, startTime)
-    gain.gain.linearRampToValueAtTime(
-      clampUnit(event.velocity),
-      startTime + 0.005
-    )
+    gain.gain.linearRampToValueAtTime(peakGain, attackTime)
+    gain.gain.linearRampToValueAtTime(sustainGain, decayTime)
 
     oscillator.connect(gain)
     gain.connect(this.masterGain)
     oscillator.start(startTime)
-    this.voices.set(key, { oscillator, gain })
+    this.voices.set(key, {
+      oscillator,
+      gain,
+      trackId: event.trackId,
+      velocity: clampUnit(event.velocity)
+    })
   }
 
   private stopVoice(voiceKey: string, timeMs: number): void {
@@ -133,7 +218,8 @@ export class WebAudioOutput implements PlaybackOutput {
     if (!voice || !this.context) return
 
     const stopStart = this.outputTime(timeMs)
-    const stopTime = stopStart + this.releaseMs / 1000
+    const settings = this.settingsForTrack(voice.trackId)
+    const stopTime = stopStart + settings.adsr.releaseMs / 1000
 
     voice.gain.gain.cancelScheduledValues(stopStart)
     voice.gain.gain.setValueAtTime(voice.gain.gain.value, stopStart)
@@ -149,6 +235,35 @@ export class WebAudioOutput implements PlaybackOutput {
     const deltaSeconds = Math.max(0, timeMs - now) / 1000
 
     return this.context.currentTime + deltaSeconds
+  }
+
+  private settingsForTrack(trackId: string | undefined): WebAudioOscillatorSettings {
+    if (!trackId) return this.defaultSettings
+
+    return this.trackSettings.get(trackId) ?? this.defaultSettings
+  }
+
+  private updateActiveTrackVoices(
+    trackId: string,
+    settings: WebAudioOscillatorSettings
+  ): void {
+    if (!this.context) return
+
+    for (const [key, voice] of this.voices.entries()) {
+      if (voice.trackId !== trackId) continue
+
+      if (!settings.enabled) {
+        this.stopVoice(key, performanceNow())
+        continue
+      }
+
+      voice.oscillator.type = settings.waveform
+      voice.gain.gain.setTargetAtTime(
+        voice.velocity * settings.volume * settings.adsr.sustain,
+        this.context.currentTime,
+        0.01
+      )
+    }
   }
 }
 
@@ -166,6 +281,23 @@ function clampUnit(value: number): number {
   if (!Number.isFinite(value)) return 0
 
   return Math.min(1, Math.max(0, value))
+}
+
+function normalizeAdsr(
+  adsr: Partial<WebAudioAdsrSettings> | undefined = {}
+): WebAudioAdsrSettings {
+  return {
+    attackMs: clampMs(adsr.attackMs ?? 5),
+    decayMs: clampMs(adsr.decayMs ?? 60),
+    sustain: clampUnit(adsr.sustain ?? 0.8),
+    releaseMs: clampMs(adsr.releaseMs ?? 80)
+  }
+}
+
+function clampMs(value: number): number {
+  if (!Number.isFinite(value)) return 0
+
+  return Math.min(5000, Math.max(0, value))
 }
 
 function performanceNow(): number {

@@ -136,22 +136,30 @@
 
 <style>
   .runtime-status {
-    min-height: var(--status-grid-min-height);
-    padding: var(--spacing-compact) var(--spacing-control-lg);
-    border: var(--border-width) solid var(--border);
-    background: var(--surface);
+    position: fixed;
+    right: var(--spacing-control-lg);
+    bottom: var(--spacing-control-lg);
+    z-index: 50;
+    width: min(640px, calc(100vw - var(--spacing-control-lg) * 2));
+    max-height: min(68vh, 560px);
+    padding: var(--spacing-sm);
+    overflow: auto;
+    border: var(--border-width) solid color-mix(in srgb, var(--border) 72%, transparent);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--surface) 78%, transparent);
     box-shadow: var(--elevation-raised);
+    backdrop-filter: blur(16px);
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: var(--spacing-compact);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--spacing-xs);
   }
 
   .runtime-status div {
     min-width: 0;
-    padding: var(--spacing-sm) var(--spacing-compact);
-    border: var(--border-width) solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--surface-2);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border: var(--border-width) solid color-mix(in srgb, var(--border) 64%, transparent);
+    border-radius: var(--radius-control);
+    background: color-mix(in srgb, var(--surface-2) 58%, transparent);
     display: grid;
     gap: var(--spacing-2xs);
   }
@@ -167,11 +175,16 @@
   .runtime-status strong {
     min-width: 0;
     overflow-wrap: anywhere;
-    font-size: var(--font-size-lg);
+    font-size: var(--font-size-sm);
+    line-height: 1.15;
   }
 
   @media (max-width: 760px) {
     .runtime-status {
+      right: var(--spacing-sm);
+      bottom: var(--spacing-sm);
+      width: calc(100vw - var(--spacing-sm) * 2);
+      max-height: 58vh;
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }

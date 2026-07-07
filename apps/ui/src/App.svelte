@@ -17,6 +17,7 @@
     type PlaybackEvent,
     type PlaybackRuntimeParameterValue,
     type PlaybackServiceStatus,
+    type WebAudioOscillatorSettings,
     type WebAudioWaveform
   } from '@sequencer/playback'
   import { AppController, type TrackClipView } from './lib/app-controller'
@@ -100,9 +101,12 @@
   let preferencesStatus = 'not loaded'
   let clockStatus: ClockServiceStatus = clock.status
   let playbackStatus: PlaybackServiceStatus = playback.status
-  let webAudioEnabled = playbackStatus.outputManager.activeOutputIds.includes('web-audio')
-  let webAudioWaveform: WebAudioWaveform = 'sine'
-  let webAudioVolume = 0.2
+  let selectedTrackWebAudioSettings: WebAudioOscillatorSettings =
+    playback.webAudioTrackSettings(selectedTrackId)
+  let webAudioEnabled = selectedTrackWebAudioSettings.enabled
+  let webAudioWaveform: WebAudioWaveform = selectedTrackWebAudioSettings.waveform
+  let webAudioVolume = selectedTrackWebAudioSettings.volume
+  let diagnosticsOpen = false
   let runtimeParameterValues: Record<string, ParameterValue> = {}
   let automatedRuntimeParameterIds = new Set<string>()
   let renderModelRebuildMs = 0
@@ -156,6 +160,7 @@
       playbackStatus.liveClips.activeClipByTrackId[selectedTrackId]?.clipId,
       playbackStatus.liveClips.pendingLaunchByTrackId[selectedTrackId]
     )
+    refreshSelectedTrackWebAudioSettings()
     issues = validateDocument(store.document)
     canUndo = store.history.canUndo()
     canRedo = store.history.canRedo()
@@ -217,9 +222,8 @@
     if (event.type === 'playback:status-changed') {
       playbackStatus =
         (event.payload as PlaybackServiceStatus | undefined) ?? playbackStatus
-      webAudioEnabled =
-        playbackStatus.outputManager.activeOutputIds.includes('web-audio')
       refreshSelectedTrackClips()
+      refreshSelectedTrackWebAudioSettings()
     }
 
     if (event.type === 'playback:runtime-parameters') {
@@ -256,6 +260,13 @@
       playbackStatus.liveClips.activeClipByTrackId[selectedTrackId]?.clipId,
       playbackStatus.liveClips.pendingLaunchByTrackId[selectedTrackId]
     )
+  }
+
+  function refreshSelectedTrackWebAudioSettings() {
+    selectedTrackWebAudioSettings = playback.webAudioTrackSettings(selectedTrackId)
+    webAudioEnabled = selectedTrackWebAudioSettings.enabled
+    webAudioWaveform = selectedTrackWebAudioSettings.waveform
+    webAudioVolume = selectedTrackWebAudioSettings.volume
   }
 
   function applyRuntimeParameterValues(
@@ -368,26 +379,87 @@
     controller.setRuntimeBpm(bpm)
   }
 
-  async function toggleWebAudioOutput(event: Event) {
-    const enabled = (event.currentTarget as HTMLInputElement).checked
-
+  async function setSelectedTrackWebAudioEnabled(enabled: boolean) {
     webAudioEnabled = enabled
-    await playback.setWebAudioEnabled(enabled)
+
+    if (selectedTrackId) {
+      playback.setWebAudioTrackSettings(selectedTrackId, { enabled })
+
+      if (enabled) {
+        await playback.setWebAudioEnabled(true)
+      }
+    } else {
+      await playback.setWebAudioEnabled(enabled)
+    }
+
     playbackStatus = playback.status
+    refreshSelectedTrackWebAudioSettings()
+  }
+
+  async function toggleWebAudioOutput() {
+    await setSelectedTrackWebAudioEnabled(!webAudioEnabled)
   }
 
   function setWebAudioWaveform(event: Event) {
     const waveform = (event.currentTarget as HTMLSelectElement).value as WebAudioWaveform
 
     webAudioWaveform = waveform
-    playback.setWebAudioWaveform(waveform)
+
+    if (selectedTrackId) {
+      playback.setWebAudioTrackSettings(selectedTrackId, { waveform })
+    } else {
+      playback.setWebAudioWaveform(waveform)
+    }
+
+    refreshSelectedTrackWebAudioSettings()
   }
 
   function setWebAudioVolume(event: Event) {
     const volume = readNumberValue(event)
 
     webAudioVolume = volume
-    playback.setWebAudioVolume(volume)
+
+    if (selectedTrackId) {
+      playback.setWebAudioTrackSettings(selectedTrackId, { volume })
+    } else {
+      playback.setWebAudioVolume(volume)
+    }
+
+    refreshSelectedTrackWebAudioSettings()
+  }
+
+  function setWebAudioAttack(event: Event) {
+    setWebAudioAdsrValue('attackMs', readNumberValue(event))
+  }
+
+  function setWebAudioDecay(event: Event) {
+    setWebAudioAdsrValue('decayMs', readNumberValue(event))
+  }
+
+  function setWebAudioSustain(event: Event) {
+    setWebAudioAdsrValue('sustain', readNumberValue(event))
+  }
+
+  function setWebAudioRelease(event: Event) {
+    setWebAudioAdsrValue('releaseMs', readNumberValue(event))
+  }
+
+  function setWebAudioAdsrValue(
+    key: keyof WebAudioOscillatorSettings['adsr'],
+    value: number
+  ) {
+    if (!selectedTrackId) return
+
+    playback.setWebAudioTrackSettings(selectedTrackId, {
+      adsr: {
+        [key]: value
+      }
+    })
+    refreshSelectedTrackWebAudioSettings()
+  }
+
+  function toggleDiagnosticsOverlay() {
+    diagnosticsOpen = !diagnosticsOpen
   }
 
   function toggleActivePatternClipLoop(loop: boolean) {
@@ -676,21 +748,37 @@
       onPlay={playTransport}
       onStop={stopTransport}
       onBpmChange={setRuntimeBpm}
+      {diagnosticsOpen}
+      onToggleDiagnostics={toggleDiagnosticsOverlay}
     />
 
     <div class="audio-output-panel" aria-label="Audio output">
-      <label class="audio-toggle">
+      <div class="audio-toggle">
         <span>Audio</span>
-        <input
-          type="checkbox"
-          checked={webAudioEnabled}
-          on:change={toggleWebAudioOutput}
-        />
-      </label>
+        <button
+          type="button"
+          class="audio-enable-button"
+          class:active={webAudioEnabled}
+          aria-pressed={webAudioEnabled}
+          on:click={toggleWebAudioOutput}
+          disabled={!selectedTrackId}
+        >
+          {webAudioEnabled ? 'On' : 'Off'}
+        </button>
+      </div>
+
+      <div class="audio-scope">
+        <span>Osc</span>
+        <strong>{selectedTrackId ? 'Track' : 'Global'}</strong>
+      </div>
 
       <label>
         <span>Wave</span>
-        <select value={webAudioWaveform} on:change={setWebAudioWaveform}>
+        <select
+          value={webAudioWaveform}
+          on:change={setWebAudioWaveform}
+          disabled={!selectedTrackId}
+        >
           <option value="sine">Sine</option>
           <option value="square">Square</option>
           <option value="sawtooth">Saw</option>
@@ -707,6 +795,59 @@
           step="0.01"
           value={webAudioVolume}
           on:input={setWebAudioVolume}
+          disabled={!selectedTrackId}
+        />
+      </label>
+
+      <label>
+        <span>A</span>
+        <input
+          type="range"
+          min="0"
+          max="2000"
+          step="5"
+          value={selectedTrackWebAudioSettings.adsr.attackMs}
+          on:input={setWebAudioAttack}
+          disabled={!selectedTrackId}
+        />
+      </label>
+
+      <label>
+        <span>D</span>
+        <input
+          type="range"
+          min="0"
+          max="2000"
+          step="5"
+          value={selectedTrackWebAudioSettings.adsr.decayMs}
+          on:input={setWebAudioDecay}
+          disabled={!selectedTrackId}
+        />
+      </label>
+
+      <label>
+        <span>S</span>
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value={selectedTrackWebAudioSettings.adsr.sustain}
+          on:input={setWebAudioSustain}
+          disabled={!selectedTrackId}
+        />
+      </label>
+
+      <label>
+        <span>R</span>
+        <input
+          type="range"
+          min="0"
+          max="3000"
+          step="5"
+          value={selectedTrackWebAudioSettings.adsr.releaseMs}
+          on:input={setWebAudioRelease}
+          disabled={!selectedTrackId}
         />
       </label>
     </div>
@@ -873,35 +1014,6 @@
   
 
   <svelte:fragment slot="bottom">
-    <RuntimePanel
-      {transportPlaying}
-      {transportBpm}
-      {transportBeat}
-      {audioEngineStatus}
-      {midiStatus}
-      {preferencesStatus}
-      clockSource={clockStatus.activeSourceName}
-      clockRunning={clockStatus.state.running}
-      clockBeat={clockStatus.state.beat}
-      clockBpm={clockStatus.state.bpm}
-      clockDrift={clockStatus.state.driftMs}
-      playbackRunning={playbackStatus.running}
-      playbackQueuedEvents={playbackStatus.queuedEventCount}
-      playbackBeat={playbackStatus.currentBeat}
-      playbackLastEvent={formatPlaybackEvent(playbackStatus.lastEmittedEvent)}
-      playbackEventCount={playbackStatus.statistics.eventCount}
-      playbackEventsPerSecond={playbackStatus.statistics.eventsPerSecond}
-      playbackLastBatchSize={playbackStatus.outputManager.lastEventCount}
-      schedulerJitterMs={playbackStatus.statistics.schedulerJitterMs}
-      schedulerLatencyMs={playbackStatus.statistics.schedulerLatencyMs}
-      maxLookaheadDepthMs={playbackStatus.statistics.maxLookaheadDepthMs}
-      largestEventBatch={playbackStatus.statistics.largestEventBatch}
-      lateEventCount={playbackStatus.statistics.lateEventCount}
-      missedEventCount={playbackStatus.statistics.missedEventCount}
-      playbackModelRebuildMs={playbackStatus.statistics.playbackModelRebuildMs}
-      {renderModelRebuildMs}
-    />
-
     <footer class="statusbar">
       <span>{store.document.patterns.values().length} patterns</span>
       <span>{store.document.parameterDefinitions.values().length} property types</span>
@@ -910,6 +1022,37 @@
     </footer>
   </svelte:fragment>
 </Workbench>
+
+{#if diagnosticsOpen}
+  <RuntimePanel
+    {transportPlaying}
+    {transportBpm}
+    {transportBeat}
+    {audioEngineStatus}
+    {midiStatus}
+    {preferencesStatus}
+    clockSource={clockStatus.activeSourceName}
+    clockRunning={clockStatus.state.running}
+    clockBeat={clockStatus.state.beat}
+    clockBpm={clockStatus.state.bpm}
+    clockDrift={clockStatus.state.driftMs}
+    playbackRunning={playbackStatus.running}
+    playbackQueuedEvents={playbackStatus.queuedEventCount}
+    playbackBeat={playbackStatus.currentBeat}
+    playbackLastEvent={formatPlaybackEvent(playbackStatus.lastEmittedEvent)}
+    playbackEventCount={playbackStatus.statistics.eventCount}
+    playbackEventsPerSecond={playbackStatus.statistics.eventsPerSecond}
+    playbackLastBatchSize={playbackStatus.outputManager.lastEventCount}
+    schedulerJitterMs={playbackStatus.statistics.schedulerJitterMs}
+    schedulerLatencyMs={playbackStatus.statistics.schedulerLatencyMs}
+    maxLookaheadDepthMs={playbackStatus.statistics.maxLookaheadDepthMs}
+    largestEventBatch={playbackStatus.statistics.largestEventBatch}
+    lateEventCount={playbackStatus.statistics.lateEventCount}
+    missedEventCount={playbackStatus.statistics.missedEventCount}
+    playbackModelRebuildMs={playbackStatus.statistics.playbackModelRebuildMs}
+    {renderModelRebuildMs}
+  />
+{/if}
 
 <style>
   .editor-stack {
@@ -925,7 +1068,12 @@
     border-radius: var(--radius-md);
     background: var(--surface);
     display: grid;
-    grid-template-columns: auto minmax(88px, 1fr) minmax(92px, 1fr);
+    grid-template-columns:
+      auto
+      auto
+      minmax(82px, 0.9fr)
+      minmax(92px, 1fr)
+      repeat(4, minmax(54px, 0.7fr));
     align-items: center;
     gap: var(--spacing-sm);
   }
@@ -940,6 +1088,25 @@
     text-transform: uppercase;
   }
 
+  .audio-scope {
+    min-width: 0;
+    display: grid;
+    gap: var(--spacing-2xs);
+  }
+
+  .audio-scope span {
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .audio-scope strong {
+    font-size: var(--font-size-sm);
+    line-height: 1;
+  }
+
   .audio-output-panel select,
   .audio-output-panel input[type='range'] {
     min-width: 0;
@@ -949,6 +1116,22 @@
   .audio-toggle {
     grid-template-columns: auto auto;
     align-items: center;
+  }
+
+  .audio-enable-button {
+    min-height: var(--control-height-sm);
+    min-width: 44px;
+    padding: 0 var(--spacing-sm);
+    border-radius: var(--radius-control);
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+  }
+
+  .audio-enable-button.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
   }
 
   .clip-panel {

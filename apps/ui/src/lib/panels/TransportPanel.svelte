@@ -5,6 +5,8 @@
   export let onPlay: () => void;
   export let onStop: () => void;
   export let onBpmChange: (event: Event) => void;
+  export let diagnosticsOpen = false;
+  export let onToggleDiagnostics: () => void = () => {};
 </script>
 
 <div class="transport-panel" aria-label="Runtime transport">
@@ -33,6 +35,18 @@
     <span>Beat</span>
     <strong>{beat.toFixed(2)}</strong>
   </div>
+
+  <button
+    type="button"
+    class="diagnostics-toggle"
+    class:active={diagnosticsOpen}
+    aria-pressed={diagnosticsOpen}
+    aria-label={diagnosticsOpen ? 'Hide diagnostics' : 'Show diagnostics'}
+    title={diagnosticsOpen ? 'Hide diagnostics' : 'Show diagnostics'}
+    on:click={onToggleDiagnostics}
+  >
+    Log
+  </button>
 </div>
 
 <style>
@@ -91,6 +105,20 @@
   .beat-readout strong {
     min-width: var(--beat-readout-width);
     font-size: var(--font-size-lg);
+  }
+
+  .diagnostics-toggle {
+    min-height: var(--control-height-md);
+    padding: 0 var(--spacing-md);
+    border-radius: var(--radius-control);
+    color: var(--muted);
+    font-weight: 800;
+  }
+
+  .diagnostics-toggle.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
   }
 
   @media (max-width: 760px) {
