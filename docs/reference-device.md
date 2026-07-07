@@ -217,6 +217,19 @@ Examples:
 
 These tests become regression coverage for the runtime architecture.
 
+The first reference tests should live with the packages they describe:
+
+```text
+packages/audio/tests/
+  voice-manager.test.ts
+
+packages/device/tests/
+  parameter-runtime.test.ts
+```
+
+They document behavior such as voice allocation, release, stealing, numeric
+parameter smoothing, and non-numeric parameter snapping.
+
 ## Development Mode
 
 Sequencer should now move from architecture-first development to reference

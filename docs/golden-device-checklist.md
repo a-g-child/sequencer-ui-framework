@@ -133,11 +133,13 @@ automation all converge here.
 
 ## Reference Tests
 
-- [ ] `NoteOn` allocates a voice
-- [ ] `NoteOff` releases a voice
-- [ ] voice stealing is deterministic
+- [x] `NoteOn` allocates a voice
+- [x] `NoteOff` releases a voice
+- [x] voice stealing is deterministic
 - [ ] parameter automation changes a runtime parameter
-- [ ] smoothed parameters approach target values
+- [x] smoothed parameters approach target values
+- [x] boolean parameters snap
+- [x] choice parameters snap
 - [ ] playback events reach only the targeted runtime device
 - [ ] missing devices do not crash playback
 - [ ] outputs still receive diagnostic event batches

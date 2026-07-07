@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "npm run dev -w apps/ui",
     "build": "npm run build --workspaces --if-present",
-    "check": "npm run check --workspaces --if-present"
+    "check": "npm run check --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
   }
 }

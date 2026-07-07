@@ -30,8 +30,11 @@ export class VoiceManager {
   private totalStarted = 0;
   private totalReleased = 0;
   private totalStolen = 0;
+  private readonly maxVoices: number;
 
-  constructor(private readonly maxVoices = 8) {}
+  constructor(maxVoices = 8) {
+    this.maxVoices = maxVoices;
+  }
 
   startVoice(options: StartVoiceOptions): Voice {
     return this.startVoiceWithStealing(options).voice;
