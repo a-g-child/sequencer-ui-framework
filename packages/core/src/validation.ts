@@ -48,6 +48,14 @@ export function validateDocument(document: SequencerDocument): ValidationIssue[]
       }
     }
 
+    if (track.deviceId && !document.deviceInstances.has(track.deviceId)) {
+      issues.push({
+        level: "error",
+        message: `Track references missing device instance: ${track.deviceId}`,
+        entityId: track.id
+      });
+    }
+
     const slotIndexes = new Set<number>();
 
     for (const slot of track.clips) {

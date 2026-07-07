@@ -4,6 +4,7 @@ import type { BeatTime, TimelineEvent } from "./events";
 import type { ParameterOwner } from "./parameter-owner";
 import type { SequencerDocument } from "./document";
 import type { EntityRef } from "./reference";
+import type { DeviceInstance } from "@sequencer/device";
 
 export interface Pattern extends Entity {
   length: BeatTime;
@@ -21,6 +22,7 @@ export interface MidiClip extends Entity {
 export interface Track extends Entity, ParameterOwner {
   clips: TrackClipSlot[];
   placements: PatternPlacement[];
+  deviceId?: EntityRef<DeviceInstance>;
   target?: string;
 }
 

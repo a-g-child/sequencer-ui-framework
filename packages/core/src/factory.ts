@@ -12,6 +12,11 @@ import { createId } from "./entity";
 import { Registry } from "./registry";
 import type { Parameter, ParameterDefinition } from "./parameter";
 import { addDefaultTrackParameters } from "./default-parameters";
+import {
+  BASIC_SYNTH_DESCRIPTOR,
+  type DeviceDescriptor,
+  type DeviceInstance
+} from "@sequencer/device";
 
 export function createPattern(name = "Pattern A", length = 16): Pattern {
   return {
@@ -41,14 +46,36 @@ export function createMidiClip(
   };
 }
 
-export function createTrack(name = "Track 1", target?: string): Track {
+export function createTrack(
+  name = "Track 1",
+  target?: string,
+  deviceId?: DeviceInstance["id"]
+): Track {
   return {
     id: createId("track"),
     name,
     clips: [],
     placements: [],
     parameters: [],
+    deviceId,
     target
+  };
+}
+
+export function createDeviceInstance(
+  descriptor: DeviceDescriptor,
+  name = descriptor.name
+): DeviceInstance {
+  return {
+    id: createId("device"),
+    descriptorKey: descriptor.key,
+    name,
+    parameterValues: Object.fromEntries(
+      descriptor.parameters.map((parameter) => [
+        parameter.key,
+        parameter.defaultValue
+      ])
+    )
   };
 }
 
@@ -101,10 +128,12 @@ export function createTimeline(length = 16): Timeline {
 export function createDocument(name = "Sequencer"): SequencerDocument {
   const pattern = createPattern();
   const midiClip = createMidiClip(pattern.id, "Clip 1", pattern.length);
-  const track = createTrack("Track 1");
+  const deviceInstance = createDeviceInstance(BASIC_SYNTH_DESCRIPTOR);
+  const track = createTrack("Track 1", undefined, deviceInstance.id);
   const patterns = new Registry<Pattern>();
   const midiClips = new Registry<MidiClip>();
   const tracks = new Registry<Track>();
+  const deviceInstances = new Registry<DeviceInstance>();
   const timeline = createTimeline();
 
   track.clips.push(createTrackClipSlot(track.id, midiClip.id, 0, midiClip.name));
@@ -113,6 +142,7 @@ export function createDocument(name = "Sequencer"): SequencerDocument {
   );
   midiClips.add(midiClip);
   patterns.add(pattern);
+  deviceInstances.add(deviceInstance);
   tracks.add(track);
 
   const document: SequencerDocument = {
@@ -121,6 +151,7 @@ export function createDocument(name = "Sequencer"): SequencerDocument {
     bpm: 120,
     timeline,
     tracks,
+    deviceInstances,
     midiClips,
     patterns,
     parameterDefinitions: new Registry<ParameterDefinition>(),

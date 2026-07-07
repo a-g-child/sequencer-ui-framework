@@ -3,6 +3,7 @@ import type { SequencerDocument } from "./document";
 import type { MidiClip, Pattern, Track } from "./project";
 import type { Parameter, ParameterDefinition } from "./parameter";
 import type { Timeline } from "./timeline";
+import type { DeviceInstance } from "@sequencer/device";
 
 interface SerializedDocument {
   id: SequencerDocument["id"];
@@ -10,6 +11,7 @@ interface SerializedDocument {
   bpm: number;
   timeline: Timeline;
   tracks: Track[];
+  deviceInstances?: DeviceInstance[];
   midiClips?: MidiClip[];
   patterns: Pattern[];
   parameterDefinitions: ParameterDefinition[];
@@ -23,6 +25,7 @@ export function serializeDocument(document: SequencerDocument): string {
     bpm: document.bpm,
     timeline: document.timeline,
     tracks: document.tracks.values(),
+    deviceInstances: document.deviceInstances.values(),
     midiClips: document.midiClips.values(),
     patterns: document.patterns.values(),
     parameterDefinitions: document.parameterDefinitions.values(),
@@ -35,6 +38,7 @@ export function serializeDocument(document: SequencerDocument): string {
 export function deserializeDocument(json: string): SequencerDocument {
   const serialized = JSON.parse(json) as SerializedDocument;
   const tracks = new Registry<Track>();
+  const deviceInstances = new Registry<DeviceInstance>();
   const midiClips = new Registry<MidiClip>();
   const patterns = new Registry<Pattern>();
   const parameterDefinitions = new Registry<ParameterDefinition>();
@@ -47,6 +51,10 @@ export function deserializeDocument(json: string): SequencerDocument {
   for (const track of serialized.tracks) {
     track.clips ??= [];
     tracks.add(track);
+  }
+
+  for (const deviceInstance of serialized.deviceInstances ?? []) {
+    deviceInstances.add(deviceInstance);
   }
 
   for (const clip of serialized.midiClips ?? []) {
@@ -67,6 +75,7 @@ export function deserializeDocument(json: string): SequencerDocument {
     bpm: serialized.bpm,
     timeline: serialized.timeline,
     tracks,
+    deviceInstances,
     midiClips,
     patterns,
     parameterDefinitions,
