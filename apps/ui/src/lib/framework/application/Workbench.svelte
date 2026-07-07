@@ -1,9 +1,17 @@
+<script lang="ts">
+  export let workspaceMode: 'split' | 'full' = 'split'
+</script>
+
 <main class="workbench">
   <header class="workbench-top">
     <slot name="top" />
   </header>
 
-  <section class="workbench-workspace" aria-label="Workspace">
+  <section
+    class="workbench-workspace"
+    class:full={workspaceMode === 'full'}
+    aria-label="Workspace"
+  >
     <aside class="workbench-left">
       <slot name="left" />
     </aside>
@@ -49,6 +57,14 @@
     min-height: var(--workspace-min-height);
     display: grid;
     grid-template-columns: minmax(var(--sidebar-min-width), 1fr) minmax(0, 3fr);
+  }
+
+  .workbench-workspace.full {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workbench-workspace.full .workbench-left {
+    display: none;
   }
 
   .workbench-left,

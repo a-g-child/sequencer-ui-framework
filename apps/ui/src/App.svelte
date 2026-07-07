@@ -23,6 +23,7 @@
   import { AppController, type TrackClipView } from './lib/app-controller'
   import {
     buildInspectorView,
+    type InspectorPropertyView,
     type InspectorView
   } from './lib/inspector/inspector-model'
   import {
@@ -40,8 +41,9 @@
   import Workbench from './lib/framework/application/Workbench.svelte';
   import InspectorPanel from './lib/panels/InspectorPanel.svelte';
   import RuntimePanel from './lib/panels/RuntimePanel.svelte';
-  import TimelinePanel from './lib/panels/TimelinePanel.svelte';
   import TransportPanel from './lib/panels/TransportPanel.svelte';
+
+  type MainViewMode = 'matrix' | 'editor'
 
   
 
@@ -120,6 +122,9 @@
     playbackStatus.liveClips.pendingLaunchByTrackId[selectedTrackId]
   )
   let activeEditor: EditorKind = 'piano-roll';
+  let viewMode: MainViewMode = 'matrix'
+  let clipPressTimer: ReturnType<typeof setTimeout> | undefined
+  let clipPressOpenedEditor = false
   $: activePatternPlayheadBeat = localPlayheadBeat(
     transportPlaying,
     transportBeat,
@@ -130,6 +135,8 @@
     inspector,
     runtimeParameterValues
   )
+  $: selectedTrack = tracks.find((track) => track.id === selectedTrackId)
+  $: selectedTrackParameterViews = buildTrackParameterViews(selectedTrack)
   function rebuildInspector() {
     selected = store.selection.current()
     selectedTrackId = selected?.type === 'track' ? selected.id : ''
@@ -361,7 +368,11 @@
         parameter.definitionId
       )
 
-      return { parameter, definition }
+      return {
+        parameter,
+        definition,
+        value: parameter.value
+      }
     })
   }
 
@@ -462,6 +473,11 @@
     diagnosticsOpen = !diagnosticsOpen
   }
 
+  function showMatrixView() {
+    viewMode = 'matrix'
+    endClipPress()
+  }
+
   function toggleActivePatternClipLoop(loop: boolean) {
     if (!controller.setPatternClipLoop(activePattern?.id, loop)) return
 
@@ -517,13 +533,52 @@
 
   function selectTrack(track: Track) {
     controller.selectTrack(track)
-    activeClipId = undefined
+    if (viewMode === 'matrix') {
+      activeClipId = undefined
+    }
     syncView()
   }
 
   function selectClip(clip: TrackClipView) {
     activeClipId = clip.id
     syncView()
+  }
+
+  function openClipEditor(clip: TrackClipView) {
+    const track = tracks.find((item) => item.id === clip.trackId)
+
+    if (track) {
+      controller.selectTrack(track)
+    }
+
+    activeClipId = clip.id
+    viewMode = 'editor'
+    syncView()
+  }
+
+  function startClipPress(clip: TrackClipView) {
+    endClipPress()
+    clipPressOpenedEditor = false
+    clipPressTimer = setTimeout(() => {
+      clipPressOpenedEditor = true
+      openClipEditor(clip)
+    }, 500)
+  }
+
+  function endClipPress() {
+    if (!clipPressTimer) return
+
+    clearTimeout(clipPressTimer)
+    clipPressTimer = undefined
+  }
+
+  function launchMatrixClip(clip: TrackClipView) {
+    if (clipPressOpenedEditor) {
+      clipPressOpenedEditor = false
+      return
+    }
+
+    togglePlaybackActiveClip(clip)
   }
 
   function togglePlaybackActiveClip(clip: TrackClipView) {
@@ -546,13 +601,25 @@
   }
 
   function addClipToSelectedTrack() {
-    const clipId = controller.createClipForTrack(selectedTrackId)
+    const clipId = addClipToTrack(selectedTrackId)
 
     if (clipId) {
       activeClipId = clipId
     }
 
     syncView()
+  }
+
+  function addClipToTrack(trackId: string | undefined): string | undefined {
+    const track = tracks.find((item) => item.id === trackId)
+
+    if (track) {
+      controller.selectTrack(track)
+    }
+
+    const clipId = controller.createClipForTrack(trackId)
+    syncView()
+    return clipId
   }
 
   function removeClip(clip: TrackClipView) {
@@ -723,6 +790,40 @@
     return `${clip?.name ?? 'Clip'} @ beat ${formatBeat(pendingLaunch.launchAtBeat)}`
   }
 
+  function trackQueuedLaunch(trackId: string): string {
+    const pendingLaunch = playbackStatus.liveClips.pendingLaunchByTrackId[trackId]
+
+    if (!pendingLaunch) return 'None'
+
+    const clip = matrixTrackClips(trackId).find(
+      (item) => item.id === pendingLaunch.clipId
+    )
+
+    return `${clip?.name ?? 'Clip'} @ beat ${formatBeat(pendingLaunch.launchAtBeat)}`
+  }
+
+  function matrixTrackClips(trackId: string): TrackClipView[] {
+    return controller.trackClips(
+      trackId,
+      activeClipId,
+      playbackStatus.liveClips.activeClipByTrackId[trackId]?.clipId,
+      playbackStatus.liveClips.pendingLaunchByTrackId[trackId]
+    )
+  }
+
+  function displayedTrackParameterValue(
+    property: InspectorPropertyView
+  ): ParameterValue {
+    return runtimeParameterValues[property.parameter.id] ?? property.value
+  }
+
+  function toggleBooleanParameter(property: InspectorPropertyView) {
+    setParameterValue(
+      property.parameter.id,
+      !Boolean(displayedTrackParameterValue(property))
+    )
+  }
+
   function undo() {
     controller.undo()
     syncView()
@@ -734,7 +835,7 @@
   }
 </script>
 
-<Workbench>
+<Workbench workspaceMode={viewMode === 'matrix' ? 'full' : 'split'}>
   <svelte:fragment slot="top">
     <div>
       <p class="eyebrow">Sequencer</p>
@@ -752,107 +853,10 @@
       onToggleDiagnostics={toggleDiagnosticsOverlay}
     />
 
-    <div class="audio-output-panel" aria-label="Audio output">
-      <div class="audio-toggle">
-        <span>Audio</span>
-        <button
-          type="button"
-          class="audio-enable-button"
-          class:active={webAudioEnabled}
-          aria-pressed={webAudioEnabled}
-          on:click={toggleWebAudioOutput}
-          disabled={!selectedTrackId}
-        >
-          {webAudioEnabled ? 'On' : 'Off'}
-        </button>
-      </div>
-
-      <div class="audio-scope">
-        <span>Osc</span>
-        <strong>{selectedTrackId ? 'Track' : 'Global'}</strong>
-      </div>
-
-      <label>
-        <span>Wave</span>
-        <select
-          value={webAudioWaveform}
-          on:change={setWebAudioWaveform}
-          disabled={!selectedTrackId}
-        >
-          <option value="sine">Sine</option>
-          <option value="square">Square</option>
-          <option value="sawtooth">Saw</option>
-          <option value="triangle">Triangle</option>
-        </select>
-      </label>
-
-      <label>
-        <span>Vol</span>
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          value={webAudioVolume}
-          on:input={setWebAudioVolume}
-          disabled={!selectedTrackId}
-        />
-      </label>
-
-      <label>
-        <span>A</span>
-        <input
-          type="range"
-          min="0"
-          max="2000"
-          step="5"
-          value={selectedTrackWebAudioSettings.adsr.attackMs}
-          on:input={setWebAudioAttack}
-          disabled={!selectedTrackId}
-        />
-      </label>
-
-      <label>
-        <span>D</span>
-        <input
-          type="range"
-          min="0"
-          max="2000"
-          step="5"
-          value={selectedTrackWebAudioSettings.adsr.decayMs}
-          on:input={setWebAudioDecay}
-          disabled={!selectedTrackId}
-        />
-      </label>
-
-      <label>
-        <span>S</span>
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          value={selectedTrackWebAudioSettings.adsr.sustain}
-          on:input={setWebAudioSustain}
-          disabled={!selectedTrackId}
-        />
-      </label>
-
-      <label>
-        <span>R</span>
-        <input
-          type="range"
-          min="0"
-          max="3000"
-          step="5"
-          value={selectedTrackWebAudioSettings.adsr.releaseMs}
-          on:input={setWebAudioRelease}
-          disabled={!selectedTrackId}
-        />
-      </label>
-    </div>
-
     <div class="toolbar" aria-label="Document operations">
+      {#if viewMode === 'editor'}
+        <button type="button" on:click={showMatrixView}>Matrix</button>
+      {/if}
       <button type="button" on:click={addTrack}>Add Track</button>
       <button type="button" on:click={undo} disabled={!canUndo}>Undo</button>
       <button type="button" on:click={redo} disabled={!canRedo}>Redo</button>
@@ -860,138 +864,7 @@
   </svelte:fragment>
 
   <svelte:fragment slot="left">
-    <div class="pane-heading">
-      <h2>Tracks</h2>
-      <span>{tracks.length}</span>
-    </div>
-
-    <div class="track-list">
-      {#each tracks as track (track.id)}
-        <button
-          type="button"
-          class:selected={track.id === selectedTrackId}
-          on:click={() => selectTrack(track)}
-        >
-          <span>{track.name}</span>
-          <small>{track.parameters.length} properties</small>
-        </button>
-      {/each}
-    </div>
-
-    {#if selectedTrackId}
-      <section class="clip-panel" aria-label="Selected track clips">
-        <div class="pane-heading">
-          <h2>Clips</h2>
-          <button
-            type="button"
-            class="icon-button"
-            aria-label="Add clip"
-            title="Add clip"
-            on:click={addClipToSelectedTrack}
-          >
-            +
-          </button>
-        </div>
-
-        <div class="clip-launch-controls" aria-label="Clip launch quantize">
-          {#each launchQuantizeOptions as option (option.id)}
-            <button
-              type="button"
-              class:active={playbackStatus.liveClips.launchQuantize === option.id}
-              on:click={() => setLaunchQuantize(option.id)}
-            >
-              {option.label}
-            </button>
-          {/each}
-        </div>
-
-        <div class="clip-launch-status" aria-label="Clip launch status">
-          <span>
-            Launch quantize: {launchQuantizeLabel(playbackStatus.liveClips.launchQuantize)}
-          </span>
-          <span>Queued: {selectedTrackQueuedLaunch()}</span>
-        </div>
-
-        <div class="clip-list">
-          {#each selectedTrackClips as clip (clip.id)}
-            <div class:active={clip.active} class="clip-row">
-              <button
-                type="button"
-                class:armed={clip.playbackActive}
-                class:queued={clip.pendingLaunch}
-                class="clip-active-badge"
-                aria-pressed={clip.playbackActive || clip.pendingLaunch}
-                aria-label={`Launch ${clip.name}`}
-                title={clip.pendingLaunch
-                  ? `Queued for beat ${formatBeat(clip.launchAtBeat)}`
-                  : clip.playbackActive
-                    ? 'Playback clip'
-                    : 'Launch clip'}
-                on:click={() => togglePlaybackActiveClip(clip)}
-              >
-                {#if clip.pendingLaunch}
-                  {formatBeat(clip.launchAtBeat)}
-                {:else if clip.playbackActive}
-                  Play
-                {:else}
-                  Cue
-                {/if}
-              </button>
-
-              <button
-                type="button"
-                class="clip-select"
-                aria-pressed={clip.active}
-                on:click={() => selectClip(clip)}
-              >
-                <span>{clip.name}</span>
-                <small>Slot {clip.slotIndex + 1}</small>
-              </button>
-
-              <button
-                type="button"
-                class="clip-remove"
-                aria-label={`Remove ${clip.name}`}
-                title="Remove clip"
-                on:click={() => removeClip(clip)}
-              >
-                &times;
-              </button>
-            </div>
-          {/each}
-        </div>
-      </section>
-    {/if}
-  </svelte:fragment>
-  
-  <svelte:fragment slot="center">
-    <!-- <TimelinePanel {timeline} /> -->
-    <div class="editor-stack">
-      <PatternEditor
-        bars={1}
-        beatsPerBar={4}
-        height={360}
-        width="100%"
-        {controller}
-        {pianoRoll}
-        {activeEditor}
-        {activeClipId}
-        playheadBeat={activePatternPlayheadBeat}
-        loopClip={activePatternClipLoop}
-        loopRegion={activePatternClipLoopRegion}
-        clipLength={activePatternClipLoopRegion.clipLength}
-        onLoopClipChange={toggleActivePatternClipLoop}
-        onLoopRegionChange={setActivePatternClipLoopRegion}
-        onClipBoundsChange={setActivePatternClipBounds}
-        onRenderModelRebuild={setRenderModelRebuildTime}
-        {automationTargets}
-        onEditorChange={(editor) => {
-          activeEditor = editor;
-          syncView();
-        }}
-        {syncView}
-      />
-
+    {#if viewMode === 'editor'}
       <InspectorPanel
         inspector={displayedInspector}
         selectedType={selected?.type ?? 'track'}
@@ -1008,12 +881,285 @@
         onCommitNoteDuration={commitNoteDuration}
         onDeleteSelectedNote={deleteSelectedNote}
       />
-    </div>
+    {/if}
+  </svelte:fragment>
+  
+  <svelte:fragment slot="center">
+    {#if viewMode === 'matrix'}
+      <section class="matrix-view" aria-label="Clip matrix">
+        <div class="matrix-toolbar">
+          <div>
+            <h2>Matrix</h2>
+            <span>
+              Launch quantize: {launchQuantizeLabel(playbackStatus.liveClips.launchQuantize)}
+            </span>
+          </div>
+
+          <div class="clip-launch-controls" aria-label="Clip launch quantize">
+            {#each launchQuantizeOptions as option (option.id)}
+              <button
+                type="button"
+                class:active={playbackStatus.liveClips.launchQuantize === option.id}
+                on:click={() => setLaunchQuantize(option.id)}
+              >
+                {option.label}
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        <div class="matrix-grid">
+          {#each tracks as track (track.id)}
+            <section
+              class="matrix-track"
+              class:selected={track.id === selectedTrackId}
+              aria-label={`${track.name} clips`}
+            >
+              <button
+                type="button"
+                class="matrix-track-header"
+                class:selected={track.id === selectedTrackId}
+                on:click={() => selectTrack(track)}
+              >
+                <span>{track.name}</span>
+                <small>{trackQueuedLaunch(track.id)}</small>
+              </button>
+
+              <div class="matrix-clip-stack">
+                {#each matrixTrackClips(track.id) as clip (clip.id)}
+                  <button
+                    type="button"
+                    class="matrix-clip"
+                    class:active={clip.active}
+                    class:playing={clip.playbackActive}
+                    class:queued={clip.pendingLaunch}
+                    aria-pressed={clip.playbackActive || clip.pendingLaunch}
+                    title="Click to launch, long press to edit"
+                    on:pointerdown={() => startClipPress(clip)}
+                    on:pointerup={endClipPress}
+                    on:pointerleave={endClipPress}
+                    on:pointercancel={endClipPress}
+                    on:click={() => launchMatrixClip(clip)}
+                  >
+                    <span>{clip.name}</span>
+                    <small>
+                      {#if clip.pendingLaunch}
+                        queued {formatBeat(clip.launchAtBeat)}
+                      {:else if clip.playbackActive}
+                        playing
+                      {:else}
+                        slot {clip.slotIndex + 1}
+                      {/if}
+                    </small>
+                  </button>
+                {/each}
+
+                <button
+                  type="button"
+                  class="matrix-add-clip"
+                  aria-label={`Add clip to ${track.name}`}
+                  on:click={() => addClipToTrack(track.id)}
+                >
+                  +
+                </button>
+              </div>
+            </section>
+          {/each}
+        </div>
+      </section>
+    {:else}
+      <div class="editor-stack">
+        <PatternEditor
+          bars={1}
+          beatsPerBar={4}
+          height={420}
+          width="100%"
+          {controller}
+          {pianoRoll}
+          {activeEditor}
+          {activeClipId}
+          playheadBeat={activePatternPlayheadBeat}
+          loopClip={activePatternClipLoop}
+          loopRegion={activePatternClipLoopRegion}
+          clipLength={activePatternClipLoopRegion.clipLength}
+          onLoopClipChange={toggleActivePatternClipLoop}
+          onLoopRegionChange={setActivePatternClipLoopRegion}
+          onClipBoundsChange={setActivePatternClipBounds}
+          onRenderModelRebuild={setRenderModelRebuildTime}
+          {automationTargets}
+          onEditorChange={(editor) => {
+            activeEditor = editor;
+            syncView();
+          }}
+          {syncView}
+        />
+      </div>
+    {/if}
   </svelte:fragment>
 
   
 
   <svelte:fragment slot="bottom">
+    <section class="track-modules" aria-label="Selected track options">
+      <div class="track-module track-module-summary">
+        <span>Selected Track</span>
+        <strong>{selectedTrack?.name ?? 'None'}</strong>
+      </div>
+
+      <section class="track-module" aria-label="Track parameters">
+        <div class="module-heading">
+          <h2>Track</h2>
+          <span>Volume / Pan / Mute</span>
+        </div>
+
+        <div class="parameter-module-grid">
+          {#each selectedTrackParameterViews as property (property.parameter.id)}
+            <label class="module-control">
+              <span>{property.definition.name}</span>
+              {#if property.definition.kind === 'number'}
+                <input
+                  type="range"
+                  min={property.definition.min ?? 0}
+                  max={property.definition.max ?? 1}
+                  step={property.definition.step ?? 0.01}
+                  value={Number(displayedTrackParameterValue(property))}
+                  on:input={(event) =>
+                    setNumberPreview(property.parameter.id, readNumberValue(event))}
+                  on:change={(event) =>
+                    commitNumberValue(property.parameter.id, readNumberValue(event))}
+                  disabled={!selectedTrackId}
+                />
+                <strong>{Number(displayedTrackParameterValue(property)).toFixed(2)}</strong>
+              {:else if property.definition.kind === 'boolean'}
+                <button
+                  type="button"
+                  class="module-toggle"
+                  class:active={Boolean(displayedTrackParameterValue(property))}
+                  aria-pressed={Boolean(displayedTrackParameterValue(property))}
+                  on:click={() => toggleBooleanParameter(property)}
+                  disabled={!selectedTrackId}
+                >
+                  {Boolean(displayedTrackParameterValue(property)) ? 'On' : 'Off'}
+                </button>
+              {:else}
+                <input
+                  value={String(displayedTrackParameterValue(property))}
+                  on:change={(event) =>
+                    setParameterValue(
+                      property.parameter.id,
+                      (event.currentTarget as HTMLInputElement).value
+                    )}
+                  disabled={!selectedTrackId}
+                />
+              {/if}
+            </label>
+          {/each}
+        </div>
+      </section>
+
+      <section class="track-module" aria-label="Sound oscillator">
+        <div class="module-heading">
+          <h2>Sound</h2>
+          <span>Web Audio oscillator</span>
+        </div>
+
+        <div class="audio-output-panel" aria-label="Audio output">
+          <div class="audio-toggle">
+            <span>Audio</span>
+            <button
+              type="button"
+              class="audio-enable-button"
+              class:active={webAudioEnabled}
+              aria-pressed={webAudioEnabled}
+              on:click={toggleWebAudioOutput}
+              disabled={!selectedTrackId}
+            >
+              {webAudioEnabled ? 'On' : 'Off'}
+            </button>
+          </div>
+
+          <label>
+            <span>Wave</span>
+            <select
+              value={webAudioWaveform}
+              on:change={setWebAudioWaveform}
+              disabled={!selectedTrackId}
+            >
+              <option value="sine">Sine</option>
+              <option value="square">Square</option>
+              <option value="sawtooth">Saw</option>
+              <option value="triangle">Triangle</option>
+            </select>
+          </label>
+
+          <label>
+            <span>Gain</span>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={webAudioVolume}
+              on:input={setWebAudioVolume}
+              disabled={!selectedTrackId}
+            />
+          </label>
+
+          <label>
+            <span>A</span>
+            <input
+              type="range"
+              min="0"
+              max="2000"
+              step="5"
+              value={selectedTrackWebAudioSettings.adsr.attackMs}
+              on:input={setWebAudioAttack}
+              disabled={!selectedTrackId}
+            />
+          </label>
+
+          <label>
+            <span>D</span>
+            <input
+              type="range"
+              min="0"
+              max="2000"
+              step="5"
+              value={selectedTrackWebAudioSettings.adsr.decayMs}
+              on:input={setWebAudioDecay}
+              disabled={!selectedTrackId}
+            />
+          </label>
+
+          <label>
+            <span>S</span>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={selectedTrackWebAudioSettings.adsr.sustain}
+              on:input={setWebAudioSustain}
+              disabled={!selectedTrackId}
+            />
+          </label>
+
+          <label>
+            <span>R</span>
+            <input
+              type="range"
+              min="0"
+              max="3000"
+              step="5"
+              value={selectedTrackWebAudioSettings.adsr.releaseMs}
+              on:input={setWebAudioRelease}
+              disabled={!selectedTrackId}
+            />
+          </label>
+        </div>
+      </section>
+    </section>
+
     <footer class="statusbar">
       <span>{store.document.patterns.values().length} patterns</span>
       <span>{store.document.parameterDefinitions.values().length} property types</span>
@@ -1061,15 +1207,212 @@
     min-width: 0;
   }
 
-  .audio-output-panel {
-    min-height: var(--transport-min-height);
+  .matrix-view {
+    min-width: 0;
+    display: grid;
+    gap: var(--spacing-lg);
+  }
+
+  .matrix-toolbar {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: var(--spacing-lg);
+  }
+
+  .matrix-toolbar > div:first-child {
+    display: grid;
+    gap: var(--spacing-2xs);
+  }
+
+  .matrix-toolbar span,
+  .module-heading span,
+  .track-module-summary span {
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .matrix-grid {
+    min-width: 0;
+    overflow-x: auto;
+    display: grid;
+    grid-auto-columns: minmax(168px, 1fr);
+    grid-auto-flow: column;
+    gap: var(--spacing-sm);
+    padding-bottom: var(--spacing-xs);
+  }
+
+  .matrix-track {
+    min-width: 0;
+    min-height: 360px;
+    border-left: var(--border-width) solid var(--border);
+    display: grid;
+    grid-template-rows: auto 1fr;
+    background: var(--surface-2);
+  }
+
+  .matrix-track.selected {
+    border-left-color: var(--accent);
+  }
+
+  .matrix-track-header {
+    min-width: 0;
+    min-height: 58px;
     padding: var(--spacing-sm);
-    border: var(--border-width) solid var(--border);
+    border: 0;
+    border-bottom: var(--border-width) solid var(--border);
+    border-radius: 0;
+    display: grid;
+    gap: var(--spacing-2xs);
+    text-align: left;
+  }
+
+  .matrix-track-header.selected {
+    background: var(--accent-soft);
+  }
+
+  .matrix-track-header span,
+  .matrix-clip span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 800;
+  }
+
+  .matrix-track-header small,
+  .matrix-clip small {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+  }
+
+  .matrix-clip-stack {
+    align-content: start;
+    display: grid;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-sm);
+  }
+
+  .matrix-clip,
+  .matrix-add-clip {
+    width: 100%;
+    min-height: 68px;
+    padding: var(--spacing-sm);
     border-radius: var(--radius-md);
+  }
+
+  .matrix-clip {
+    display: grid;
+    align-content: space-between;
+    text-align: left;
+    touch-action: manipulation;
+    user-select: none;
+  }
+
+  .matrix-clip.active {
+    border-color: var(--accent);
+  }
+
+  .matrix-clip.playing {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--surface-0);
+  }
+
+  .matrix-clip.playing small {
+    color: var(--surface-0);
+  }
+
+  .matrix-clip.queued {
+    border-color: var(--accent-strong);
+    background: var(--accent-soft);
+  }
+
+  .matrix-add-clip {
+    min-height: 42px;
+    display: grid;
+    place-items: center;
+    color: var(--muted);
+    font-size: var(--font-size-xl);
+    font-weight: 800;
+  }
+
+  .track-modules {
+    display: grid;
+    grid-template-columns: minmax(140px, 0.7fr) minmax(260px, 1fr) minmax(360px, 1.4fr);
+    gap: var(--spacing-lg);
+  }
+
+  .track-module {
+    min-width: 0;
+    padding: var(--spacing-compact);
+    border: var(--border-width) solid var(--border);
     background: var(--surface);
     display: grid;
+    gap: var(--spacing-sm);
+  }
+
+  .track-module-summary {
+    align-content: center;
+  }
+
+  .track-module-summary strong {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-size: var(--font-size-xl);
+  }
+
+  .module-heading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--spacing-sm);
+  }
+
+  .parameter-module-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--spacing-sm);
+  }
+
+  .module-control {
+    min-width: 0;
+    display: grid;
+    gap: var(--spacing-2xs);
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .module-control strong {
+    color: var(--text);
+    font-size: var(--font-size-xs);
+  }
+
+  .module-toggle {
+    min-height: var(--control-height-sm);
+    border-radius: var(--radius-control);
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+  }
+
+  .module-toggle.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .audio-output-panel {
+    display: grid;
     grid-template-columns:
-      auto
       auto
       minmax(82px, 0.9fr)
       minmax(92px, 1fr)
@@ -1086,25 +1429,6 @@
     font-size: var(--font-size-xs);
     font-weight: 800;
     text-transform: uppercase;
-  }
-
-  .audio-scope {
-    min-width: 0;
-    display: grid;
-    gap: var(--spacing-2xs);
-  }
-
-  .audio-scope span {
-    color: var(--muted);
-    font-size: var(--font-size-xs);
-    font-weight: 800;
-    line-height: 1;
-    text-transform: uppercase;
-  }
-
-  .audio-scope strong {
-    font-size: var(--font-size-sm);
-    line-height: 1;
   }
 
   .audio-output-panel select,
@@ -1134,23 +1458,15 @@
     color: var(--accent);
   }
 
-  .clip-panel {
-    display: grid;
-    gap: var(--spacing-sm);
-    margin-top: var(--spacing-lg);
-  }
+  @media (max-width: 980px) {
+    .track-modules {
+      grid-template-columns: 1fr;
+    }
 
-  .icon-button {
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    display: inline-grid;
-    place-items: center;
-  }
-
-  .clip-list {
-    display: grid;
-    gap: var(--spacing-xs);
+    .parameter-module-grid,
+    .audio-output-panel {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
   }
 
   .clip-launch-controls {
@@ -1172,74 +1488,5 @@
   .clip-launch-controls button.active {
     border-color: var(--accent);
     background: var(--accent-soft);
-  }
-
-  .clip-launch-status {
-    display: grid;
-    gap: var(--spacing-2xs);
-    color: var(--muted);
-    font-size: var(--font-size-xs);
-    line-height: 1.35;
-  }
-
-  .clip-launch-status span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .clip-row {
-    display: grid;
-    grid-template-columns: 48px minmax(0, 1fr) 32px;
-    align-items: stretch;
-    gap: var(--spacing-xs);
-  }
-
-  .clip-active-badge {
-    width: 48px;
-    padding: 0 var(--spacing-xs);
-    font-size: var(--font-size-xs);
-    font-weight: 700;
-    color: var(--muted);
-  }
-
-  .clip-active-badge.armed {
-    border-color: var(--accent);
-    background: var(--accent);
-    color: var(--surface-0);
-  }
-
-  .clip-active-badge.queued {
-    border-color: var(--accent-strong);
-    background: var(--accent-soft);
-    color: var(--accent);
-  }
-
-  .clip-select {
-    min-width: 0;
-    display: grid;
-    gap: 2px;
-    justify-items: start;
-    text-align: left;
-  }
-
-  .clip-select span,
-  .clip-select small {
-    min-width: 0;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .clip-row.active .clip-select {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-  }
-
-  .clip-remove {
-    width: 32px;
-    padding: 0;
   }
 </style>
