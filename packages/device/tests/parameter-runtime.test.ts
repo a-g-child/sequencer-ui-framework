@@ -82,6 +82,9 @@ describe('runtime parameters', () => {
     assert.equal(getRuntimeParameter(parameters, 'decay')?.value, 0.15);
     assert.equal(getRuntimeParameter(parameters, 'sustain')?.value, 0.7);
     assert.equal(getRuntimeParameter(parameters, 'release')?.value, 0.2);
+    assert.equal(getRuntimeParameter(parameters, 'cutoff')?.value, 20000);
+    assert.equal(getRuntimeParameter(parameters, 'resonance')?.value, 0);
+    assert.equal(getRuntimeParameter(parameters, 'keyTracking')?.value, 0);
   });
 
   it('smooths numeric parameters toward target values', () => {

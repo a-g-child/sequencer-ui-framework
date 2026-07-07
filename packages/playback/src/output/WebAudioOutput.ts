@@ -12,17 +12,25 @@ export interface WebAudioAdsrSettings {
   readonly releaseMs: number
 }
 
+export interface WebAudioFilterSettings {
+  readonly cutoff: number
+  readonly resonance: number
+  readonly keyTracking: number
+}
+
 export interface WebAudioOscillatorSettings {
   readonly enabled: boolean
   readonly waveform: WebAudioWaveform
   readonly volume: number
   readonly adsr: WebAudioAdsrSettings
+  readonly filter: WebAudioFilterSettings
 }
 
 export type WebAudioOscillatorSettingsUpdate = Partial<
-  Omit<WebAudioOscillatorSettings, 'adsr'>
+  Omit<WebAudioOscillatorSettings, 'adsr' | 'filter'>
 > & {
   readonly adsr?: Partial<WebAudioAdsrSettings>
+  readonly filter?: Partial<WebAudioFilterSettings>
 }
 
 export interface WebAudioOutputOptions {
@@ -30,14 +38,17 @@ export interface WebAudioOutputOptions {
   readonly waveform?: WebAudioWaveform
   readonly volume?: number
   readonly adsr?: Partial<WebAudioAdsrSettings>
+  readonly filter?: Partial<WebAudioFilterSettings>
 }
 
 type ActiveVoice = {
   readonly oscillator: OscillatorNode
+  readonly filter: BiquadFilterNode
   readonly gain: GainNode
   readonly envelope?: VoiceActionEnvelope
   readonly trackId?: string
   readonly startTime: number
+  readonly pitch: number
   readonly velocity: number
   readonly amplitude: number
   stopScheduled?: boolean
@@ -64,7 +75,8 @@ export class WebAudioOutput implements PlaybackOutput {
       enabled: options.enabled ?? false,
       waveform: options.waveform ?? 'sine',
       volume: clampUnit(options.volume ?? 0.2),
-      adsr: normalizeAdsr(options.adsr)
+      adsr: normalizeAdsr(options.adsr),
+      filter: normalizeFilter(options.filter)
     }
   }
 
@@ -148,7 +160,11 @@ export class WebAudioOutput implements PlaybackOutput {
       adsr:
         settings.adsr === undefined
           ? currentSettings.adsr
-          : normalizeAdsr({ ...currentSettings.adsr, ...settings.adsr })
+          : normalizeAdsr({ ...currentSettings.adsr, ...settings.adsr }),
+      filter:
+        settings.filter === undefined
+          ? currentSettings.filter
+          : normalizeFilter({ ...currentSettings.filter, ...settings.filter })
     }
 
     this.trackSettings.set(trackId, nextSettings)
@@ -239,6 +255,7 @@ export class WebAudioOutput implements PlaybackOutput {
     }
 
     const oscillator = this.context.createOscillator()
+    const filter = this.context.createBiquadFilter()
     const gain = this.context.createGain()
     const startTime = this.outputTime(action.timeMs)
     const envelope = normalizeVoiceEnvelope(action.envelope)
@@ -250,20 +267,24 @@ export class WebAudioOutput implements PlaybackOutput {
 
     oscillator.type = settings.waveform
     oscillator.frequency.value = midiNoteToFrequency(action.pitch)
+    configureFilter(filter, settings.filter, action.pitch, startTime, true)
     gain.gain.cancelScheduledValues(startTime)
     gain.gain.setValueAtTime(0, startTime)
     gain.gain.linearRampToValueAtTime(peakGain, attackTime)
     gain.gain.linearRampToValueAtTime(sustainGain, decayTime)
 
-    oscillator.connect(gain)
+    oscillator.connect(filter)
+    filter.connect(gain)
     gain.connect(this.masterGain)
     oscillator.start(startTime)
     this.voices.set(key, {
       oscillator,
+      filter,
       gain,
       envelope,
       trackId: action.trackId,
       startTime,
+      pitch: action.pitch,
       velocity: clampUnit(action.velocity),
       amplitude
     })
@@ -350,6 +371,12 @@ export class WebAudioOutput implements PlaybackOutput {
       }
 
       voice.oscillator.type = settings.waveform
+      configureFilter(
+        voice.filter,
+        settings.filter,
+        voice.pitch,
+        this.context.currentTime
+      )
       voice.gain.gain.setTargetAtTime(
         voice.amplitude * settings.volume * settings.adsr.sustain,
         this.context.currentTime,
@@ -380,6 +407,16 @@ function normalizeAdsr(
   }
 }
 
+function normalizeFilter(
+  filter: Partial<WebAudioFilterSettings> | undefined = {}
+): WebAudioFilterSettings {
+  return {
+    cutoff: clampFrequency(filter.cutoff ?? 20000),
+    resonance: clampResonance(filter.resonance ?? 0),
+    keyTracking: clampUnit(filter.keyTracking ?? 0)
+  }
+}
+
 function normalizeVoiceEnvelope(
   envelope: VoiceActionEnvelope | undefined
 ): NonNullable<VoiceActionEnvelope> {
@@ -401,6 +438,47 @@ function clampSeconds(value: number, max: number): number {
   if (!Number.isFinite(value)) return 0
 
   return Math.min(max, Math.max(0, value))
+}
+
+function clampFrequency(value: number): number {
+  if (!Number.isFinite(value)) return 20000
+
+  return Math.min(20000, Math.max(20, value))
+}
+
+function clampResonance(value: number): number {
+  if (!Number.isFinite(value)) return 0
+
+  return Math.min(20, Math.max(0, value))
+}
+
+function configureFilter(
+  filter: BiquadFilterNode,
+  settings: WebAudioFilterSettings,
+  pitch: number,
+  time: number,
+  immediate = false
+): void {
+  filter.type = 'lowpass'
+  const cutoff = effectiveCutoff(settings, pitch)
+
+  if (immediate) {
+    filter.frequency.setValueAtTime(cutoff, time)
+    filter.Q.setValueAtTime(settings.resonance, time)
+    return
+  }
+
+  filter.frequency.setTargetAtTime(cutoff, time, 0.01)
+  filter.Q.setTargetAtTime(settings.resonance, time, 0.01)
+}
+
+function effectiveCutoff(
+  settings: WebAudioFilterSettings,
+  pitch: number
+): number {
+  const trackingRatio = 2 ** (((pitch - 60) / 12) * settings.keyTracking)
+
+  return clampFrequency(settings.cutoff * trackingRatio)
 }
 
 function performanceNow(): number {

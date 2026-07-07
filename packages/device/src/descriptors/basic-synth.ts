@@ -86,6 +86,37 @@ export const BASIC_SYNTH_DESCRIPTOR: DeviceDescriptor = {
       max: 10,
       step: 0.01,
       unit: 's'
+    },
+    {
+      id: 'cutoff',
+      key: 'cutoff',
+      name: 'Cutoff',
+      kind: 'number',
+      defaultValue: 20000,
+      min: 20,
+      max: 20000,
+      step: 1,
+      unit: 'Hz'
+    },
+    {
+      id: 'resonance',
+      key: 'resonance',
+      name: 'Resonance',
+      kind: 'number',
+      defaultValue: 0,
+      min: 0,
+      max: 20,
+      step: 0.1
+    },
+    {
+      id: 'key-tracking',
+      key: 'keyTracking',
+      name: 'Key Track',
+      kind: 'number',
+      defaultValue: 0,
+      min: 0,
+      max: 1,
+      step: 0.01
     }
   ]
 };

@@ -398,7 +398,18 @@ export class PlaybackService implements Service, DocumentObserver {
         ),
         volume: normalizeRuntimeVolume(
           getRuntimeParameterValue(device.parameters, 'volume')
-        )
+        ),
+        filter: {
+          cutoff: normalizeRuntimeFilterCutoff(
+            getRuntimeParameterValue(device.parameters, 'cutoff')
+          ),
+          resonance: normalizeRuntimeFilterResonance(
+            getRuntimeParameterValue(device.parameters, 'resonance')
+          ),
+          keyTracking: normalizeRuntimeKeyTracking(
+            getRuntimeParameterValue(device.parameters, 'keyTracking')
+          )
+        }
       })
     }
   }
@@ -466,6 +477,24 @@ function normalizeWebAudioWaveform(value: unknown): WebAudioWaveform {
 
 function normalizeRuntimeVolume(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 0.25
+
+  return Math.min(1, Math.max(0, value))
+}
+
+function normalizeRuntimeFilterCutoff(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 20000
+
+  return Math.min(20000, Math.max(20, value))
+}
+
+function normalizeRuntimeFilterResonance(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0
+
+  return Math.min(20, Math.max(0, value))
+}
+
+function normalizeRuntimeKeyTracking(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0
 
   return Math.min(1, Math.max(0, value))
 }
