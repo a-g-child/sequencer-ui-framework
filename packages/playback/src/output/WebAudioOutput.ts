@@ -39,6 +39,7 @@ type ActiveVoice = {
   readonly trackId?: string
   readonly startTime: number
   readonly velocity: number
+  readonly amplitude: number
   stopScheduled?: boolean
 }
 
@@ -123,7 +124,7 @@ export class WebAudioOutput implements PlaybackOutput {
       if (voice.trackId && this.trackSettings.has(voice.trackId)) continue
 
       voice.gain.gain.setTargetAtTime(
-        voice.velocity *
+        voice.amplitude *
           this.defaultSettings.volume *
           this.defaultSettings.adsr.sustain,
         this.context.currentTime,
@@ -243,7 +244,8 @@ export class WebAudioOutput implements PlaybackOutput {
     const envelope = normalizeVoiceEnvelope(action.envelope)
     const attackTime = startTime + envelope.attack
     const decayTime = attackTime + envelope.decay
-    const peakGain = clampUnit(action.velocity) * settings.volume
+    const amplitude = clampUnit(action.amplitude ?? action.velocity)
+    const peakGain = amplitude * settings.volume
     const sustainGain = peakGain * envelope.sustain
 
     oscillator.type = settings.waveform
@@ -262,7 +264,8 @@ export class WebAudioOutput implements PlaybackOutput {
       envelope,
       trackId: action.trackId,
       startTime,
-      velocity: clampUnit(action.velocity)
+      velocity: clampUnit(action.velocity),
+      amplitude
     })
   }
 
@@ -348,7 +351,7 @@ export class WebAudioOutput implements PlaybackOutput {
 
       voice.oscillator.type = settings.waveform
       voice.gain.gain.setTargetAtTime(
-        voice.velocity * settings.volume * settings.adsr.sustain,
+        voice.amplitude * settings.volume * settings.adsr.sustain,
         this.context.currentTime,
         0.01
       )

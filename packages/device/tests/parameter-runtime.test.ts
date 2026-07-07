@@ -69,7 +69,7 @@ describe('runtime parameters', () => {
     assert.equal(getRuntimeParameter(parameters, 'waveform')?.value, 'square');
   });
 
-  it('creates Basic Synth ADSR runtime parameters from descriptor defaults', () => {
+  it('creates Basic Synth expressive runtime parameters from descriptor defaults', () => {
     const parameters = createRuntimeParameters(BASIC_SYNTH_DESCRIPTOR, {
       id: 'basic-synth-1',
       descriptorKey: BASIC_SYNTH_DESCRIPTOR.key,
@@ -77,6 +77,7 @@ describe('runtime parameters', () => {
       parameterValues: {}
     });
 
+    assert.equal(getRuntimeParameter(parameters, 'velocityToAmp')?.value, 1);
     assert.equal(getRuntimeParameter(parameters, 'attack')?.value, 0.01);
     assert.equal(getRuntimeParameter(parameters, 'decay')?.value, 0.15);
     assert.equal(getRuntimeParameter(parameters, 'sustain')?.value, 0.7);

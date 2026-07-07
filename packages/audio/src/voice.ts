@@ -28,6 +28,7 @@ export type VoiceAction =
       noteId?: string;
       pitch: number;
       velocity: number;
+      amplitude?: number;
       timeMs: number;
       envelope?: AdsrEnvelope;
     }

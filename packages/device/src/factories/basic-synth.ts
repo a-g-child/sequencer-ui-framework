@@ -62,6 +62,7 @@ export class BasicSynthRuntimeDevice<
           noteId: result.voice.noteId,
           pitch: result.voice.pitch,
           velocity: result.voice.velocity,
+          amplitude: this.voiceAmplitude(result.voice.velocity),
           timeMs: event.timeMs,
           envelope: this.getEnvelope()
         });
@@ -115,6 +116,15 @@ export class BasicSynthRuntimeDevice<
     };
   }
 
+  private voiceAmplitude(velocity: number): number {
+    const velocityToAmp = clampUnit(
+      numberParameter(this.parameters, 'velocityToAmp', 1)
+    );
+    const normalizedVelocity = clampUnit(velocity);
+
+    return 1 + (normalizedVelocity - 1) * velocityToAmp;
+  }
+
   consumeVoiceActions(): VoiceAction[] {
     const actions = this.pendingVoiceActions;
     this.pendingVoiceActions = [];
@@ -131,6 +141,12 @@ function numberParameter(
   const numberValue = Number(value ?? fallback);
 
   return Number.isFinite(numberValue) ? numberValue : fallback;
+}
+
+function clampUnit(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+
+  return Math.min(1, Math.max(0, value));
 }
 
 export class BasicSynthFactory<TEvent = unknown>

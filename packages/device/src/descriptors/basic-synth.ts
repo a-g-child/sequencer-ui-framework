@@ -35,6 +35,16 @@ export const BASIC_SYNTH_DESCRIPTOR: DeviceDescriptor = {
       step: 0.01
     },
     {
+      id: 'velocity-to-amp',
+      key: 'velocityToAmp',
+      name: 'Velocity',
+      kind: 'number',
+      defaultValue: 1,
+      min: 0,
+      max: 1,
+      step: 0.01
+    },
+    {
       id: 'attack',
       key: 'attack',
       name: 'Attack',
