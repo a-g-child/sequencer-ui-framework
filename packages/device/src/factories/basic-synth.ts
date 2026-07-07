@@ -1,4 +1,8 @@
-import { VoiceManager, type VoiceAction } from '@sequencer/audio';
+import {
+  VoiceManager,
+  type AdsrEnvelope,
+  type VoiceAction
+} from '@sequencer/audio';
 import { BASIC_SYNTH_DESCRIPTOR } from '../descriptors/basic-synth';
 import type { DeviceFactory } from '../factory';
 import type { DeviceInstance } from '../instance';
@@ -58,7 +62,8 @@ export class BasicSynthRuntimeDevice<
           noteId: result.voice.noteId,
           pitch: result.voice.pitch,
           velocity: result.voice.velocity,
-          timeMs: event.timeMs
+          timeMs: event.timeMs,
+          envelope: this.getEnvelope()
         });
 
         continue;
@@ -101,11 +106,31 @@ export class BasicSynthRuntimeDevice<
     };
   }
 
+  private getEnvelope(): AdsrEnvelope {
+    return {
+      attack: numberParameter(this.parameters, 'attack', 0.01),
+      decay: numberParameter(this.parameters, 'decay', 0.15),
+      sustain: numberParameter(this.parameters, 'sustain', 0.7),
+      release: numberParameter(this.parameters, 'release', 0.2)
+    };
+  }
+
   consumeVoiceActions(): VoiceAction[] {
     const actions = this.pendingVoiceActions;
     this.pendingVoiceActions = [];
     return actions;
   }
+}
+
+function numberParameter(
+  parameters: BasicSynthRuntimeDevice['parameters'],
+  key: string,
+  fallback: number
+): number {
+  const value = getRuntimeParameterValue(parameters, key);
+  const numberValue = Number(value ?? fallback);
+
+  return Number.isFinite(numberValue) ? numberValue : fallback;
 }
 
 export class BasicSynthFactory<TEvent = unknown>

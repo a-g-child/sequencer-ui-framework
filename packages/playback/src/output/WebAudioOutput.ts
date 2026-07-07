@@ -35,11 +35,17 @@ export interface WebAudioOutputOptions {
 type ActiveVoice = {
   readonly oscillator: OscillatorNode
   readonly gain: GainNode
+  readonly envelope?: VoiceActionEnvelope
   readonly trackId?: string
   readonly startTime: number
   readonly velocity: number
   stopScheduled?: boolean
 }
+
+type VoiceActionEnvelope = Extract<
+  VoiceAction,
+  { type: 'voice:start' }
+>['envelope']
 
 export class WebAudioOutput implements PlaybackOutput {
   readonly id = 'web-audio'
@@ -234,13 +240,15 @@ export class WebAudioOutput implements PlaybackOutput {
     const oscillator = this.context.createOscillator()
     const gain = this.context.createGain()
     const startTime = this.outputTime(action.timeMs)
-    const attackTime = startTime + settings.adsr.attackMs / 1000
-    const decayTime = attackTime + settings.adsr.decayMs / 1000
+    const envelope = normalizeVoiceEnvelope(action.envelope)
+    const attackTime = startTime + envelope.attack
+    const decayTime = attackTime + envelope.decay
     const peakGain = clampUnit(action.velocity) * settings.volume
-    const sustainGain = peakGain * settings.adsr.sustain
+    const sustainGain = peakGain * envelope.sustain
 
     oscillator.type = settings.waveform
     oscillator.frequency.value = midiNoteToFrequency(action.pitch)
+    gain.gain.cancelScheduledValues(startTime)
     gain.gain.setValueAtTime(0, startTime)
     gain.gain.linearRampToValueAtTime(peakGain, attackTime)
     gain.gain.linearRampToValueAtTime(sustainGain, decayTime)
@@ -251,6 +259,7 @@ export class WebAudioOutput implements PlaybackOutput {
     this.voices.set(key, {
       oscillator,
       gain,
+      envelope,
       trackId: action.trackId,
       startTime,
       velocity: clampUnit(action.velocity)
@@ -264,8 +273,8 @@ export class WebAudioOutput implements PlaybackOutput {
     if (voice.stopScheduled) return
 
     const stopStart = this.outputTime(timeMs)
-    const settings = this.settingsForTrack(voice.trackId)
-    const stopTime = stopStart + settings.adsr.releaseMs / 1000
+    const release = voice.envelope?.release ?? 0.2
+    const stopTime = stopStart + release
 
     voice.gain.gain.cancelScheduledValues(stopStart)
     voice.gain.gain.setValueAtTime(voice.gain.gain.value, stopStart)
@@ -276,7 +285,7 @@ export class WebAudioOutput implements PlaybackOutput {
       }
     }
     voice.stopScheduled = true
-    voice.oscillator.stop(stopTime)
+    voice.oscillator.stop(stopTime + 0.02)
   }
 
   private forceStopVoice(
@@ -368,10 +377,27 @@ function normalizeAdsr(
   }
 }
 
+function normalizeVoiceEnvelope(
+  envelope: VoiceActionEnvelope | undefined
+): NonNullable<VoiceActionEnvelope> {
+  return {
+    attack: clampSeconds(envelope?.attack ?? 0.01, 5),
+    decay: clampSeconds(envelope?.decay ?? 0.15, 5),
+    sustain: clampUnit(envelope?.sustain ?? 0.7),
+    release: clampSeconds(envelope?.release ?? 0.2, 10)
+  }
+}
+
 function clampMs(value: number): number {
   if (!Number.isFinite(value)) return 0
 
   return Math.min(5000, Math.max(0, value))
+}
+
+function clampSeconds(value: number, max: number): number {
+  if (!Number.isFinite(value)) return 0
+
+  return Math.min(max, Math.max(0, value))
 }
 
 function performanceNow(): number {

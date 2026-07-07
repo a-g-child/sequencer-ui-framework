@@ -71,7 +71,10 @@ it uses the correct runtime architecture.
 
 ## Envelope
 
-- [ ] ADSR
+- [x] ADSR descriptor parameters
+- [x] ADSR runtime parameters
+- [x] voice actions carry ADSR envelope
+- [x] WebAudio applies voice-action envelope
 - [ ] velocity sensitivity
 - [ ] retrigger modes
 
@@ -123,6 +126,7 @@ automation all converge here.
 - [x] playback events routed to runtime devices
 - [x] voice actions bridge runtime devices to WebAudio
 - [x] Basic Synth reads waveform and volume from runtime parameters
+- [x] Basic Synth reads ADSR from runtime parameters
 - [x] Basic Synth exposes runtime parameter advance hook
 - [x] runtime voice diagnostics in playback status
 - [ ] runtime state reporting

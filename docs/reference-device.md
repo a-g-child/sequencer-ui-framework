@@ -155,6 +155,19 @@ Voice diagnostics should flow back through playback status so the Runtime panel
 can show active, released, stolen, and total voice counts while testing
 polyphony and stealing.
 
+Envelope behavior should follow the same descriptor-driven path:
+
+```text
+DeviceDescriptor ADSR parameters
+  -> RuntimeParameter
+  -> BasicSynthRuntimeDevice
+  -> VoiceAction.envelope
+  -> WebAudioOutput
+```
+
+This keeps WebAudio responsible for applying an envelope, not for deciding what
+the envelope is.
+
 ## Runtime Parameters
 
 Descriptors explain what parameters exist. Runtime parameters explain how a

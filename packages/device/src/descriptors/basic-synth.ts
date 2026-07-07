@@ -33,6 +33,49 @@ export const BASIC_SYNTH_DESCRIPTOR: DeviceDescriptor = {
       min: 0,
       max: 1,
       step: 0.01
+    },
+    {
+      id: 'attack',
+      key: 'attack',
+      name: 'Attack',
+      kind: 'number',
+      defaultValue: 0.01,
+      min: 0,
+      max: 5,
+      step: 0.01,
+      unit: 's'
+    },
+    {
+      id: 'decay',
+      key: 'decay',
+      name: 'Decay',
+      kind: 'number',
+      defaultValue: 0.15,
+      min: 0,
+      max: 5,
+      step: 0.01,
+      unit: 's'
+    },
+    {
+      id: 'sustain',
+      key: 'sustain',
+      name: 'Sustain',
+      kind: 'number',
+      defaultValue: 0.7,
+      min: 0,
+      max: 1,
+      step: 0.01
+    },
+    {
+      id: 'release',
+      key: 'release',
+      name: 'Release',
+      kind: 'number',
+      defaultValue: 0.2,
+      min: 0,
+      max: 10,
+      step: 0.01,
+      unit: 's'
     }
   ]
 };

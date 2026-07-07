@@ -2,6 +2,13 @@ export type VoiceState = 'active' | 'released' | 'stolen';
 
 export type VoiceId = string;
 
+export type AdsrEnvelope = {
+  attack: number;
+  decay: number;
+  sustain: number;
+  release: number;
+};
+
 export type Voice = {
   id: VoiceId;
   noteId?: string;
@@ -22,6 +29,7 @@ export type VoiceAction =
       pitch: number;
       velocity: number;
       timeMs: number;
+      envelope?: AdsrEnvelope;
     }
   | { type: 'voice:release'; voiceId: string; timeMs: number }
   | { type: 'voice:steal'; voiceId: string; timeMs: number };
