@@ -141,20 +141,154 @@ Device model comes first because it becomes the bridge between clips, tracks,
 MIDI, synths, samplers, and future hardware modules. Without it, Web Audio,
 MIDI, and samplers will each grow their own routing assumptions.
 
-The target path is:
+The current path is:
 
 ```text
 Clip
   -> Track
-  -> Device
-  -> PlaybackEvent
+  -> DeviceInstance
+  -> PlaybackEvent.destination
+  -> RuntimeDevice
+  -> OutputManager
   -> Output
 ```
 
 This replaces the weaker shape where clips effectively target playback outputs
 directly.
 
-### Device Package
+### Phase 8.1: Runtime Devices
+
+Status: complete.
+
+Completed:
+
+- `packages/device`
+- `DeviceDescriptor`
+- `DeviceInstance`
+- `RuntimeDevice`
+- `DeviceFactory`
+- `DeviceRegistry`
+- `RuntimeDeviceRegistry`
+- `PlaybackDeviceManager`
+- `PlaybackEvent.destination`
+- playback events routed to runtime devices
+- diagnostic outputs still receive the full event stream
+
+The runtime shape is now:
+
+```text
+Document
+  -> PlaybackModelBuilder
+  -> PlaybackModel
+  -> Scheduler
+  -> PlaybackEvent[]
+  -> PlaybackDeviceManager
+  -> RuntimeDevice
+  -> OutputManager
+  -> WebAudio / Web MIDI / diagnostics
+```
+
+The scheduler has disappeared from execution. It schedules and emits
+deterministic events.
+
+### Phase 8.2: Golden Device
+
+The next implementation milestone should make `BasicSynthRuntimeDevice` the
+golden reference implementation of a runtime device.
+
+This phase should be treated as reference implementation work rather than more
+architecture-first development. The architecture is no longer the primary
+product risk. The next risk is proving that the architecture produces a
+fantastic instrument.
+
+The Basic Synth should not try to become a flagship synth. It should become
+complete enough to validate every layer:
+
+- oscillator
+- ADSR
+- portamento
+- LFO
+- filter
+- amplitude
+- voice manager
+- parameter binding
+- automation
+
+The guiding question changes from "did we introduce the right abstraction?" to
+"did we make the golden device better?"
+
+The runtime device should orchestrate rather than own every primitive:
+
+```text
+BasicSynthRuntimeDevice
+  -> VoiceManager
+  -> Voice
+  -> Oscillator
+  -> Envelope
+  -> Filter
+  -> AudioOutput
+```
+
+The likely package boundary is `packages/audio`, with reusable DSP primitives
+rather than synth-specific concepts:
+
+- `voice.ts`
+- `voice-manager.ts`
+- `oscillator.ts`
+- `envelope.ts`
+- `filter.ts`
+
+Reference behavior tests should start here:
+
+- `NoteOn` allocates a voice
+- `NoteOff` releases a voice
+- automation updates device parameters
+- playback events reach the correct runtime device
+
+See `docs/reference-device.md` for the golden device narrative and checklist.
+
+### Phase 8.3: Device Graph
+
+Once the reference instrument is stable, grow from a single device assignment
+toward device chains, sends, returns, and mixer behavior.
+
+```text
+Track
+  -> Synth
+  -> Filter
+  -> Delay
+  -> Mixer
+  -> Output
+```
+
+### Phase 8.4: External Devices
+
+External devices should use the same runtime device contract:
+
+- Web MIDI
+- hardware modules
+- network devices
+- future controller or robotics targets
+
+### Phase 8.5: Native Runtime
+
+Native implementations should replace execution systems behind the same
+contracts:
+
+- Rust or C++ runtime devices
+- native scheduler
+- native audio engine
+- native hardware bridges
+
+Plugin hosting should remain postponed until the internal runtime device
+contract is stronger. VST, CLAP, and LV2 can later become adapters rather than
+the foundation.
+
+### Historical Phase 8 Notes
+
+The original Phase 8 planning was:
+
+#### Device Package
 
 Add `packages/device` with the vocabulary before expanding execution behavior:
 
@@ -169,7 +303,7 @@ The first implementation should be simple, but the contract should be strong
 enough for software devices, external MIDI devices, attached hardware modules,
 network instruments, robotics targets, and lighting targets to become peers.
 
-### Document Device Assignment
+#### Document Device Assignment
 
 The document should be able to persist track-level device assignment:
 
@@ -187,23 +321,22 @@ store derived runtime routing state.
 Missing devices should stay in the document as missing assignments, not deleted
 creative work.
 
-### Playback Destination
+#### Playback Destination
 
-`PlaybackEvent` should carry destination information derived from the document
-and device assignment:
+`PlaybackEvent` carries destination information derived from the document and
+device assignment:
 
 ```text
 PlaybackEvent.destination
   trackId
-  deviceId
-  outputId?
-  channel?
+  deviceInstanceId
+  port?
 ```
 
 The scheduler still emits deterministic events. It should not know how the
 destination is executed.
 
-### OutputManager Routing
+#### OutputManager Routing
 
 `OutputManager` should route events by destination instead of only broadcasting
 every event to every active output.
@@ -216,7 +349,7 @@ Initial routing behavior:
 - keep fan-out available for diagnostics outputs such as event logging and
   statistics
 
-### Internal Device Stubs
+#### Internal Device Stubs
 
 Add basic devices behind the device contract:
 
@@ -228,7 +361,7 @@ These should be proof devices, not final instruments. A basic synth behind the
 right device contract is more valuable than a polished synth with private
 routing assumptions.
 
-### Simple UI
+#### Simple UI
 
 Add enough UI to prove the model:
 
@@ -240,7 +373,7 @@ The UI should present creative devices, not technical transport details. A
 hardware module should appear as a new device option rather than a low-level
 USB or MIDI event.
 
-### Web MIDI
+#### Web MIDI
 
 After device routing exists, add `WebMidiOutput` as another `PlaybackOutput`.
 

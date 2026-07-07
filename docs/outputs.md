@@ -1,7 +1,8 @@
 # Output Architecture
 
-Playback emits deterministic `PlaybackEvent` objects. Output systems execute
-them.
+Playback emits deterministic `PlaybackEvent` objects. Runtime devices interpret
+them for creative execution. Output systems remain final I/O endpoints,
+diagnostics observers, and fallback execution paths.
 
 ```text
 Document
@@ -9,6 +10,8 @@ Document
   -> PlaybackModel
   -> Scheduler
   -> PlaybackEvents
+  -> PlaybackDeviceManager
+       -> RuntimeDevice
   -> OutputManager
        -> PlaybackOutput
        -> PlaybackOutput
@@ -26,7 +29,9 @@ Playback models interpret.
 
 Schedulers schedule.
 
-Outputs execute.
+Runtime devices execute creative device behavior.
+
+Outputs perform final I/O and diagnostics.
 
 Render models visualise.
 
@@ -57,16 +62,19 @@ Outputs understand events.
 ## OutputManager
 
 `OutputManager` owns registered outputs, tracks active outputs, receives
-scheduled playback events, and routes each batch to active outputs.
+scheduled playback events, and routes each batch to active outputs for
+diagnostics, fallback execution, or final I/O.
 
 ```text
 Scheduler
   -> PlaybackEvents
+  -> PlaybackDeviceManager
+  -> RuntimeDevice
   -> OutputManager
   -> routed PlaybackOutput
 ```
 
-The scheduler does not know which outputs exist.
+The scheduler does not know which runtime devices or outputs exist.
 
 Early diagnostic outputs can still observe every event. Creative outputs should
 receive events through routing so internal synths, samplers, MIDI ports,
@@ -123,7 +131,7 @@ interface OutputCapabilities {
 This lets future routing and validation understand that different destinations
 support different event families.
 
-## Routing
+## Runtime Routing
 
 Routing should remain outside the scheduler.
 
@@ -136,23 +144,21 @@ Track 3 -> External MIDI Device -> Web MIDI
 Track 4 -> Robot Arm -> Network Output
 ```
 
-The scheduler still emits playback events. Routing decides which output receives
-which events.
+The scheduler still emits playback events. Runtime routing decides which device
+receives which events.
 
 The destination carried by a playback event should be enough for
-`OutputManager` to route it:
+`PlaybackDeviceManager` to route it:
 
 ```text
 PlaybackEvent.destination
   trackId
-  deviceId
-  outputId?
-  channel?
+  deviceInstanceId
+  port?
 ```
 
-If no explicit output route exists, the manager can fall back to a default
-creative output such as `WebAudioOutput` or a diagnostic output such as
-`ConsoleOutput`.
+`OutputManager` may still receive the full event stream for console logging,
+statistics, event recording, and conservative fallback behavior.
 
 ## Future Audio
 

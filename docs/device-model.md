@@ -39,6 +39,24 @@ A device may be implemented in TypeScript, native audio code, external MIDI
 hardware, an attached module, another computer, or a future runtime. The rest of
 the creative model should not need to know.
 
+The device model has three distinct layers:
+
+```text
+DeviceDescriptor
+  -> DeviceInstance
+  -> RuntimeDevice
+```
+
+The descriptor is static. It describes what kind of device exists: its name,
+capabilities, ports, and parameters.
+
+The instance is persistent. It lives in the document and stores the creator's
+assignment and parameter values.
+
+The runtime device is transient. It belongs to the current execution runtime and
+can own loaded state, connections, voices, audio buffers, latency, and device
+I/O. It is never saved as creative truth.
+
 ## Descriptor
 
 A device descriptor explains what a device is.
@@ -173,6 +191,18 @@ Potential sources:
 The registry should allow a newly attached module to appear as a device without
 changing the editor, scheduler, or document model.
 
+At runtime, device factories create runtime devices from document instances:
+
+```text
+DeviceInstance
+  -> DeviceFactory
+  -> RuntimeDevice
+```
+
+If no factory exists for a descriptor, the runtime can create a missing device
+placeholder. Playback can continue, the document remains intact, and the UI can
+surface the missing device as a restorable creative assignment.
+
 ## Recurring Shape
 
 Sequencer is developing a repeated architectural rhythm.
@@ -192,11 +222,13 @@ Builder
 Runtime Model
   RenderModel
   PlaybackModel
+  RuntimeDevice
   DeviceGraph
 
 Consumer
   Renderer
   Scheduler
+  PlaybackDeviceManager
   OutputManager
   Audio Engine
 ```

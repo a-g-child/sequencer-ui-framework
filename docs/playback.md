@@ -11,18 +11,30 @@ Document
   -> PlaybackModel
   -> Scheduler
   -> PlaybackEvent
+  -> PlaybackDeviceManager
+  -> RuntimeDevice
   -> OutputManager
   -> PlaybackOutput
 ```
 
-As device routing matures, the intended creative path is:
+The current creative path is:
 
 ```text
 Clip
   -> Track
-  -> Device
-  -> PlaybackEvent
+  -> DeviceInstance
+  -> PlaybackEvent.destination
+  -> RuntimeDevice
   -> Output
+```
+
+Diagnostic and fallback outputs can still observe the full event stream:
+
+```text
+Scheduler
+  -> PlaybackEvent
+  -> OutputManager
+  -> ConsoleOutput / StatisticsOutput / fallback output
 ```
 
 ## Boundary
@@ -86,8 +98,7 @@ It is responsible for:
 - emitting `PlaybackEvent` objects once
 
 The scheduler does not own voices. Voice allocation, synthesis, MIDI routing,
-audio graph behavior, and device I/O belong behind outputs or later runtime
-layers.
+audio graph behavior, and device I/O belong behind runtime devices and outputs.
 
 The TypeScript scheduler is the reference implementation. It is not throwaway
 prototype code.
@@ -116,6 +127,10 @@ tests, recording, robotics, or diagnostics.
 
 Outputs should not read the document. They should not read render models. They
 receive scheduled event objects and decide how to handle them.
+
+Creative execution should prefer runtime devices. Outputs can remain final I/O
+endpoints, diagnostics observers, or fallback execution paths while devices
+decide how events become audio, MIDI, hardware messages, or network activity.
 
 ## Clips And Tracks
 
