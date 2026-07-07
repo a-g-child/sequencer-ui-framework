@@ -117,6 +117,9 @@ implementation. It should not require replacing the document model,
 `PlaybackModelBuilder`, `PlaybackModel`, UI panels, transport service, or output
 architecture.
 
+The native scheduler integration path is described in
+`docs/native-runtime.md`.
+
 ## PlaybackOutput
 
 Outputs consume `PlaybackEvent` objects.

@@ -86,6 +86,9 @@ native audio, a software synth become a hardware module, an internal clock
 become an external clock, and a console output become a MIDI output without
 rewriting the creative model.
 
+See `docs/native-runtime.md` for the practical integration boundary for Rust,
+C++, WebAssembly, or future embedded runtimes.
+
 ## Physical And Software Are Peers
 
 A creative document should not depend on where a device executes.

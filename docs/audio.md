@@ -81,6 +81,9 @@ That means a future native engine can implement the same output boundary while
 the document, playback model builder, scheduler interface, transport, clock,
 and UI architecture remain intact.
 
+The broader native audio and scheduler integration strategy is described in
+`docs/native-runtime.md`.
+
 ## Next Slice
 
 The next musical step is routing automation events into output parameters such

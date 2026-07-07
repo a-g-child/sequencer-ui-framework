@@ -203,6 +203,10 @@ If no factory exists for a descriptor, the runtime can create a missing device
 placeholder. Playback can continue, the document remains intact, and the UI can
 surface the missing device as a restorable creative assignment.
 
+Native Rust, C++, WebAssembly, hardware-module, or browser implementations
+should enter through factories and runtime devices rather than changing the
+document shape. See `docs/native-runtime.md`.
+
 ## Recurring Shape
 
 Sequencer is developing a repeated architectural rhythm.
