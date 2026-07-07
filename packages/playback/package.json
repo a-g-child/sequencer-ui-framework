@@ -11,6 +11,7 @@
     "@sequencer/audio": "file:../audio",
     "@sequencer/core": "file:../core",
     "@sequencer/device": "file:../device",
-    "@sequencer/music": "file:../music"
+    "@sequencer/music": "file:../music",
+    "@sequencer/native-scheduler-wasm": "file:../native-scheduler-wasm"
   }
 }

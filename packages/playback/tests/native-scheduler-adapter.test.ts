@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { VoiceAction } from '@sequencer/audio'
+import { createNativeSchedulerWasmStub } from '@sequencer/native-scheduler-wasm'
 import { NativeAudioAdapter } from '../src/native/NativeAudioAdapter.ts'
 import { NativeSchedulerAdapter } from '../src/native/NativeSchedulerAdapter.ts'
+import { WasmSchedulerAdapter } from '../src/native/WasmSchedulerAdapter.ts'
 import type { DeviceCommand } from '../src/native/schemas.ts'
 import {
   createPanicDeviceCommand,
@@ -25,6 +27,33 @@ describe('NativeSchedulerAdapter', () => {
       collectEvents(reference, model),
       collectEvents(adapter, model)
     )
+  })
+})
+
+describe('WasmSchedulerAdapter', () => {
+  it('sends model and clock state through the WASM JSON boundary', () => {
+    const model = createSchedulerFixture()
+    const scheduler = new WasmSchedulerAdapter(createNativeSchedulerWasmStub())
+
+    scheduler.setModel(model)
+    scheduler.start(0)
+
+    assert.deepEqual(
+      scheduler.tick({
+        running: true,
+        beat: 1,
+        timeMs: 500,
+        bpm: 120,
+        sourceId: 'test'
+      }),
+      []
+    )
+    assert.deepEqual(scheduler.scheduleLookahead(0.5), [])
+    assert.equal(scheduler.status.running, true)
+    assert.equal(scheduler.status.currentBeat, 1)
+
+    scheduler.stop()
+    assert.equal(scheduler.status.running, false)
   })
 })
 
