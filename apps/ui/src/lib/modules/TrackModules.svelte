@@ -4,18 +4,25 @@
     Track
   } from '@sequencer/core'
   import type {
-    WebAudioOscillatorSettings,
-    WebAudioWaveform
-  } from '@sequencer/playback'
+    DeviceInstance,
+    DeviceParameterDescriptor,
+    DeviceParameterValue
+  } from '@sequencer/device'
   import type { InspectorPropertyView } from '../inspector/inspector-model'
+  import ParameterEditor from '../framework/parameter/ParameterEditor.svelte'
+
+  type DeviceParameterView = {
+    device: DeviceInstance
+    descriptor: DeviceParameterDescriptor
+    value: DeviceParameterValue
+  }
 
   export let selectedTrack: Track | undefined = undefined
   export let selectedTrackId = ''
   export let selectedTrackParameterViews: InspectorPropertyView[] = []
-  export let selectedTrackWebAudioSettings: WebAudioOscillatorSettings
+  export let selectedTrackDeviceName = 'No device'
+  export let selectedTrackDeviceParameterViews: DeviceParameterView[] = []
   export let webAudioEnabled = false
-  export let webAudioWaveform: WebAudioWaveform = 'sine'
-  export let webAudioVolume = 0
   export let displayedTrackParameterValue: (
     property: InspectorPropertyView
   ) => ParameterValue
@@ -27,12 +34,11 @@
   ) => void
   export let onToggleBooleanParameter: (property: InspectorPropertyView) => void
   export let onToggleWebAudioOutput: () => void
-  export let onSetWebAudioWaveform: (event: Event) => void
-  export let onSetWebAudioVolume: (event: Event) => void
-  export let onSetWebAudioAttack: (event: Event) => void
-  export let onSetWebAudioDecay: (event: Event) => void
-  export let onSetWebAudioSustain: (event: Event) => void
-  export let onSetWebAudioRelease: (event: Event) => void
+  export let onSetDeviceParameterValue: (
+    deviceInstanceId: string,
+    parameterKey: string,
+    value: DeviceParameterValue
+  ) => void
 
   function readNumberValue(event: Event): number {
     return Number((event.currentTarget as HTMLInputElement).value)
@@ -96,10 +102,10 @@
     </div>
   </section>
 
-  <section class="track-module" aria-label="Sound oscillator">
+  <section class="track-module" aria-label="Track device">
     <div class="module-heading">
-      <h2>Sound</h2>
-      <span>Web Audio oscillator</span>
+      <h2>Device</h2>
+      <span>{selectedTrackDeviceName}</span>
     </div>
 
     <div class="audio-output-panel" aria-label="Audio output">
@@ -116,86 +122,27 @@
           {webAudioEnabled ? 'On' : 'Off'}
         </button>
       </div>
-
-      <label>
-        <span>Wave</span>
-        <select
-          value={webAudioWaveform}
-          on:change={onSetWebAudioWaveform}
-          disabled={!selectedTrackId}
-        >
-          <option value="sine">Sine</option>
-          <option value="square">Square</option>
-          <option value="sawtooth">Saw</option>
-          <option value="triangle">Triangle</option>
-        </select>
-      </label>
-
-      <label>
-        <span>Gain</span>
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          value={webAudioVolume}
-          on:input={onSetWebAudioVolume}
-          disabled={!selectedTrackId}
-        />
-      </label>
-
-      <label>
-        <span>A</span>
-        <input
-          type="range"
-          min="0"
-          max="2000"
-          step="5"
-          value={selectedTrackWebAudioSettings.adsr.attackMs}
-          on:input={onSetWebAudioAttack}
-          disabled={!selectedTrackId}
-        />
-      </label>
-
-      <label>
-        <span>D</span>
-        <input
-          type="range"
-          min="0"
-          max="2000"
-          step="5"
-          value={selectedTrackWebAudioSettings.adsr.decayMs}
-          on:input={onSetWebAudioDecay}
-          disabled={!selectedTrackId}
-        />
-      </label>
-
-      <label>
-        <span>S</span>
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          value={selectedTrackWebAudioSettings.adsr.sustain}
-          on:input={onSetWebAudioSustain}
-          disabled={!selectedTrackId}
-        />
-      </label>
-
-      <label>
-        <span>R</span>
-        <input
-          type="range"
-          min="0"
-          max="3000"
-          step="5"
-          value={selectedTrackWebAudioSettings.adsr.releaseMs}
-          on:input={onSetWebAudioRelease}
-          disabled={!selectedTrackId}
-        />
-      </label>
     </div>
+
+    {#if selectedTrackDeviceParameterViews.length > 0}
+      <div class="parameter-module-grid device-parameter-grid">
+        {#each selectedTrackDeviceParameterViews as parameter (`${parameter.device.id}:${parameter.descriptor.key}`)}
+          <ParameterEditor
+            descriptor={parameter.descriptor}
+            value={parameter.value}
+            disabled={!selectedTrackId}
+            onChange={(value) =>
+              onSetDeviceParameterValue(
+                parameter.device.id,
+                parameter.descriptor.key,
+                value
+              )}
+          />
+        {/each}
+      </div>
+    {:else}
+      <p class="empty-module">No device parameters</p>
+    {/if}
   </section>
 </section>
 
@@ -277,34 +224,21 @@
 
   .audio-output-panel {
     display: grid;
-    grid-template-columns:
-      auto
-      minmax(82px, 0.9fr)
-      minmax(92px, 1fr)
-      repeat(4, minmax(54px, 0.7fr));
+    grid-template-columns: auto;
     align-items: center;
     gap: var(--spacing-sm);
   }
 
-  .audio-output-panel label {
-    min-width: 0;
+  .audio-toggle {
     display: grid;
-    gap: var(--spacing-2xs);
+    grid-template-columns: auto auto;
+    align-items: center;
+    justify-content: start;
+    gap: var(--spacing-sm);
     color: var(--muted);
     font-size: var(--font-size-xs);
     font-weight: 800;
     text-transform: uppercase;
-  }
-
-  .audio-output-panel select,
-  .audio-output-panel input[type='range'] {
-    min-width: 0;
-    width: 100%;
-  }
-
-  .audio-toggle {
-    grid-template-columns: auto auto;
-    align-items: center;
   }
 
   .audio-enable-button {
@@ -323,6 +257,18 @@
     color: var(--accent);
   }
 
+  .device-parameter-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .empty-module {
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
   @media (max-width: 980px) {
     .track-modules {
       grid-template-columns: 1fr;
@@ -330,6 +276,10 @@
 
     .parameter-module-grid,
     .audio-output-panel {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .device-parameter-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }

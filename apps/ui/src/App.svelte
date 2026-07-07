@@ -16,10 +16,16 @@
     type ClipLaunchQuantize,
     type PlaybackEvent,
     type PlaybackRuntimeParameterValue,
-    type PlaybackServiceStatus,
-    type WebAudioOscillatorSettings,
-    type WebAudioWaveform
+    type PlaybackServiceStatus
   } from '@sequencer/playback'
+  import {
+    BASIC_SYNTH_DESCRIPTOR,
+    EXTERNAL_MIDI_DESCRIPTOR,
+    type DeviceDescriptor,
+    type DeviceInstance,
+    type DeviceParameterDescriptor,
+    type DeviceParameterValue
+  } from '@sequencer/device'
   import { AppController, type TrackClipView } from './lib/app-controller'
   import {
     buildInspectorView,
@@ -48,7 +54,19 @@
 
   type MainViewMode = 'matrix' | 'editor'
 
-  
+  type DeviceParameterView = {
+    device: DeviceInstance
+    descriptor: DeviceParameterDescriptor
+    value: DeviceParameterValue
+  }
+
+  const DEVICE_DESCRIPTORS: DeviceDescriptor[] = [
+    BASIC_SYNTH_DESCRIPTOR,
+    EXTERNAL_MIDI_DESCRIPTOR
+  ]
+  const DEVICE_DESCRIPTORS_BY_KEY = new Map(
+    DEVICE_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor])
+  )
 
   const app = new SequencerApplication()
   const clock = app.services.add(new ClockService())
@@ -108,11 +126,9 @@
   let preferencesStatus = 'not loaded'
   let clockStatus: ClockServiceStatus = clock.status
   let playbackStatus: PlaybackServiceStatus = playback.status
-  let selectedTrackWebAudioSettings: WebAudioOscillatorSettings =
+  let selectedTrackWebAudioSettings =
     playback.webAudioTrackSettings(selectedTrackId)
   let webAudioEnabled = selectedTrackWebAudioSettings.enabled
-  let webAudioWaveform: WebAudioWaveform = selectedTrackWebAudioSettings.waveform
-  let webAudioVolume = selectedTrackWebAudioSettings.volume
   let diagnosticsOpen = false
   let runtimeParameterValues: Record<string, ParameterValue> = {}
   let automatedRuntimeParameterIds = new Set<string>()
@@ -143,6 +159,9 @@
   )
   $: selectedTrack = tracks.find((track) => track.id === selectedTrackId)
   $: selectedTrackParameterViews = buildTrackParameterViews(selectedTrack)
+  $: selectedTrackDeviceName = buildSelectedTrackDeviceName(selectedTrack)
+  $: selectedTrackDeviceParameterViews =
+    buildSelectedTrackDeviceParameterViews(selectedTrack)
   function rebuildInspector() {
     selected = store.selection.current()
     selectedTrackId = selected?.type === 'track' ? selected.id : ''
@@ -298,8 +317,6 @@
   function refreshSelectedTrackWebAudioSettings() {
     selectedTrackWebAudioSettings = playback.webAudioTrackSettings(selectedTrackId)
     webAudioEnabled = selectedTrackWebAudioSettings.enabled
-    webAudioWaveform = selectedTrackWebAudioSettings.waveform
-    webAudioVolume = selectedTrackWebAudioSettings.volume
   }
 
   function applyRuntimeParameterValues(
@@ -411,6 +428,42 @@
     })
   }
 
+  function buildSelectedTrackDeviceName(track: Track | undefined): string {
+    const device = findTrackDeviceInstance(track)
+
+    if (!device) return 'No device'
+
+    const descriptor = DEVICE_DESCRIPTORS_BY_KEY.get(device.descriptorKey)
+
+    return descriptor?.name ?? device.name
+  }
+
+  function buildSelectedTrackDeviceParameterViews(
+    track: Track | undefined
+  ): DeviceParameterView[] {
+    const device = findTrackDeviceInstance(track)
+
+    if (!device) return []
+
+    const descriptor = DEVICE_DESCRIPTORS_BY_KEY.get(device.descriptorKey)
+
+    if (!descriptor) return []
+
+    return descriptor.parameters.map((parameter) => ({
+      device,
+      descriptor: parameter,
+      value: device.parameterValues[parameter.key] ?? parameter.defaultValue
+    }))
+  }
+
+  function findTrackDeviceInstance(
+    track: Track | undefined
+  ): DeviceInstance | undefined {
+    if (!track?.deviceId) return undefined
+
+    return store.document.deviceInstances.find(track.deviceId)
+  }
+
   function playTransport() {
     ensureSelectedClipActiveWhenStopped()
     controller.playTransport()
@@ -447,62 +500,13 @@
     await setSelectedTrackWebAudioEnabled(!webAudioEnabled)
   }
 
-  function setWebAudioWaveform(event: Event) {
-    const waveform = (event.currentTarget as HTMLSelectElement).value as WebAudioWaveform
-
-    webAudioWaveform = waveform
-
-    if (selectedTrackId) {
-      playback.setWebAudioTrackSettings(selectedTrackId, { waveform })
-    } else {
-      playback.setWebAudioWaveform(waveform)
-    }
-
-    refreshSelectedTrackWebAudioSettings()
-  }
-
-  function setWebAudioVolume(event: Event) {
-    const volume = readNumberValue(event)
-
-    webAudioVolume = volume
-
-    if (selectedTrackId) {
-      playback.setWebAudioTrackSettings(selectedTrackId, { volume })
-    } else {
-      playback.setWebAudioVolume(volume)
-    }
-
-    refreshSelectedTrackWebAudioSettings()
-  }
-
-  function setWebAudioAttack(event: Event) {
-    setWebAudioAdsrValue('attackMs', readNumberValue(event))
-  }
-
-  function setWebAudioDecay(event: Event) {
-    setWebAudioAdsrValue('decayMs', readNumberValue(event))
-  }
-
-  function setWebAudioSustain(event: Event) {
-    setWebAudioAdsrValue('sustain', readNumberValue(event))
-  }
-
-  function setWebAudioRelease(event: Event) {
-    setWebAudioAdsrValue('releaseMs', readNumberValue(event))
-  }
-
-  function setWebAudioAdsrValue(
-    key: keyof WebAudioOscillatorSettings['adsr'],
-    value: number
+  function setDeviceParameterValue(
+    deviceInstanceId: string,
+    parameterKey: string,
+    value: DeviceParameterValue
   ) {
-    if (!selectedTrackId) return
-
-    playback.setWebAudioTrackSettings(selectedTrackId, {
-      adsr: {
-        [key]: value
-      }
-    })
-    refreshSelectedTrackWebAudioSettings()
+    controller.setDeviceParameterValue(deviceInstanceId, parameterKey, value)
+    syncView()
   }
 
   function toggleDiagnosticsOverlay() {
@@ -1075,22 +1079,16 @@
       {selectedTrack}
       {selectedTrackId}
       {selectedTrackParameterViews}
-      {selectedTrackWebAudioSettings}
+      {selectedTrackDeviceName}
+      {selectedTrackDeviceParameterViews}
       {webAudioEnabled}
-      {webAudioWaveform}
-      {webAudioVolume}
       {displayedTrackParameterValue}
       onSetNumberPreview={setNumberPreview}
       onCommitNumberValue={commitNumberValue}
       onSetParameterValue={setParameterValue}
       onToggleBooleanParameter={toggleBooleanParameter}
       onToggleWebAudioOutput={toggleWebAudioOutput}
-      onSetWebAudioWaveform={setWebAudioWaveform}
-      onSetWebAudioVolume={setWebAudioVolume}
-      onSetWebAudioAttack={setWebAudioAttack}
-      onSetWebAudioDecay={setWebAudioDecay}
-      onSetWebAudioSustain={setWebAudioSustain}
-      onSetWebAudioRelease={setWebAudioRelease}
+      onSetDeviceParameterValue={setDeviceParameterValue}
     />
 
     <footer class="statusbar">

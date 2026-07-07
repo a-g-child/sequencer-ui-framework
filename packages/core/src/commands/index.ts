@@ -8,6 +8,7 @@ export * from "./resize-midi-clip";
 export * from "./resize-pattern-placement";
 export * from "./set-midi-clip-loop";
 export * from "./set-midi-clip-loop-region";
+export * from "./set-device-parameter-value";
 export * from "./set-pattern-placement-loop";
 export * from "./set-pattern-placement-loop-count";
 export * from "./set-pattern-placement-loop-region";

@@ -11,6 +11,7 @@ export type RuntimeParameter = {
   id: string;
   key: string;
   name: string;
+  descriptor: DeviceParameterDescriptor;
   value: RuntimeParameterValue;
   targetValue: RuntimeParameterValue;
   defaultValue: RuntimeParameterValue;
@@ -92,6 +93,7 @@ function createRuntimeParameter(
     id: descriptor.id,
     key: descriptor.key,
     name: descriptor.name,
+    descriptor,
     value,
     targetValue: value,
     defaultValue: descriptor.defaultValue,

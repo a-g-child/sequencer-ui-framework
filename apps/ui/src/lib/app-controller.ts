@@ -10,6 +10,7 @@ import {
   ResizePatternPlacementOperation,
   SetMidiClipLoopOperation,
   SetMidiClipLoopRegionOperation,
+  SetDeviceParameterValueOperation,
   SetParameterValueOperation,
   SetPatternPlacementLoopOperation,
   SetPatternPlacementLoopCountOperation,
@@ -20,6 +21,7 @@ import {
   type SequencerApplication,
   type Track
 } from '@sequencer/core'
+import type { DeviceParameterValue } from '@sequencer/device'
 import {
   CreateNoteOperation,
   CreateNotesOperation,
@@ -220,6 +222,16 @@ export class AppController {
   setParameterValue(parameterId: string, value: ParameterValue): void {
     this.app.documentStore.execute(
       new SetParameterValueOperation(parameterId, value)
+    )
+  }
+
+  setDeviceParameterValue(
+    deviceInstanceId: string,
+    parameterKey: string,
+    value: DeviceParameterValue
+  ): void {
+    this.app.documentStore.execute(
+      new SetDeviceParameterValueOperation(deviceInstanceId, parameterKey, value)
     )
   }
 
