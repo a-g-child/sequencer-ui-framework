@@ -7,10 +7,17 @@ export type PlaybackEvent =
   | TempoChangeEvent
   | TransportEvent
 
+export interface PlaybackDestination {
+  readonly trackId?: string
+  readonly deviceInstanceId?: string
+  readonly port?: string
+}
+
 export interface PlaybackEventBase {
   readonly id: string
   readonly trackId?: string
   readonly channel?: number
+  readonly destination?: PlaybackDestination
   readonly beat: BeatTime
   readonly timeMs: number
 }

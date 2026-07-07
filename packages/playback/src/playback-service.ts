@@ -1,6 +1,11 @@
 import type { DocumentObserver, Operation, Service, ServiceContext, ServiceEvent } from '@sequencer/core'
+import { BasicSynthFactory, ExternalMidiFactory } from '@sequencer/device'
 import { PlaybackModelBuilder } from './builder'
 import type { ClockState } from './clock'
+import {
+  PlaybackDeviceManager,
+  type PlaybackDeviceManagerStatus
+} from './device'
 import type { PlaybackEvent } from './events'
 import {
   LiveClipService,
@@ -37,6 +42,7 @@ export interface PlaybackServiceStatus extends SchedulerStatus {
   readonly noteCount: number
   readonly liveClips: LiveClipState
   readonly outputManager: OutputManagerStatus
+  readonly deviceManager: PlaybackDeviceManagerStatus
   readonly statistics: PlaybackOutputStatistics
   readonly webAudio: {
     readonly defaultSettings: WebAudioOscillatorSettings
@@ -55,6 +61,7 @@ export class PlaybackService implements Service, DocumentObserver {
   private readonly builder = new PlaybackModelBuilder()
   private readonly liveClips = new LiveClipService('bar')
   private readonly scheduler: Scheduler & { readonly status?: SchedulerStatus }
+  private readonly deviceManager = new PlaybackDeviceManager()
   private readonly outputManager = new OutputManager()
   private readonly statisticsOutput = new StatisticsOutput()
   private readonly webAudioOutput = new WebAudioOutput()
@@ -71,12 +78,14 @@ export class PlaybackService implements Service, DocumentObserver {
       this.handleServiceEvent(event)
     )
     await this.initialiseOutputs()
+    await this.initialiseDevices()
     this.rebuildModel()
     this.emitStatus()
   }
 
   async shutdown(): Promise<void> {
     this.scheduler.stop()
+    await this.deviceManager.disconnectAll()
     await this.outputManager.disconnectAll()
     this.context?.documentStore.removeObserver(this)
     this.unsubscribeServiceEvents?.()
@@ -102,20 +111,24 @@ export class PlaybackService implements Service, DocumentObserver {
       noteCount: this.model?.notes.length ?? 0,
       liveClips: this.liveClips.state,
       outputManager: this.outputManager.status,
+      deviceManager: this.deviceManager.status,
       statistics: this.statisticsOutput.statistics,
       webAudio: this.webAudioOutput.settings
     }
   }
 
   onCommandExecuted(_operation: Operation): void {
+    void this.rebuildRuntimeDevices()
     this.rebuildModel()
   }
 
   onCommandUndone(_operation: Operation): void {
+    void this.rebuildRuntimeDevices()
     this.rebuildModel()
   }
 
   onCommandRedone(_operation: Operation): void {
+    void this.rebuildRuntimeDevices()
     this.rebuildModel()
   }
 
@@ -295,6 +308,7 @@ export class PlaybackService implements Service, DocumentObserver {
         events,
         schedulerStatus: this.status
       })
+      this.deviceManager.processEvents(events)
       this.outputManager.handleEvents(events)
       this.emitPlaybackEvents(events)
       this.emitRuntimeParameterValues(state)
@@ -310,6 +324,23 @@ export class PlaybackService implements Service, DocumentObserver {
     await this.outputManager.register(this.webAudioOutput, false)
     await this.outputManager.register(new EventLoggerOutput(), false)
     await this.outputManager.register(this.statisticsOutput)
+  }
+
+  private async initialiseDevices(): Promise<void> {
+    this.deviceManager.register(new BasicSynthFactory<PlaybackEvent>())
+    this.deviceManager.register(new ExternalMidiFactory<PlaybackEvent>())
+    await this.rebuildRuntimeDevices()
+  }
+
+  private async rebuildRuntimeDevices(): Promise<void> {
+    if (!this.context) return
+
+    await this.deviceManager.disconnectAll()
+    this.deviceManager.buildFromInstances(
+      this.context.documentStore.document.deviceInstances.values()
+    )
+    await this.deviceManager.connectAll()
+    this.emitStatus()
   }
 
   private emitStatus(): void {

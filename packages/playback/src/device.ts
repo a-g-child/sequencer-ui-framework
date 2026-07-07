@@ -68,7 +68,13 @@ export class PlaybackDeviceManager {
     if (events.length === 0) return
 
     for (const device of this.runtimeDevices.values()) {
-      device.processEvents(events)
+      const deviceEvents = events.filter(
+        (event) => event.destination?.deviceInstanceId === device.instanceId
+      )
+
+      if (deviceEvents.length === 0) continue
+
+      device.processEvents(deviceEvents)
     }
   }
 }

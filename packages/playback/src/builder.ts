@@ -24,6 +24,7 @@ export class PlaybackModelBuilder {
         id: track.id,
         name: track.name,
         channel: trackIndex % 16,
+        deviceInstanceId: track.deviceId,
         target: track.target
       }
       tracks.push(playbackTrack)

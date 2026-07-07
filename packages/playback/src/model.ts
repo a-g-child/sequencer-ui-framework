@@ -25,6 +25,7 @@ export interface PlaybackTrack {
   readonly id: string
   readonly name: string
   readonly channel: number
+  readonly deviceInstanceId?: string
   readonly target?: string
 }
 

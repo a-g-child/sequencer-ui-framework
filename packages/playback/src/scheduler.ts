@@ -194,7 +194,10 @@ export class TypeScriptScheduler implements Scheduler {
 
   private addNoteEvents(
     events: PlaybackEvent[],
-    tracksById: Map<string, { readonly channel: number }>,
+    tracksById: Map<
+      string,
+      { readonly channel: number; readonly deviceInstanceId?: string }
+    >,
     note: { readonly id: string; readonly trackId: string; readonly pitch: number; readonly velocity: number; readonly duration: number },
     beat: BeatTime,
     fromBeat: BeatTime,
@@ -203,6 +206,7 @@ export class TypeScriptScheduler implements Scheduler {
   ): void {
     const noteOffBeat = beat + note.duration
     const track = tracksById.get(note.trackId)
+    const destination = destinationForTrack(note.trackId, track?.deviceInstanceId)
     const repeatSuffix = repeatIndex > 0 ? `:repeat-${repeatIndex}` : ''
 
     if (beat >= fromBeat && beat < toBeat) {
@@ -212,6 +216,7 @@ export class TypeScriptScheduler implements Scheduler {
         noteId: note.id,
         trackId: note.trackId,
         channel: track?.channel,
+        destination,
         pitch: note.pitch,
         velocity: note.velocity,
         beat,
@@ -226,6 +231,7 @@ export class TypeScriptScheduler implements Scheduler {
         noteId: note.id,
         trackId: note.trackId,
         channel: track?.channel,
+        destination,
         pitch: note.pitch,
         velocity: 0,
         beat: noteOffBeat,
@@ -236,7 +242,10 @@ export class TypeScriptScheduler implements Scheduler {
 
   private addAutomationEvent(
     events: PlaybackEvent[],
-    tracksById: Map<string, { readonly channel: number }>,
+    tracksById: Map<
+      string,
+      { readonly channel: number; readonly deviceInstanceId?: string }
+    >,
     automation: {
       readonly id: string
       readonly trackId: string
@@ -252,6 +261,10 @@ export class TypeScriptScheduler implements Scheduler {
     if (beat < fromBeat || beat >= toBeat) return
 
     const track = tracksById.get(automation.trackId)
+    const destination = destinationForTrack(
+      automation.trackId,
+      track?.deviceInstanceId
+    )
     const repeatSuffix = repeatIndex > 0 ? `:repeat-${repeatIndex}` : ''
 
     events.push({
@@ -260,6 +273,7 @@ export class TypeScriptScheduler implements Scheduler {
       automationId: automation.id,
       trackId: automation.trackId,
       channel: track?.channel,
+      destination,
       parameterId: automation.parameterId,
       parameterKey: automation.parameterKey,
       value: automation.value,
@@ -450,6 +464,18 @@ function interpolateAutomationPoints(
 
 function sampleIndexForBeat(beat: BeatTime): number {
   return Math.round(beat * 1_000_000)
+}
+
+function destinationForTrack(
+  trackId: string | undefined,
+  deviceInstanceId: string | undefined
+): PlaybackEvent['destination'] {
+  if (!trackId && !deviceInstanceId) return undefined
+
+  return {
+    trackId,
+    deviceInstanceId
+  }
 }
 
 function sortEventType(event: PlaybackEvent): number {
