@@ -115,6 +115,12 @@ export class BasicSynthRuntimeDevice<
     };
   }
 
+  panic(): void {
+    this.pendingVoiceActions = [];
+    this.voices.clear();
+    this.lastPitch = undefined;
+  }
+
   private getEnvelope(): AdsrEnvelope {
     return {
       attack: numberParameter(this.parameters, 'attack', 0.01),

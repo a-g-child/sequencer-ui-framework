@@ -157,6 +157,12 @@ export class PlaybackService implements Service, DocumentObserver {
       return
     }
 
+    if (isPlaybackModelOperation(operation)) {
+      this.panicRuntimeVoices()
+      this.rebuildModel()
+      return
+    }
+
     void this.rebuildRuntimeDevices()
     this.rebuildModel()
   }
@@ -168,6 +174,12 @@ export class PlaybackService implements Service, DocumentObserver {
       return
     }
 
+    if (isPlaybackModelOperation(operation)) {
+      this.panicRuntimeVoices()
+      this.rebuildModel()
+      return
+    }
+
     void this.rebuildRuntimeDevices()
     this.rebuildModel()
   }
@@ -176,6 +188,12 @@ export class PlaybackService implements Service, DocumentObserver {
     if (this.applyRuntimeDeviceParameterOperation(operation)) {
       this.syncBasicSynthRuntimeParametersToWebAudio()
       this.emitStatus()
+      return
+    }
+
+    if (isPlaybackModelOperation(operation)) {
+      this.panicRuntimeVoices()
+      this.rebuildModel()
       return
     }
 
@@ -205,6 +223,11 @@ export class PlaybackService implements Service, DocumentObserver {
     }
 
     return applied
+  }
+
+  private panicRuntimeVoices(): void {
+    this.outputManager.panic()
+    this.deviceManager.panic()
   }
 
   requestClipLaunch(
@@ -344,6 +367,7 @@ export class PlaybackService implements Service, DocumentObserver {
       this.latestClockState = event.payload as ClockState
       this.scheduler.stop()
       this.outputManager.panic()
+      this.deviceManager.panic()
       this.liveClips.resetLaunchOrigins(0)
       this.rebuildModel()
       this.emitStatus()
@@ -553,6 +577,35 @@ function isDeviceParameterOperation(
     'parameterKey' in operation &&
     typeof operation.parameterKey === 'string'
   )
+}
+
+function isPlaybackModelOperation(operation: Operation): boolean {
+  return [
+    'Create Clip For Track',
+    'Delete Clip',
+    'Resize MIDI Clip',
+    'Set MIDI Clip Loop',
+    'Set MIDI Clip Loop Region',
+    'Move Pattern Placement',
+    'Resize Pattern Placement',
+    'Set Pattern Placement Loop',
+    'Set Pattern Placement Loop Count',
+    'Set Pattern Placement Loop Region',
+    'Set Parameter Value',
+    'Set Pattern Automation',
+    'Create Note',
+    'Create Notes',
+    'Delete Note',
+    'Delete Notes',
+    'Move Note',
+    'Move Notes',
+    'Resize Note',
+    'Resize Notes',
+    'Set Note Velocity',
+    'Set Note Probability',
+    'Set Note Humanise Offsets',
+    'Quantise Notes'
+  ].includes(operation.name)
 }
 
 function voiceStatsFromDiagnostics(

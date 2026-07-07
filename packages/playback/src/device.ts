@@ -74,6 +74,14 @@ export class PlaybackDeviceManager {
     }
   }
 
+  panic(): void {
+    for (const device of this.runtimeDevices.values()) {
+      if (hasPanic(device)) {
+        device.panic()
+      }
+    }
+  }
+
   advance(deltaMs: number): void {
     if (!Number.isFinite(deltaMs) || deltaMs <= 0) return
 
@@ -150,6 +158,17 @@ function hasDiagnostics(
   return (
     'getDiagnostics' in device &&
     typeof device.getDiagnostics === 'function'
+  )
+}
+
+function hasPanic(
+  device: PlaybackRuntimeDevice
+): device is PlaybackRuntimeDevice & {
+  panic(): void
+} {
+  return (
+    'panic' in device &&
+    typeof device.panic === 'function'
   )
 }
 
