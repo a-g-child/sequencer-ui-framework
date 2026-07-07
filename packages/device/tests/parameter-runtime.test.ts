@@ -5,8 +5,11 @@ import type { DeviceDescriptor } from '../src/descriptor.ts';
 import type { DeviceInstance } from '../src/instance.ts';
 import {
   advanceRuntimeParameters,
+  clearRuntimeParameterModulation,
   createRuntimeParameters,
   getRuntimeParameter,
+  getRuntimeParameterEffectiveValue,
+  setRuntimeParameterModulation,
   setRuntimeParameterValue
 } from '../src/parameter-runtime.ts';
 import { BASIC_SYNTH_DESCRIPTOR } from '../src/descriptors/basic-synth.ts';
@@ -85,6 +88,9 @@ describe('runtime parameters', () => {
     assert.equal(getRuntimeParameter(parameters, 'cutoff')?.value, 20000);
     assert.equal(getRuntimeParameter(parameters, 'resonance')?.value, 0);
     assert.equal(getRuntimeParameter(parameters, 'keyTracking')?.value, 0);
+    assert.equal(getRuntimeParameter(parameters, 'lfoRate')?.value, 0);
+    assert.equal(getRuntimeParameter(parameters, 'lfoDepth')?.value, 0);
+    assert.equal(getRuntimeParameter(parameters, 'lfoTarget')?.value, 'off');
   });
 
   it('smooths numeric parameters toward target values', () => {
@@ -104,6 +110,24 @@ describe('runtime parameters', () => {
     advanceRuntimeParameters(parameters, 20);
     assert.equal(volume.value, 1);
     assert.equal(volume.smoothedValue, 1);
+  });
+
+  it('applies numeric modulation to effective values', () => {
+    const parameters = createRuntimeParameters(descriptor, instance);
+    const volume = getRuntimeParameter(parameters, 'volume');
+
+    assert.ok(volume);
+
+    setRuntimeParameterModulation(volume, 0.1);
+    assert.equal(getRuntimeParameterEffectiveValue(parameters, 'volume'), 0.6);
+
+    setRuntimeParameterValue(volume, 0.75);
+    advanceRuntimeParameters(parameters, 20);
+    assert.equal(volume.value, 0.75);
+    assert.equal(getRuntimeParameterEffectiveValue(parameters, 'volume'), 0.85);
+
+    clearRuntimeParameterModulation(volume);
+    assert.equal(getRuntimeParameterEffectiveValue(parameters, 'volume'), 0.75);
   });
 
   it('snaps non-numeric parameters immediately', () => {

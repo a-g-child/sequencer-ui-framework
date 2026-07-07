@@ -2,7 +2,7 @@ import type { DocumentObserver, Operation, Service, ServiceContext, ServiceEvent
 import {
   BasicSynthFactory,
   ExternalMidiFactory,
-  getRuntimeParameterValue
+  getRuntimeParameterEffectiveValue
 } from '@sequencer/device'
 import { PlaybackModelBuilder } from './builder'
 import type { ClockState } from './clock'
@@ -394,20 +394,20 @@ export class PlaybackService implements Service, DocumentObserver {
       this.webAudioOutput.setTrackSettings(track.id, {
         enabled: true,
         waveform: normalizeWebAudioWaveform(
-          getRuntimeParameterValue(device.parameters, 'waveform')
+          getRuntimeParameterEffectiveValue(device.parameters, 'waveform')
         ),
         volume: normalizeRuntimeVolume(
-          getRuntimeParameterValue(device.parameters, 'volume')
+          getRuntimeParameterEffectiveValue(device.parameters, 'volume')
         ),
         filter: {
           cutoff: normalizeRuntimeFilterCutoff(
-            getRuntimeParameterValue(device.parameters, 'cutoff')
+            getRuntimeParameterEffectiveValue(device.parameters, 'cutoff')
           ),
           resonance: normalizeRuntimeFilterResonance(
-            getRuntimeParameterValue(device.parameters, 'resonance')
+            getRuntimeParameterEffectiveValue(device.parameters, 'resonance')
           ),
           keyTracking: normalizeRuntimeKeyTracking(
-            getRuntimeParameterValue(device.parameters, 'keyTracking')
+            getRuntimeParameterEffectiveValue(device.parameters, 'keyTracking')
           )
         }
       })

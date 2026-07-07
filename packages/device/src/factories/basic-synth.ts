@@ -10,7 +10,8 @@ import {
   advanceRuntimeParameters,
   createRuntimeParameters,
   getRuntimeParameter,
-  getRuntimeParameterValue,
+  getRuntimeParameterEffectiveValue,
+  setRuntimeParameterModulation,
   setRuntimeParameterValue
 } from '../parameter-runtime';
 import { BaseRuntimeDevice } from '../runtime';
@@ -21,15 +22,16 @@ export class BasicSynthRuntimeDevice<
   readonly voices = new VoiceManager(8);
 
   private pendingVoiceActions: VoiceAction[] = [];
+  private lfoPhase = 0;
 
   get waveform(): string {
-    const value = getRuntimeParameterValue(this.parameters, 'waveform');
+    const value = getRuntimeParameterEffectiveValue(this.parameters, 'waveform');
 
     return typeof value === 'string' ? value : 'sine';
   }
 
   get volume(): number {
-    const value = getRuntimeParameterValue(this.parameters, 'volume');
+    const value = getRuntimeParameterEffectiveValue(this.parameters, 'volume');
 
     return typeof value === 'number' ? value : 0.25;
   }
@@ -99,6 +101,7 @@ export class BasicSynthRuntimeDevice<
 
   advance(deltaMs: number): void {
     advanceRuntimeParameters(this.parameters, deltaMs);
+    this.advanceLfo(deltaMs);
   }
 
   getDiagnostics(): { voices: ReturnType<VoiceManager['stats']> } {
@@ -114,6 +117,27 @@ export class BasicSynthRuntimeDevice<
       sustain: numberParameter(this.parameters, 'sustain', 0.7),
       release: numberParameter(this.parameters, 'release', 0.2)
     };
+  }
+
+  private advanceLfo(deltaMs: number): void {
+    const cutoff = getRuntimeParameter(this.parameters, 'cutoff');
+
+    if (!cutoff) return;
+
+    const target = getRuntimeParameterEffectiveValue(this.parameters, 'lfoTarget');
+
+    if (target !== 'cutoff') {
+      setRuntimeParameterModulation(cutoff, 0);
+      return;
+    }
+
+    const rate = Math.max(0, numberParameter(this.parameters, 'lfoRate', 0));
+    const depth = numberParameter(this.parameters, 'lfoDepth', 0);
+
+    this.lfoPhase += (deltaMs / 1000) * rate * Math.PI * 2;
+    this.lfoPhase %= Math.PI * 2;
+
+    setRuntimeParameterModulation(cutoff, Math.sin(this.lfoPhase) * depth);
   }
 
   private voiceAmplitude(velocity: number): number {
@@ -137,7 +161,7 @@ function numberParameter(
   key: string,
   fallback: number
 ): number {
-  const value = getRuntimeParameterValue(parameters, key);
+  const value = getRuntimeParameterEffectiveValue(parameters, key);
   const numberValue = Number(value ?? fallback);
 
   return Number.isFinite(numberValue) ? numberValue : fallback;

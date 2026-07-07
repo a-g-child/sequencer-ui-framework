@@ -117,6 +117,39 @@ export const BASIC_SYNTH_DESCRIPTOR: DeviceDescriptor = {
       min: 0,
       max: 1,
       step: 0.01
+    },
+    {
+      id: 'lfo-rate',
+      key: 'lfoRate',
+      name: 'LFO Rate',
+      kind: 'number',
+      defaultValue: 0,
+      min: 0,
+      max: 20,
+      step: 0.01,
+      unit: 'Hz'
+    },
+    {
+      id: 'lfo-depth',
+      key: 'lfoDepth',
+      name: 'LFO Depth',
+      kind: 'number',
+      defaultValue: 0,
+      min: 0,
+      max: 5000,
+      step: 1,
+      unit: 'Hz'
+    },
+    {
+      id: 'lfo-target',
+      key: 'lfoTarget',
+      name: 'LFO Target',
+      kind: 'choice',
+      defaultValue: 'off',
+      options: [
+        { label: 'Off', value: 'off' },
+        { label: 'Cutoff', value: 'cutoff' }
+      ]
     }
   ]
 };

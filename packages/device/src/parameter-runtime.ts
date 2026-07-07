@@ -15,7 +15,9 @@ export type RuntimeParameter = {
   value: RuntimeParameterValue;
   targetValue: RuntimeParameterValue;
   defaultValue: RuntimeParameterValue;
+  modulationValue?: number;
   smoothedValue?: number;
+  effectiveValue?: RuntimeParameterValue;
   smoothingMs?: number;
 };
 
@@ -42,6 +44,15 @@ export function getRuntimeParameterValue(
   return getRuntimeParameter(parameters, key)?.value;
 }
 
+export function getRuntimeParameterEffectiveValue(
+  parameters: readonly RuntimeParameter[],
+  key: string
+): RuntimeParameterValue | undefined {
+  const parameter = getRuntimeParameter(parameters, key);
+
+  return parameter?.effectiveValue ?? parameter?.value;
+}
+
 export function setRuntimeParameterValue(
   parameter: RuntimeParameter,
   value: RuntimeParameterValue
@@ -50,7 +61,23 @@ export function setRuntimeParameterValue(
 
   if (typeof value !== 'number') {
     parameter.value = value;
+    parameter.effectiveValue = value;
   }
+}
+
+export function setRuntimeParameterModulation(
+  parameter: RuntimeParameter,
+  value: number
+): void {
+  parameter.modulationValue = Number.isFinite(value) ? value : 0;
+  updateRuntimeParameterEffectiveValue(parameter);
+}
+
+export function clearRuntimeParameterModulation(
+  parameter: RuntimeParameter
+): void {
+  parameter.modulationValue = 0;
+  updateRuntimeParameterEffectiveValue(parameter);
 }
 
 export function advanceRuntimeParameters(
@@ -63,6 +90,7 @@ export function advanceRuntimeParameters(
       typeof parameter.smoothedValue !== 'number'
     ) {
       parameter.value = parameter.targetValue;
+      parameter.effectiveValue = parameter.targetValue;
       continue;
     }
 
@@ -71,6 +99,7 @@ export function advanceRuntimeParameters(
     if (smoothingMs <= 0) {
       parameter.value = parameter.targetValue;
       parameter.smoothedValue = parameter.targetValue;
+      updateRuntimeParameterEffectiveValue(parameter);
       continue;
     }
 
@@ -80,7 +109,18 @@ export function advanceRuntimeParameters(
       (parameter.targetValue - parameter.smoothedValue) * amount;
 
     parameter.value = parameter.smoothedValue;
+    updateRuntimeParameterEffectiveValue(parameter);
   }
+}
+
+function updateRuntimeParameterEffectiveValue(parameter: RuntimeParameter): void {
+  if (typeof parameter.value !== 'number') {
+    parameter.effectiveValue = parameter.value;
+    return;
+  }
+
+  parameter.effectiveValue =
+    parameter.value + (parameter.modulationValue ?? 0);
 }
 
 function createRuntimeParameter(
@@ -97,7 +137,9 @@ function createRuntimeParameter(
     value,
     targetValue: value,
     defaultValue: descriptor.defaultValue,
+    modulationValue: typeof value === 'number' ? 0 : undefined,
     smoothedValue: typeof value === 'number' ? value : undefined,
+    effectiveValue: value,
     smoothingMs: typeof value === 'number' ? 20 : undefined
   };
 }
