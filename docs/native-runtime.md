@@ -73,6 +73,9 @@ RuntimeDevice
 
 Native work should attach below these contracts. It should not bypass them.
 
+Current Phase 9 implementation status is tracked in
+`docs/native-runtime-status.md`.
+
 ## Native Scheduler
 
 The current TypeScript scheduler is the reference implementation. A native

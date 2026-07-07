@@ -411,6 +411,8 @@ The current TypeScript scheduler and WebAudio executor remain the reference
 implementations. Native adapters must match those contracts before they try to
 outperform them.
 
+Status: boundary proven. See `docs/native-runtime-status.md`.
+
 ### Phase 9.1: Serializable Runtime Schemas
 
 Define shared plain-data shapes for the native boundary:
@@ -514,6 +516,13 @@ tested inside the current app and CI shape.
 
 Use native Rust or C++ later for low-latency audio, device drivers, and
 hardware-backed runtime devices.
+
+After the Phase 9 close-out, pause native work and return to musical/product
+value:
+
+- Web MIDI output
+- sampler device foundation
+- clip matrix polish
 
 ## Phase 10: Native Audio And Device Execution
 
