@@ -9,6 +9,21 @@ fantastic playable instrument.
 
 Future devices should look here before inventing new patterns.
 
+The north star is:
+
+```text
+The Golden Device is the reference implementation of the RuntimeDevice
+architecture.
+```
+
+Every design decision should survive this question:
+
+```text
+Would the Golden Device need a special case for this?
+```
+
+If the answer is yes, the architecture probably needs another look.
+
 ## Purpose
 
 The golden device should exercise the full runtime path:
@@ -29,44 +44,51 @@ specific device instance.
 
 ## Golden Device Checklist
 
-Device:
+The living checklist lives in `docs/golden-device-checklist.md`.
 
-- descriptor
-- instance
-- runtime
-- factory
-- registry
+It should become the daily acceptance test for the runtime architecture.
 
-Playback:
+The checklist is more important than the broad roadmap during Golden Device
+work. If a task does not improve the golden device, it should wait unless it
+removes a real blocker.
 
-- receives playback events
-- handles automation
-- handles transport
-- handles parameter changes
+## Recurring Runtime Pattern
 
-Audio:
+Sequencer now has a repeated runtime shape:
 
-- polyphonic voices
-- voice stealing
-- ADSR
-- portamento
-- oscillator selection
-- gain staging
+```text
+Descriptor
+  -> Instance
+  -> Runtime
+  -> Execution
+```
 
-Parameters:
+Examples:
 
-- descriptor driven
-- UI generated
-- automatable
-- smoothed
-- serializable
+```text
+DeviceDescriptor
+  -> DeviceInstance
+  -> RuntimeDevice
+  -> Output
 
-Runtime:
+ParameterDescriptor
+  -> ParameterInstance
+  -> RuntimeParameter
+  -> DSP
 
-- hot reconnect
-- missing device behavior
-- diagnostics
-- latency reporting
+VoiceDefinition
+  -> VoiceAllocation
+  -> RuntimeVoice
+  -> Oscillator
+
+Document
+  -> PlaybackModel
+  -> Scheduler
+  -> PlaybackEvents
+```
+
+This pattern is healthy. New runtime concepts should try to fit it before
+creating special cases.
 
 ## Voice Layer
 
@@ -122,6 +144,10 @@ Runtime parameter state can own:
 
 This lets automation target a device parameter without the scheduler,
 document, or UI needing to know how the device maps that value internally.
+
+Parameters are likely to be the hardest and most important part of the golden
+device. Automation, smoothing, modulation, UI editing, MIDI learn, hardware
+encoders, snapshots, and clip automation all become parameter behavior.
 
 ## Reference Behavior Tests
 

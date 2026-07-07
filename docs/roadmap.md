@@ -246,6 +246,8 @@ Reference behavior tests should start here:
 - playback events reach the correct runtime device
 
 See `docs/reference-device.md` for the golden device narrative and checklist.
+Use `docs/golden-device-checklist.md` as the living day-to-day tracker for this
+phase.
 
 ### Phase 8.3: Device Graph
 
