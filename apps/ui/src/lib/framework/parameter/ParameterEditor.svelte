@@ -11,11 +11,12 @@
   export let descriptor: DeviceParameterDescriptor
   export let value: DeviceParameterValue
   export let disabled = false
+  export let automated = false
   export let onChange: (value: DeviceParameterValue) => void = () => {}
 </script>
 
 {#if descriptor.kind === 'number'}
-  <NumberParameter {descriptor} {value} {disabled} {onChange} />
+  <NumberParameter {descriptor} {value} {disabled} {automated} {onChange} />
 {:else if descriptor.kind === 'boolean'}
   <BooleanParameter {descriptor} {value} {disabled} {onChange} />
 {:else if descriptor.kind === 'choice'}

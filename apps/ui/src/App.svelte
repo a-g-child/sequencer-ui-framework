@@ -43,7 +43,10 @@
   } from './lib/editors/piano-roll/piano-roll-model'
   import type { EditorKind } from './lib/editors/editor-types';
   import PatternEditor from './lib/music/pattern/PatternEditor.svelte';
-  import { buildPatternAutomationTargets } from './lib/music/pattern/pattern-automation';
+  import {
+    buildPatternAutomationTargets,
+    deviceAutomationTargetId
+  } from './lib/music/pattern/pattern-automation';
   import Workbench from './lib/framework/application/Workbench.svelte';
   import InspectorPanel from './lib/panels/InspectorPanel.svelte';
   import RuntimePanel from './lib/panels/RuntimePanel.svelte';
@@ -58,6 +61,8 @@
     device: DeviceInstance
     descriptor: DeviceParameterDescriptor
     value: DeviceParameterValue
+    runtimeValue?: DeviceParameterValue
+    automated?: boolean
   }
 
   const DEVICE_DESCRIPTORS: DeviceDescriptor[] = [
@@ -109,7 +114,12 @@
     : undefined
   let automationTargets = buildPatternAutomationTargets(
     buildTrackParameterViews(activePatternTrack),
-    buildSelectedTrackDeviceParameterViews(activePatternTrack)
+    buildSelectedTrackDeviceParameterViews(
+      activePatternTrack,
+      {},
+      new Set<string>(),
+      activePattern?.id
+    )
   )
   let activePatternClipLoop = activeClipId
     ? store.document.midiClips.find(activeClipId)?.loopEnabled ?? true
@@ -162,7 +172,12 @@
   $: selectedTrackParameterViews = buildTrackParameterViews(selectedTrack)
   $: selectedTrackDeviceName = buildSelectedTrackDeviceName(selectedTrack)
   $: selectedTrackDeviceParameterViews =
-    buildSelectedTrackDeviceParameterViews(selectedTrack)
+    buildSelectedTrackDeviceParameterViews(
+      selectedTrack,
+      runtimeParameterValues,
+      automatedRuntimeParameterIds,
+      activePattern?.id
+    )
   function rebuildInspector() {
     selected = store.selection.current()
     selectedTrackId = selected?.type === 'track' ? selected.id : ''
@@ -184,7 +199,12 @@
     pianoRoll = activePattern ? buildPianoRollView(activePattern) : undefined
     automationTargets = buildPatternAutomationTargets(
       buildTrackParameterViews(activePatternTrack),
-      buildSelectedTrackDeviceParameterViews(activePatternTrack)
+      buildSelectedTrackDeviceParameterViews(
+        activePatternTrack,
+        runtimeParameterValues,
+        automatedRuntimeParameterIds,
+        activePattern?.id
+      )
     )
     activePatternClipLoop = activeClipId
       ? store.document.midiClips.find(activeClipId)?.loopEnabled ?? true
@@ -443,7 +463,10 @@
   }
 
   function buildSelectedTrackDeviceParameterViews(
-    track: Track | undefined
+    track: Track | undefined,
+    values: Record<string, ParameterValue>,
+    automatedIds: Set<string>,
+    patternId: string | undefined
   ): DeviceParameterView[] {
     const device = findTrackDeviceInstance(track)
 
@@ -453,11 +476,22 @@
 
     if (!descriptor) return []
 
-    return descriptor.parameters.map((parameter) => ({
-      device,
-      descriptor: parameter,
-      value: device.parameterValues[parameter.key] ?? parameter.defaultValue
-    }))
+    return descriptor.parameters.map((parameter) => {
+      const parameterId = deviceAutomationTargetId(device.id, parameter.key)
+      const runtimeValue = values[parameterId]
+      const hasDocumentAutomation = Boolean(
+        patternId &&
+        controller.patternAutomationPoints(patternId, parameterId).length > 0
+      )
+
+      return {
+        device,
+        descriptor: parameter,
+        value: device.parameterValues[parameter.key] ?? parameter.defaultValue,
+        runtimeValue,
+        automated: automatedIds.has(parameterId) || hasDocumentAutomation
+      }
+    })
   }
 
   function findTrackDeviceInstance(

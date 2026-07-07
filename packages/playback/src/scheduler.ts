@@ -34,6 +34,7 @@ export interface TypeScriptSchedulerOptions {
 export type PlaybackRuntimeParameterValue = {
   readonly parameterId: string
   readonly parameterKey?: string
+  readonly deviceInstanceId?: string
   readonly value: number
   readonly trackId: string
 }
@@ -366,6 +367,7 @@ export function samplePlaybackAutomationValues(
     return [{
       parameterId: lane.parameterId,
       parameterKey: lane.parameterKey,
+      deviceInstanceId: lane.deviceInstanceId,
       trackId: lane.trackId,
       value
     }]

@@ -15,6 +15,8 @@
     device: DeviceInstance
     descriptor: DeviceParameterDescriptor
     value: DeviceParameterValue
+    runtimeValue?: DeviceParameterValue
+    automated?: boolean
   }
 
   export let selectedTrack: Track | undefined = undefined
@@ -129,8 +131,9 @@
         {#each selectedTrackDeviceParameterViews as parameter (`${parameter.device.id}:${parameter.descriptor.key}`)}
           <ParameterEditor
             descriptor={parameter.descriptor}
-            value={parameter.value}
+            value={parameter.runtimeValue ?? parameter.value}
             disabled={!selectedTrackId}
+            automated={parameter.automated ?? false}
             onChange={(value) =>
               onSetDeviceParameterValue(
                 parameter.device.id,

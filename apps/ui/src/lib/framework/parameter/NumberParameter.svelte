@@ -7,6 +7,7 @@
   export let descriptor: DeviceParameterDescriptor
   export let value: DeviceParameterValue
   export let disabled = false
+  export let automated = false
   export let onChange: (value: DeviceParameterValue) => void = () => {}
 
   $: numberValue = Number(value ?? descriptor.defaultValue)
@@ -152,8 +153,13 @@
   }
 </script>
 
-<label class="parameter-control">
-  <span>{descriptor.name}</span>
+<label class="parameter-control" class:automated title={automated ? 'Automated' : undefined}>
+  <span>
+    {descriptor.name}
+    {#if automated}
+      <i aria-label="Automated"></i>
+    {/if}
+  </span>
   <div class="number-control">
     <button
       type="button"
@@ -201,6 +207,24 @@
     text-transform: uppercase;
   }
 
+  .parameter-control span {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-2xs);
+  }
+
+  .parameter-control i {
+    width: 6px;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+
+  .parameter-control.automated {
+    color: var(--accent);
+  }
+
   .number-control {
     min-width: 0;
     display: grid;
@@ -225,6 +249,11 @@
       );
     cursor: ns-resize;
     touch-action: none;
+  }
+
+  .parameter-control.automated .dial {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
   }
 
   .dial:disabled {
