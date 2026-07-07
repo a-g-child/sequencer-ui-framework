@@ -81,6 +81,10 @@ export class PlaybackModelBuilder {
         }
       }
 
+      if (options.activeClipsByTrackId && track.clips.length > 0) {
+        return
+      }
+
       for (const placement of track.placements) {
         const pattern = document.patterns.find(placement.target)
 

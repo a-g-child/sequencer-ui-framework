@@ -16,6 +16,13 @@ export interface PendingClipLaunch {
   readonly launchAtBeat: BeatTime
 }
 
+export interface AppliedClipLaunch {
+  readonly trackId: EntityId
+  readonly clipId: EntityId
+  readonly previousClipId?: EntityId
+  readonly launchAtBeat: BeatTime
+}
+
 export interface LiveClipState {
   readonly activeClipByTrackId: Readonly<Record<EntityId, ActiveClipLaunch>>
   readonly pendingLaunchByTrackId: Readonly<Record<EntityId, PendingClipLaunch>>
@@ -108,28 +115,51 @@ export class LiveClipService {
     this.cancelLaunch(trackId)
   }
 
-  applyDueLaunches(clockState: ClockState): boolean {
+  resetLaunchOrigins(beat: BeatTime = 0): void {
+    const nextActiveClipByTrackId: Record<EntityId, ActiveClipLaunch> = {}
+
+    for (const [trackId, launch] of Object.entries(this.activeClipByTrackId)) {
+      nextActiveClipByTrackId[trackId] = {
+        ...launch,
+        launchedAtBeat: beat
+      }
+    }
+
+    this.activeClipByTrackId = nextActiveClipByTrackId
+    this.pendingLaunchByTrackId = {}
+  }
+
+  applyDueLaunches(clockState: ClockState): AppliedClipLaunch[] {
     const dueLaunches = Object.values(this.pendingLaunchByTrackId).filter(
       (launch) => launch.launchAtBeat <= clockState.beat
     )
 
-    if (dueLaunches.length === 0) return false
+    if (dueLaunches.length === 0) return []
 
     const nextActiveClipByTrackId = { ...this.activeClipByTrackId }
     const nextPendingLaunchByTrackId = { ...this.pendingLaunchByTrackId }
+    const appliedLaunches: AppliedClipLaunch[] = []
 
     for (const launch of dueLaunches) {
+      const previousClipId = nextActiveClipByTrackId[launch.trackId]?.clipId
+
       nextActiveClipByTrackId[launch.trackId] = {
         trackId: launch.trackId,
         clipId: launch.clipId,
         launchedAtBeat: launch.launchAtBeat
       }
       delete nextPendingLaunchByTrackId[launch.trackId]
+      appliedLaunches.push({
+        trackId: launch.trackId,
+        clipId: launch.clipId,
+        previousClipId,
+        launchAtBeat: launch.launchAtBeat
+      })
     }
 
     this.activeClipByTrackId = nextActiveClipByTrackId
     this.pendingLaunchByTrackId = nextPendingLaunchByTrackId
-    return true
+    return appliedLaunches
   }
 }
 

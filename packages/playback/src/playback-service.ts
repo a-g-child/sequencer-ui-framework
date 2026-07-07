@@ -4,6 +4,7 @@ import type { ClockState } from './clock'
 import type { PlaybackEvent } from './events'
 import {
   LiveClipService,
+  type AppliedClipLaunch,
   type ClipLaunchQuantize,
   type LiveClipState
 } from './live-clips'
@@ -123,12 +124,19 @@ export class PlaybackService implements Service, DocumentObserver {
     clipId: string,
     launchQuantize: ClipLaunchQuantize | number = this.liveClips.state.launchQuantizeBeats
   ): void {
+    const previousClipId = this.liveClips.state.activeClipByTrackId[trackId]?.clipId
+
     this.liveClips.requestLaunch(
       trackId,
       clipId,
       this.latestClockState ?? this.createStoppedClockState(),
       launchQuantize
     )
+    const activeClipId = this.liveClips.state.activeClipByTrackId[trackId]?.clipId
+
+    if (activeClipId === clipId) {
+      this.clearTrackVoicesAfterClipSwitch(trackId, previousClipId, clipId)
+    }
     this.rebuildModel()
     this.emitStatus()
   }
@@ -144,7 +152,12 @@ export class PlaybackService implements Service, DocumentObserver {
   }
 
   clearActiveClipForTrack(trackId: string): void {
+    const previousClipId = this.liveClips.state.activeClipByTrackId[trackId]?.clipId
+
     this.liveClips.clearActiveClip(trackId)
+    if (previousClipId) {
+      this.outputManager.panicTrack(trackId)
+    }
     this.rebuildModel()
     this.emitStatus()
   }
@@ -201,6 +214,28 @@ export class PlaybackService implements Service, DocumentObserver {
     this.emitStatus()
   }
 
+  private clearTrackVoicesAfterClipSwitch(
+    trackId: string,
+    previousClipId: string | undefined,
+    nextClipId: string
+  ): void {
+    if (!previousClipId || previousClipId === nextClipId) return
+
+    this.outputManager.panicTrack(trackId)
+  }
+
+  private clearTrackVoicesForAppliedLaunches(
+    launches: readonly AppliedClipLaunch[]
+  ): void {
+    for (const launch of launches) {
+      this.clearTrackVoicesAfterClipSwitch(
+        launch.trackId,
+        launch.previousClipId,
+        launch.clipId
+      )
+    }
+  }
+
   private handleServiceEvent(event: ServiceEvent): void {
     if (event.serviceId === this.id) return
 
@@ -208,7 +243,10 @@ export class PlaybackService implements Service, DocumentObserver {
       const state = event.payload as ClockState
       this.latestClockState = state
       this.runtimeBpm = state.bpm
-      this.liveClips.applyDueLaunches(state)
+      if (state.beat === 0) {
+        this.liveClips.resetLaunchOrigins(0)
+      }
+      this.clearTrackVoicesForAppliedLaunches(this.liveClips.applyDueLaunches(state))
       this.rebuildModel()
       this.scheduler.start(state.beat)
       this.emitStatus()
@@ -218,6 +256,8 @@ export class PlaybackService implements Service, DocumentObserver {
       this.latestClockState = event.payload as ClockState
       this.scheduler.stop()
       this.outputManager.panic()
+      this.liveClips.resetLaunchOrigins(0)
+      this.rebuildModel()
       this.emitStatus()
     }
 
@@ -239,7 +279,10 @@ export class PlaybackService implements Service, DocumentObserver {
       const state = event.payload as ClockState
       this.latestClockState = state
 
-      if (this.liveClips.applyDueLaunches(state)) {
+      const appliedLaunches = this.liveClips.applyDueLaunches(state)
+
+      if (appliedLaunches.length > 0) {
+        this.clearTrackVoicesForAppliedLaunches(appliedLaunches)
         this.rebuildModel()
       }
 

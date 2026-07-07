@@ -42,17 +42,11 @@
   import InspectorPanel from './lib/panels/InspectorPanel.svelte';
   import RuntimePanel from './lib/panels/RuntimePanel.svelte';
   import TransportPanel from './lib/panels/TransportPanel.svelte';
+  import MatrixView from './lib/matrix/MatrixView.svelte';
+  import type { MatrixClipView, MatrixTrackView } from './lib/matrix/matrix-view-model';
+  import TrackModules from './lib/modules/TrackModules.svelte';
 
   type MainViewMode = 'matrix' | 'editor'
-  type MatrixClipView = TrackClipView & {
-    readonly playbackProgress: number | undefined
-    readonly queuedProgress: number | undefined
-  }
-  type MatrixTrackView = {
-    readonly track: Track
-    readonly clips: MatrixClipView[]
-    readonly queuedLaunch: string
-  }
 
   
 
@@ -380,6 +374,15 @@
       return currentClipId
     }
 
+    if (
+      selectedTrackId &&
+      store.document.tracks.find(selectedTrackId)?.clips.length &&
+      !playbackStatus.liveClips.activeClipByTrackId[selectedTrackId] &&
+      !playbackStatus.liveClips.pendingLaunchByTrackId[selectedTrackId]
+    ) {
+      return undefined
+    }
+
     if (selectedClips[0]) {
       return selectedClips[0].id
     }
@@ -409,6 +412,7 @@
   }
 
   function playTransport() {
+    ensureSelectedClipActiveWhenStopped()
     controller.playTransport()
   }
 
@@ -574,6 +578,7 @@
 
   function selectClip(clip: TrackClipView) {
     activeClipId = clip.id
+    ensureClipActiveWhenStopped(clip.trackId, clip.id)
     syncView()
   }
 
@@ -596,6 +601,25 @@
 
     playback.requestClipLaunch(trackId, clipId, 'none')
     playbackStatus = playback.status
+    refreshSelectedTrackClips()
+    refreshMatrixTracks()
+  }
+
+  function ensureSelectedClipActiveWhenStopped() {
+    if (transportPlaying || !selectedTrackId || !activeClipId) return
+
+    const selectedClip = controller
+      .trackClips(
+        selectedTrackId,
+        activeClipId,
+        playbackStatus.liveClips.activeClipByTrackId[selectedTrackId]?.clipId,
+        playbackStatus.liveClips.pendingLaunchByTrackId[selectedTrackId]
+      )
+      .find((clip) => clip.id === activeClipId)
+
+    if (!selectedClip) return
+
+    ensureClipActiveWhenStopped(selectedTrackId, activeClipId)
   }
 
   function startClipPress(clip: TrackClipView) {
@@ -641,6 +665,9 @@
 
     if (clip.playbackActive) {
       playback.clearActiveClipForTrack(clip.trackId)
+      if (activeClipId === clip.id) {
+        activeClipId = undefined
+      }
       playbackStatus = playback.status
       refreshSelectedTrackClips()
       refreshMatrixTracks()
@@ -997,90 +1024,20 @@
   
   <svelte:fragment slot="center">
     {#if viewMode === 'matrix'}
-      <section class="matrix-view" aria-label="Clip matrix">
-        <div class="matrix-toolbar">
-          <div>
-            <h2>Matrix</h2>
-            <span>
-              Launch quantize: {launchQuantizeLabel(playbackStatus.liveClips.launchQuantize)}
-            </span>
-          </div>
-
-          <div class="clip-launch-controls" aria-label="Clip launch quantize">
-            {#each launchQuantizeOptions as option (option.id)}
-              <button
-                type="button"
-                class:active={playbackStatus.liveClips.launchQuantize === option.id}
-                on:click={() => setLaunchQuantize(option.id)}
-              >
-                {option.label}
-              </button>
-            {/each}
-          </div>
-        </div>
-
-        <div class="matrix-grid">
-          {#each matrixTracks as matrixTrack (matrixTrack.track.id)}
-            <section
-              class="matrix-track"
-              class:selected={matrixTrack.track.id === selectedTrackId}
-              aria-label={`${matrixTrack.track.name} clips`}
-            >
-              <button
-                type="button"
-                class="matrix-track-header"
-                class:selected={matrixTrack.track.id === selectedTrackId}
-                on:click={() => selectTrack(matrixTrack.track)}
-              >
-                <span>{matrixTrack.track.name}</span>
-                <small>{matrixTrack.queuedLaunch}</small>
-              </button>
-
-              <div class="matrix-clip-stack">
-                {#each matrixTrack.clips as clip (clip.id)}
-                  <button
-                    type="button"
-                    class="matrix-clip"
-                    class:active={clip.active}
-                    class:playing={clip.playbackActive}
-                    class:queued={clip.pendingLaunch}
-                    aria-pressed={clip.playbackActive || clip.pendingLaunch}
-                    style={`--clip-play-progress: ${clip.playbackProgress ?? 0}; --clip-queue-progress: ${clip.queuedProgress ?? 0};`}
-                    title="Click to launch, long press to edit"
-                    on:pointerdown={() => startClipPress(clip)}
-                    on:pointerup={endClipPress}
-                    on:pointerleave={endClipPress}
-                    on:pointercancel={endClipPress}
-                    on:click={() => launchMatrixClip(clip)}
-                  >
-                    <span class="matrix-clip-queue-progress" aria-hidden="true"></span>
-                    <span class="matrix-clip-playhead" aria-hidden="true"></span>
-                    <span>{clip.name}</span>
-                    <small>
-                      {#if clip.pendingLaunch}
-                        queued {formatBeat(clip.launchAtBeat)}
-                      {:else if clip.playbackActive}
-                        playing
-                      {:else}
-                        slot {clip.slotIndex + 1}
-                      {/if}
-                    </small>
-                  </button>
-                {/each}
-
-                <button
-                  type="button"
-                  class="matrix-add-clip"
-                  aria-label={`Add clip to ${matrixTrack.track.name}`}
-                  on:click={() => addClipToTrack(matrixTrack.track.id)}
-                >
-                  +
-                </button>
-              </div>
-            </section>
-          {/each}
-        </div>
-      </section>
+      <MatrixView
+        {matrixTracks}
+        {selectedTrackId}
+        launchQuantize={playbackStatus.liveClips.launchQuantize}
+        {launchQuantizeOptions}
+        {launchQuantizeLabel}
+        {formatBeat}
+        onSetLaunchQuantize={setLaunchQuantize}
+        onSelectTrack={selectTrack}
+        onClipPointerDown={startClipPress}
+        onClipPointerEnd={endClipPress}
+        onClipClick={launchMatrixClip}
+        onAddClipToTrack={addClipToTrack}
+      />
     {:else}
       <div class="editor-stack">
         <PatternEditor
@@ -1114,165 +1071,27 @@
   
 
   <svelte:fragment slot="bottom">
-    <section class="track-modules" aria-label="Selected track options">
-      <div class="track-module track-module-summary">
-        <span>Selected Track</span>
-        <strong>{selectedTrack?.name ?? 'None'}</strong>
-      </div>
-
-      <section class="track-module" aria-label="Track parameters">
-        <div class="module-heading">
-          <h2>Track</h2>
-          <span>Volume / Pan / Mute</span>
-        </div>
-
-        <div class="parameter-module-grid">
-          {#each selectedTrackParameterViews as property (property.parameter.id)}
-            <label class="module-control">
-              <span>{property.definition.name}</span>
-              {#if property.definition.kind === 'number'}
-                <input
-                  type="range"
-                  min={property.definition.min ?? 0}
-                  max={property.definition.max ?? 1}
-                  step={property.definition.step ?? 0.01}
-                  value={Number(displayedTrackParameterValue(property))}
-                  on:input={(event) =>
-                    setNumberPreview(property.parameter.id, readNumberValue(event))}
-                  on:change={(event) =>
-                    commitNumberValue(property.parameter.id, readNumberValue(event))}
-                  disabled={!selectedTrackId}
-                />
-                <strong>{Number(displayedTrackParameterValue(property)).toFixed(2)}</strong>
-              {:else if property.definition.kind === 'boolean'}
-                <button
-                  type="button"
-                  class="module-toggle"
-                  class:active={Boolean(displayedTrackParameterValue(property))}
-                  aria-pressed={Boolean(displayedTrackParameterValue(property))}
-                  on:click={() => toggleBooleanParameter(property)}
-                  disabled={!selectedTrackId}
-                >
-                  {Boolean(displayedTrackParameterValue(property)) ? 'On' : 'Off'}
-                </button>
-              {:else}
-                <input
-                  value={String(displayedTrackParameterValue(property))}
-                  on:change={(event) =>
-                    setParameterValue(
-                      property.parameter.id,
-                      (event.currentTarget as HTMLInputElement).value
-                    )}
-                  disabled={!selectedTrackId}
-                />
-              {/if}
-            </label>
-          {/each}
-        </div>
-      </section>
-
-      <section class="track-module" aria-label="Sound oscillator">
-        <div class="module-heading">
-          <h2>Sound</h2>
-          <span>Web Audio oscillator</span>
-        </div>
-
-        <div class="audio-output-panel" aria-label="Audio output">
-          <div class="audio-toggle">
-            <span>Audio</span>
-            <button
-              type="button"
-              class="audio-enable-button"
-              class:active={webAudioEnabled}
-              aria-pressed={webAudioEnabled}
-              on:click={toggleWebAudioOutput}
-              disabled={!selectedTrackId}
-            >
-              {webAudioEnabled ? 'On' : 'Off'}
-            </button>
-          </div>
-
-          <label>
-            <span>Wave</span>
-            <select
-              value={webAudioWaveform}
-              on:change={setWebAudioWaveform}
-              disabled={!selectedTrackId}
-            >
-              <option value="sine">Sine</option>
-              <option value="square">Square</option>
-              <option value="sawtooth">Saw</option>
-              <option value="triangle">Triangle</option>
-            </select>
-          </label>
-
-          <label>
-            <span>Gain</span>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={webAudioVolume}
-              on:input={setWebAudioVolume}
-              disabled={!selectedTrackId}
-            />
-          </label>
-
-          <label>
-            <span>A</span>
-            <input
-              type="range"
-              min="0"
-              max="2000"
-              step="5"
-              value={selectedTrackWebAudioSettings.adsr.attackMs}
-              on:input={setWebAudioAttack}
-              disabled={!selectedTrackId}
-            />
-          </label>
-
-          <label>
-            <span>D</span>
-            <input
-              type="range"
-              min="0"
-              max="2000"
-              step="5"
-              value={selectedTrackWebAudioSettings.adsr.decayMs}
-              on:input={setWebAudioDecay}
-              disabled={!selectedTrackId}
-            />
-          </label>
-
-          <label>
-            <span>S</span>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={selectedTrackWebAudioSettings.adsr.sustain}
-              on:input={setWebAudioSustain}
-              disabled={!selectedTrackId}
-            />
-          </label>
-
-          <label>
-            <span>R</span>
-            <input
-              type="range"
-              min="0"
-              max="3000"
-              step="5"
-              value={selectedTrackWebAudioSettings.adsr.releaseMs}
-              on:input={setWebAudioRelease}
-              disabled={!selectedTrackId}
-            />
-          </label>
-        </div>
-      </section>
-    </section>
+    <TrackModules
+      {selectedTrack}
+      {selectedTrackId}
+      {selectedTrackParameterViews}
+      {selectedTrackWebAudioSettings}
+      {webAudioEnabled}
+      {webAudioWaveform}
+      {webAudioVolume}
+      {displayedTrackParameterValue}
+      onSetNumberPreview={setNumberPreview}
+      onCommitNumberValue={commitNumberValue}
+      onSetParameterValue={setParameterValue}
+      onToggleBooleanParameter={toggleBooleanParameter}
+      onToggleWebAudioOutput={toggleWebAudioOutput}
+      onSetWebAudioWaveform={setWebAudioWaveform}
+      onSetWebAudioVolume={setWebAudioVolume}
+      onSetWebAudioAttack={setWebAudioAttack}
+      onSetWebAudioDecay={setWebAudioDecay}
+      onSetWebAudioSustain={setWebAudioSustain}
+      onSetWebAudioRelease={setWebAudioRelease}
+    />
 
     <footer class="statusbar">
       <span>{store.document.patterns.values().length} patterns</span>
@@ -1319,330 +1138,5 @@
     display: grid;
     gap: var(--spacing-xl);
     min-width: 0;
-  }
-
-  .matrix-view {
-    min-width: 0;
-    display: grid;
-    gap: var(--spacing-lg);
-  }
-
-  .matrix-toolbar {
-    display: flex;
-    align-items: end;
-    justify-content: space-between;
-    gap: var(--spacing-lg);
-  }
-
-  .matrix-toolbar > div:first-child {
-    display: grid;
-    gap: var(--spacing-2xs);
-  }
-
-  .matrix-toolbar span,
-  .module-heading span,
-  .track-module-summary span {
-    color: var(--muted);
-    font-size: var(--font-size-xs);
-    font-weight: 800;
-    text-transform: uppercase;
-  }
-
-  .matrix-grid {
-    min-width: 0;
-    overflow-x: auto;
-    display: grid;
-    grid-auto-columns: 176px;
-    grid-auto-flow: column;
-    gap: var(--spacing-sm);
-    padding-bottom: var(--spacing-xs);
-  }
-
-  .matrix-track {
-    min-width: 0;
-    width: 176px;
-    min-height: 360px;
-    border-left: var(--border-width) solid var(--border);
-    display: grid;
-    grid-template-rows: auto 1fr;
-    background: var(--surface-2);
-  }
-
-  .matrix-track.selected {
-    border-left-color: var(--accent);
-  }
-
-  .matrix-track-header {
-    min-width: 0;
-    min-height: 58px;
-    padding: var(--spacing-sm);
-    border: 0;
-    border-bottom: var(--border-width) solid var(--border);
-    border-radius: 0;
-    display: grid;
-    gap: var(--spacing-2xs);
-    text-align: left;
-  }
-
-  .matrix-track-header.selected {
-    background: var(--accent-soft);
-  }
-
-  .matrix-track-header span,
-  .matrix-clip > span:not(.matrix-clip-queue-progress):not(.matrix-clip-playhead) {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 800;
-  }
-
-  .matrix-track-header small,
-  .matrix-clip small {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--muted);
-    font-size: var(--font-size-xs);
-  }
-
-  .matrix-clip-stack {
-    align-content: start;
-    display: grid;
-    gap: var(--spacing-xs);
-    padding: var(--spacing-sm);
-  }
-
-  .matrix-clip,
-  .matrix-add-clip {
-    width: 100%;
-    min-height: 68px;
-    padding: var(--spacing-sm);
-    border-radius: var(--radius-md);
-  }
-
-  .matrix-clip {
-    position: relative;
-    overflow: hidden;
-    display: grid;
-    align-content: space-between;
-    text-align: left;
-    touch-action: manipulation;
-    user-select: none;
-  }
-
-  .matrix-clip > span:not(.matrix-clip-queue-progress):not(.matrix-clip-playhead),
-  .matrix-clip small {
-    position: relative;
-    z-index: 2;
-  }
-
-  .matrix-clip.active {
-    border-color: var(--accent);
-  }
-
-  .matrix-clip.playing {
-    border-color: var(--accent);
-    background: var(--accent);
-    color: var(--surface-0);
-  }
-
-  .matrix-clip.playing small {
-    color: var(--surface-0);
-  }
-
-  .matrix-clip.queued {
-    border-color: var(--accent-strong);
-    background: var(--accent-soft);
-  }
-
-  .matrix-clip-queue-progress {
-    position: absolute;
-    inset: auto 0 0 0;
-    z-index: 1;
-    height: 100%;
-    width: calc(var(--clip-queue-progress) * 100%);
-    background: color-mix(in srgb, var(--accent-strong) 28%, transparent);
-    pointer-events: none;
-    opacity: 0;
-  }
-
-  .matrix-clip.queued .matrix-clip-queue-progress {
-    opacity: 1;
-  }
-
-  .matrix-clip-playhead {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: calc(var(--clip-play-progress) * 100%);
-    z-index: 3;
-    width: 2px;
-    background: var(--surface-0);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 54%, transparent);
-    pointer-events: none;
-    opacity: 0;
-    transform: translateX(-1px);
-  }
-
-  .matrix-clip.playing .matrix-clip-playhead {
-    opacity: 1;
-  }
-
-  .matrix-add-clip {
-    min-height: 42px;
-    display: grid;
-    place-items: center;
-    color: var(--muted);
-    font-size: var(--font-size-xl);
-    font-weight: 800;
-  }
-
-  .track-modules {
-    display: grid;
-    grid-template-columns: minmax(140px, 0.7fr) minmax(260px, 1fr) minmax(360px, 1.4fr);
-    gap: var(--spacing-lg);
-  }
-
-  .track-module {
-    min-width: 0;
-    padding: var(--spacing-compact);
-    border: var(--border-width) solid var(--border);
-    background: var(--surface);
-    display: grid;
-    gap: var(--spacing-sm);
-  }
-
-  .track-module-summary {
-    align-content: center;
-  }
-
-  .track-module-summary strong {
-    min-width: 0;
-    overflow-wrap: anywhere;
-    font-size: var(--font-size-xl);
-  }
-
-  .module-heading {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: var(--spacing-sm);
-  }
-
-  .parameter-module-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--spacing-sm);
-  }
-
-  .module-control {
-    min-width: 0;
-    display: grid;
-    gap: var(--spacing-2xs);
-    color: var(--muted);
-    font-size: var(--font-size-xs);
-    font-weight: 800;
-    text-transform: uppercase;
-  }
-
-  .module-control strong {
-    color: var(--text);
-    font-size: var(--font-size-xs);
-  }
-
-  .module-toggle {
-    min-height: var(--control-height-sm);
-    border-radius: var(--radius-control);
-    color: var(--muted);
-    font-size: var(--font-size-xs);
-    font-weight: 800;
-  }
-
-  .module-toggle.active {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-    color: var(--accent);
-  }
-
-  .audio-output-panel {
-    display: grid;
-    grid-template-columns:
-      auto
-      minmax(82px, 0.9fr)
-      minmax(92px, 1fr)
-      repeat(4, minmax(54px, 0.7fr));
-    align-items: center;
-    gap: var(--spacing-sm);
-  }
-
-  .audio-output-panel label {
-    min-width: 0;
-    display: grid;
-    gap: var(--spacing-2xs);
-    color: var(--muted);
-    font-size: var(--font-size-xs);
-    font-weight: 800;
-    text-transform: uppercase;
-  }
-
-  .audio-output-panel select,
-  .audio-output-panel input[type='range'] {
-    min-width: 0;
-    width: 100%;
-  }
-
-  .audio-toggle {
-    grid-template-columns: auto auto;
-    align-items: center;
-  }
-
-  .audio-enable-button {
-    min-height: var(--control-height-sm);
-    min-width: 44px;
-    padding: 0 var(--spacing-sm);
-    border-radius: var(--radius-control);
-    color: var(--muted);
-    font-size: var(--font-size-xs);
-    font-weight: 800;
-  }
-
-  .audio-enable-button.active {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-    color: var(--accent);
-  }
-
-  @media (max-width: 980px) {
-    .track-modules {
-      grid-template-columns: 1fr;
-    }
-
-    .parameter-module-grid,
-    .audio-output-panel {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-  }
-
-  .clip-launch-controls {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: var(--spacing-xs);
-  }
-
-  .clip-launch-controls button {
-    min-width: 0;
-    min-height: 26px;
-    padding: 0 var(--spacing-xs);
-    font-size: var(--font-size-xs);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .clip-launch-controls button.active {
-    border-color: var(--accent);
-    background: var(--accent-soft);
   }
 </style>

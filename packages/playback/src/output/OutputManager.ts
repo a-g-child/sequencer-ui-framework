@@ -91,6 +91,12 @@ export class OutputManager {
     }
   }
 
+  panicTrack(trackId: string): void {
+    for (const outputId of this.activeOutputIds) {
+      this.registry.get(outputId)?.panicTrack?.(trackId)
+    }
+  }
+
   subscribe(listener: OutputEventListener): () => void {
     this.listeners.add(listener)
 
