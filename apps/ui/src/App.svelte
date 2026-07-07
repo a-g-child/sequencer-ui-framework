@@ -44,9 +44,13 @@
   import TransportPanel from './lib/panels/TransportPanel.svelte';
 
   type MainViewMode = 'matrix' | 'editor'
+  type MatrixClipView = TrackClipView & {
+    readonly playbackProgress: number | undefined
+    readonly queuedProgress: number | undefined
+  }
   type MatrixTrackView = {
     readonly track: Track
-    readonly clips: TrackClipView[]
+    readonly clips: MatrixClipView[]
     readonly queuedLaunch: string
   }
 
@@ -200,6 +204,7 @@
     if (event.type === 'transport:beat-changed') {
       const payload = event.payload as { currentBeat?: number } | undefined
       transportBeat = payload?.currentBeat ?? transportBeat
+      refreshMatrixTracks()
     }
 
     if (event.type === 'clock:tempo-changed') {
@@ -210,6 +215,7 @@
     if (event.type === 'clock:stopped') {
       runtimeParameterValues = {}
       automatedRuntimeParameterIds = new Set()
+      refreshMatrixTracks()
     }
 
     if (event.type === 'audio-engine:status-changed') {
@@ -826,6 +832,7 @@
     playback.setClipLaunchQuantize(quantize)
     playbackStatus = playback.status
     refreshSelectedTrackClips()
+    refreshMatrixTracks()
   }
 
   function launchQuantizeLabel(quantize: ClipLaunchQuantize): string {
@@ -855,13 +862,58 @@
     return `${clip?.name ?? 'Clip'} @ beat ${formatBeat(pendingLaunch.launchAtBeat)}`
   }
 
-  function matrixTrackClips(trackId: string): TrackClipView[] {
+  function matrixTrackClips(trackId: string): MatrixClipView[] {
     return controller.trackClips(
       trackId,
       activeClipId,
       playbackStatus.liveClips.activeClipByTrackId[trackId]?.clipId,
       playbackStatus.liveClips.pendingLaunchByTrackId[trackId]
+    ).map((clip) => ({
+      ...clip,
+      playbackProgress: clip.playbackActive
+        ? clipPlaybackProgress(trackId, clip.id)
+        : undefined,
+      queuedProgress: clip.pendingLaunch
+        ? clipQueuedProgress(trackId)
+        : undefined
+    }))
+  }
+
+  function clipPlaybackProgress(trackId: string, clipId: string): number | undefined {
+    const activeLaunch = playbackStatus.liveClips.activeClipByTrackId[trackId]
+    const clip = store.document.midiClips.find(clipId)
+
+    if (!transportPlaying || !activeLaunch || !clip) return undefined
+
+    const clipLength = Math.max(0.25, clip.length)
+    const localBeat = transportBeat - activeLaunch.launchedAtBeat
+
+    if (localBeat < 0) return 0
+
+    if (!clip.loopEnabled || clip.loopLength <= 0 || localBeat < clip.loopStart) {
+      return clampUnit(localBeat / clipLength)
+    }
+
+    const loopStart = Math.min(Math.max(0, clip.loopStart), clipLength)
+    const loopLength = Math.min(
+      Math.max(0.25, clip.loopLength),
+      Math.max(0.25, clipLength - loopStart)
     )
+    const loopBeat = loopStart + ((localBeat - loopStart) % loopLength)
+
+    return clampUnit(loopBeat / clipLength)
+  }
+
+  function clipQueuedProgress(trackId: string): number | undefined {
+    const pendingLaunch = playbackStatus.liveClips.pendingLaunchByTrackId[trackId]
+
+    if (!pendingLaunch) return undefined
+
+    const duration = pendingLaunch.launchAtBeat - pendingLaunch.requestedAtBeat
+
+    if (duration <= 0) return 1
+
+    return clampUnit((transportBeat - pendingLaunch.requestedAtBeat) / duration)
   }
 
   function displayedTrackParameterValue(
@@ -885,6 +937,12 @@
   function redo() {
     controller.redo()
     syncView()
+  }
+
+  function clampUnit(value: number): number {
+    if (!Number.isFinite(value)) return 0
+
+    return Math.min(1, Math.max(0, value))
   }
 </script>
 
@@ -987,6 +1045,7 @@
                     class:playing={clip.playbackActive}
                     class:queued={clip.pendingLaunch}
                     aria-pressed={clip.playbackActive || clip.pendingLaunch}
+                    style={`--clip-play-progress: ${clip.playbackProgress ?? 0}; --clip-queue-progress: ${clip.queuedProgress ?? 0};`}
                     title="Click to launch, long press to edit"
                     on:pointerdown={() => startClipPress(clip)}
                     on:pointerup={endClipPress}
@@ -994,6 +1053,8 @@
                     on:pointercancel={endClipPress}
                     on:click={() => launchMatrixClip(clip)}
                   >
+                    <span class="matrix-clip-queue-progress" aria-hidden="true"></span>
+                    <span class="matrix-clip-playhead" aria-hidden="true"></span>
                     <span>{clip.name}</span>
                     <small>
                       {#if clip.pendingLaunch}
@@ -1291,7 +1352,7 @@
     min-width: 0;
     overflow-x: auto;
     display: grid;
-    grid-auto-columns: minmax(168px, 1fr);
+    grid-auto-columns: 176px;
     grid-auto-flow: column;
     gap: var(--spacing-sm);
     padding-bottom: var(--spacing-xs);
@@ -1299,6 +1360,7 @@
 
   .matrix-track {
     min-width: 0;
+    width: 176px;
     min-height: 360px;
     border-left: var(--border-width) solid var(--border);
     display: grid;
@@ -1327,7 +1389,7 @@
   }
 
   .matrix-track-header span,
-  .matrix-clip span {
+  .matrix-clip > span:not(.matrix-clip-queue-progress):not(.matrix-clip-playhead) {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1361,11 +1423,19 @@
   }
 
   .matrix-clip {
+    position: relative;
+    overflow: hidden;
     display: grid;
     align-content: space-between;
     text-align: left;
     touch-action: manipulation;
     user-select: none;
+  }
+
+  .matrix-clip > span:not(.matrix-clip-queue-progress):not(.matrix-clip-playhead),
+  .matrix-clip small {
+    position: relative;
+    z-index: 2;
   }
 
   .matrix-clip.active {
@@ -1385,6 +1455,39 @@
   .matrix-clip.queued {
     border-color: var(--accent-strong);
     background: var(--accent-soft);
+  }
+
+  .matrix-clip-queue-progress {
+    position: absolute;
+    inset: auto 0 0 0;
+    z-index: 1;
+    height: 100%;
+    width: calc(var(--clip-queue-progress) * 100%);
+    background: color-mix(in srgb, var(--accent-strong) 28%, transparent);
+    pointer-events: none;
+    opacity: 0;
+  }
+
+  .matrix-clip.queued .matrix-clip-queue-progress {
+    opacity: 1;
+  }
+
+  .matrix-clip-playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: calc(var(--clip-play-progress) * 100%);
+    z-index: 3;
+    width: 2px;
+    background: var(--surface-0);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 54%, transparent);
+    pointer-events: none;
+    opacity: 0;
+    transform: translateX(-1px);
+  }
+
+  .matrix-clip.playing .matrix-clip-playhead {
+    opacity: 1;
   }
 
   .matrix-add-clip {
