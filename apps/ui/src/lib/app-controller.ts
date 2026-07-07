@@ -6,7 +6,10 @@ import {
   MovePatternPlacementOperation,
   RenameEntityOperation,
   RenameClipOperation,
+  ResizeMidiClipOperation,
   ResizePatternPlacementOperation,
+  SetMidiClipLoopOperation,
+  SetMidiClipLoopRegionOperation,
   SetParameterValueOperation,
   SetPatternPlacementLoopOperation,
   SetPatternPlacementLoopCountOperation,
@@ -341,6 +344,17 @@ export class AppController {
     return true
   }
 
+  setMidiClipLoop(clipId: string | undefined, loop: boolean): boolean {
+    if (!clipId) return false
+
+    const clip = this.app.documentStore.document.midiClips.find(clipId)
+
+    if (!clip || clip.loopEnabled === loop) return false
+
+    this.app.documentStore.execute(new SetMidiClipLoopOperation(clipId, loop))
+    return true
+  }
+
   setPatternClipLoopRegion(
     patternId: string | undefined,
     loopStart: number,
@@ -373,6 +387,43 @@ export class AppController {
       new SetPatternPlacementLoopRegionOperation(
         placement.trackId,
         placement.placement.id,
+        nextLoopStart,
+        nextLoopLength
+      )
+    )
+    return true
+  }
+
+  setMidiClipLoopRegion(
+    clipId: string | undefined,
+    loopStart: number,
+    loopLength: number
+  ): boolean {
+    if (!clipId || !Number.isFinite(loopStart) || !Number.isFinite(loopLength)) {
+      return false
+    }
+
+    const clip = this.app.documentStore.document.midiClips.find(clipId)
+
+    if (!clip) return false
+
+    const clipLength = Math.max(0.25, clip.length)
+    const nextLoopStart = Math.min(Math.max(0, loopStart), Math.max(0, clipLength - 0.25))
+    const nextLoopLength = Math.min(
+      Math.max(0.25, loopLength),
+      Math.max(0.25, clipLength - nextLoopStart)
+    )
+
+    if (
+      clip.loopStart === nextLoopStart &&
+      clip.loopLength === nextLoopLength
+    ) {
+      return false
+    }
+
+    this.app.documentStore.execute(
+      new SetMidiClipLoopRegionOperation(
+        clipId,
         nextLoopStart,
         nextLoopLength
       )
@@ -438,6 +489,53 @@ export class AppController {
         new SetPatternPlacementLoopRegionOperation(
           placement.trackId,
           placement.placement.id,
+          nextLoopStart,
+          nextLoopLength
+        )
+      )
+    }
+
+    this.app.documentStore.execute(operation)
+    return true
+  }
+
+  setMidiClipBounds(
+    clipId: string | undefined,
+    clipLength: number
+  ): boolean {
+    if (!clipId || !Number.isFinite(clipLength)) {
+      return false
+    }
+
+    const clip = this.app.documentStore.document.midiClips.find(clipId)
+
+    if (!clip) return false
+
+    const nextClipLength = Math.max(0.25, clipLength)
+
+    if (clip.length === nextClipLength) {
+      return false
+    }
+
+    const nextLoopStart = Math.min(
+      clip.loopStart,
+      Math.max(0, nextClipLength - 0.25)
+    )
+    const nextLoopLength = Math.min(
+      clip.loopLength,
+      Math.max(0.25, nextClipLength - nextLoopStart)
+    )
+    const operation = new CompositeOperation('Set MIDI Clip Bounds')
+
+    operation.add(new ResizeMidiClipOperation(clipId, nextClipLength))
+
+    if (
+      clip.loopStart !== nextLoopStart ||
+      clip.loopLength !== nextLoopLength
+    ) {
+      operation.add(
+        new SetMidiClipLoopRegionOperation(
+          clipId,
           nextLoopStart,
           nextLoopLength
         )
@@ -635,6 +733,30 @@ export class AppController {
       loopStart,
       loopLength
     }
+  }
+
+  midiClipLoopRegion(clipId: string | undefined): ClipLoopRegion {
+    if (!clipId) {
+      return { clipStart: 0, clipLength: 0, loopStart: 0, loopLength: 0 }
+    }
+
+    const clip = this.app.documentStore.document.midiClips.find(clipId)
+
+    if (!clip) {
+      return { clipStart: 0, clipLength: 0, loopStart: 0, loopLength: 0 }
+    }
+
+    const clipLength = Math.max(0.25, clip.length)
+    const loopStart = Math.min(
+      Math.max(0, clip.loopStart),
+      Math.max(0, clipLength)
+    )
+    const loopLength = Math.min(
+      Math.max(0.25, clip.loopLength),
+      Math.max(0.25, clipLength - loopStart)
+    )
+
+    return { clipStart: 0, clipLength, loopStart, loopLength }
   }
 
   private findFirstPlacementForPattern(patternId: string) {

@@ -85,6 +85,12 @@ export class OutputManager {
     this.emit({ type: 'output:events', events: eventBatch })
   }
 
+  panic(): void {
+    for (const outputId of this.activeOutputIds) {
+      this.registry.get(outputId)?.panic?.()
+    }
+  }
+
   subscribe(listener: OutputEventListener): () => void {
     this.listeners.add(listener)
 

@@ -217,6 +217,7 @@ export class PlaybackService implements Service, DocumentObserver {
     if (event.type === 'clock:stopped') {
       this.latestClockState = event.payload as ClockState
       this.scheduler.stop()
+      this.outputManager.panic()
       this.emitStatus()
     }
 

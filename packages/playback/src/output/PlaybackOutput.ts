@@ -9,4 +9,5 @@ export interface PlaybackOutput {
   connect(): Promise<void>
   disconnect(): Promise<void>
   handleEvents(events: PlaybackEvent[]): void
+  panic?(): void
 }

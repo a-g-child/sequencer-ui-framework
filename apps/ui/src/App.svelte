@@ -44,6 +44,11 @@
   import TransportPanel from './lib/panels/TransportPanel.svelte';
 
   type MainViewMode = 'matrix' | 'editor'
+  type MatrixTrackView = {
+    readonly track: Track
+    readonly clips: TrackClipView[]
+    readonly queuedLaunch: string
+  }
 
   
 
@@ -89,10 +94,12 @@
   let automationTargets = buildPatternAutomationTargets(
     buildTrackParameterViews(activePatternTrack)
   )
-  let activePatternClipLoop = controller.isPatternClipLooping(activePattern?.id)
-  let activePatternClipLoopRegion = controller.patternClipLoopRegion(
-    activePattern?.id
-  )
+  let activePatternClipLoop = activeClipId
+    ? store.document.midiClips.find(activeClipId)?.loopEnabled ?? true
+    : controller.isPatternClipLooping(activePattern?.id)
+  let activePatternClipLoopRegion = activeClipId
+    ? controller.midiClipLoopRegion(activeClipId)
+    : controller.patternClipLoopRegion(activePattern?.id)
   let draftName = inspector.type === 'track' ? inspector.title : ''
   let numberDrafts: Record<string, number> = {}
   let transportPlaying = app.editorTransport.playing
@@ -121,6 +128,7 @@
     playbackStatus.liveClips.activeClipByTrackId[selectedTrackId]?.clipId,
     playbackStatus.liveClips.pendingLaunchByTrackId[selectedTrackId]
   )
+  let matrixTracks: MatrixTrackView[] = buildMatrixTracks()
   let activeEditor: EditorKind = 'piano-roll';
   let viewMode: MainViewMode = 'matrix'
   let clipPressTimer: ReturnType<typeof setTimeout> | undefined
@@ -159,14 +167,19 @@
     automationTargets = buildPatternAutomationTargets(
       buildTrackParameterViews(activePatternTrack)
     )
-    activePatternClipLoop = controller.isPatternClipLooping(activePattern?.id)
-    activePatternClipLoopRegion = controller.patternClipLoopRegion(activePattern?.id)
+    activePatternClipLoop = activeClipId
+      ? store.document.midiClips.find(activeClipId)?.loopEnabled ?? true
+      : controller.isPatternClipLooping(activePattern?.id)
+    activePatternClipLoopRegion = activeClipId
+      ? controller.midiClipLoopRegion(activeClipId)
+      : controller.patternClipLoopRegion(activePattern?.id)
     selectedTrackClips = controller.trackClips(
       selectedTrackId,
       activeClipId,
       playbackStatus.liveClips.activeClipByTrackId[selectedTrackId]?.clipId,
       playbackStatus.liveClips.pendingLaunchByTrackId[selectedTrackId]
     )
+    refreshMatrixTracks()
     refreshSelectedTrackWebAudioSettings()
     issues = validateDocument(store.document)
     canUndo = store.history.canUndo()
@@ -230,6 +243,7 @@
       playbackStatus =
         (event.payload as PlaybackServiceStatus | undefined) ?? playbackStatus
       refreshSelectedTrackClips()
+      refreshMatrixTracks()
       refreshSelectedTrackWebAudioSettings()
     }
 
@@ -267,6 +281,18 @@
       playbackStatus.liveClips.activeClipByTrackId[selectedTrackId]?.clipId,
       playbackStatus.liveClips.pendingLaunchByTrackId[selectedTrackId]
     )
+  }
+
+  function refreshMatrixTracks() {
+    matrixTracks = buildMatrixTracks()
+  }
+
+  function buildMatrixTracks(): MatrixTrackView[] {
+    return tracks.map((track) => ({
+      track,
+      clips: matrixTrackClips(track.id),
+      queuedLaunch: trackQueuedLaunch(track.id)
+    }))
   }
 
   function refreshSelectedTrackWebAudioSettings() {
@@ -479,32 +505,33 @@
   }
 
   function toggleActivePatternClipLoop(loop: boolean) {
-    if (!controller.setPatternClipLoop(activePattern?.id, loop)) return
+    const changed = activeClipId
+      ? controller.setMidiClipLoop(activeClipId, loop)
+      : controller.setPatternClipLoop(activePattern?.id, loop)
 
+    if (!changed) return
     syncView()
   }
 
   function setActivePatternClipLoopRegion(loopStart: number, loopLength: number) {
-    if (
-      !controller.setPatternClipLoopRegion(
-        activePattern?.id,
-        loopStart,
-        loopLength
-      )
-    ) {
-      return
-    }
+    const changed = activeClipId
+      ? controller.setMidiClipLoopRegion(activeClipId, loopStart, loopLength)
+      : controller.setPatternClipLoopRegion(
+          activePattern?.id,
+          loopStart,
+          loopLength
+        )
 
+    if (!changed) return
     syncView()
   }
 
   function setActivePatternClipBounds(clipStart: number, clipLength: number) {
-    if (
-      !controller.setPatternClipBounds(activePattern?.id, clipStart, clipLength)
-    ) {
-      return
-    }
+    const changed = activeClipId
+      ? controller.setMidiClipBounds(activeClipId, clipLength)
+      : controller.setPatternClipBounds(activePattern?.id, clipStart, clipLength)
 
+    if (!changed) return
     syncView()
   }
 
@@ -553,7 +580,16 @@
 
     activeClipId = clip.id
     viewMode = 'editor'
+    ensureClipActiveWhenStopped(clip.trackId, clip.id)
     syncView()
+  }
+
+  function ensureClipActiveWhenStopped(trackId: string, clipId: string) {
+    if (transportPlaying) return
+    if (playback.activeClipForTrack(trackId) === clipId) return
+
+    playback.requestClipLaunch(trackId, clipId, 'none')
+    playbackStatus = playback.status
   }
 
   function startClipPress(clip: TrackClipView) {
@@ -578,25 +614,37 @@
       return
     }
 
+    const track = tracks.find((item) => item.id === clip.trackId)
+
+    if (track) {
+      controller.selectTrack(track)
+    }
+
+    activeClipId = clip.id
     togglePlaybackActiveClip(clip)
   }
 
   function togglePlaybackActiveClip(clip: TrackClipView) {
     if (clip.pendingLaunch) {
       playback.cancelClipLaunch(clip.trackId)
+      playbackStatus = playback.status
       refreshSelectedTrackClips()
+      refreshMatrixTracks()
       return
     }
 
     if (clip.playbackActive) {
       playback.clearActiveClipForTrack(clip.trackId)
+      playbackStatus = playback.status
       refreshSelectedTrackClips()
+      refreshMatrixTracks()
       return
     }
 
     playback.requestClipLaunch(clip.trackId, clip.id)
     playbackStatus = playback.status
     refreshSelectedTrackClips()
+    refreshMatrixTracks()
     syncView()
   }
 
@@ -618,6 +666,11 @@
     }
 
     const clipId = controller.createClipForTrack(trackId)
+
+    if (trackId && clipId) {
+      ensureClipActiveWhenStopped(trackId, clipId)
+    }
+
     syncView()
     return clipId
   }
@@ -909,24 +962,24 @@
         </div>
 
         <div class="matrix-grid">
-          {#each tracks as track (track.id)}
+          {#each matrixTracks as matrixTrack (matrixTrack.track.id)}
             <section
               class="matrix-track"
-              class:selected={track.id === selectedTrackId}
-              aria-label={`${track.name} clips`}
+              class:selected={matrixTrack.track.id === selectedTrackId}
+              aria-label={`${matrixTrack.track.name} clips`}
             >
               <button
                 type="button"
                 class="matrix-track-header"
-                class:selected={track.id === selectedTrackId}
-                on:click={() => selectTrack(track)}
+                class:selected={matrixTrack.track.id === selectedTrackId}
+                on:click={() => selectTrack(matrixTrack.track)}
               >
-                <span>{track.name}</span>
-                <small>{trackQueuedLaunch(track.id)}</small>
+                <span>{matrixTrack.track.name}</span>
+                <small>{matrixTrack.queuedLaunch}</small>
               </button>
 
               <div class="matrix-clip-stack">
-                {#each matrixTrackClips(track.id) as clip (clip.id)}
+                {#each matrixTrack.clips as clip (clip.id)}
                   <button
                     type="button"
                     class="matrix-clip"
@@ -957,8 +1010,8 @@
                 <button
                   type="button"
                   class="matrix-add-clip"
-                  aria-label={`Add clip to ${track.name}`}
-                  on:click={() => addClipToTrack(track.id)}
+                  aria-label={`Add clip to ${matrixTrack.track.name}`}
+                  on:click={() => addClipToTrack(matrixTrack.track.id)}
                 >
                   +
                 </button>

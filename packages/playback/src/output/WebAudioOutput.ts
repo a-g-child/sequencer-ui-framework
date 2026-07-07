@@ -36,6 +36,7 @@ type ActiveVoice = {
   readonly gain: GainNode
   readonly trackId?: string
   readonly velocity: number
+  stopScheduled?: boolean
 }
 
 export class WebAudioOutput implements PlaybackOutput {
@@ -177,6 +178,25 @@ export class WebAudioOutput implements PlaybackOutput {
     }
   }
 
+  panic(): void {
+    if (!this.context) {
+      this.voices.clear()
+      return
+    }
+
+    const stopTime = this.context.currentTime
+
+    for (const [key, voice] of this.voices.entries()) {
+      voice.gain.gain.cancelScheduledValues(stopTime)
+      voice.gain.gain.setValueAtTime(0, stopTime)
+      if (!voice.stopScheduled) {
+        voice.stopScheduled = true
+        voice.oscillator.stop(stopTime)
+      }
+      this.voices.delete(key)
+    }
+  }
+
   private startVoice(event: Extract<PlaybackEvent, { type: 'note:on' }>): void {
     if (!this.context || !this.masterGain) return
 
@@ -216,6 +236,7 @@ export class WebAudioOutput implements PlaybackOutput {
     const voice = this.voices.get(voiceKey)
 
     if (!voice || !this.context) return
+    if (voice.stopScheduled) return
 
     const stopStart = this.outputTime(timeMs)
     const settings = this.settingsForTrack(voice.trackId)
@@ -224,8 +245,13 @@ export class WebAudioOutput implements PlaybackOutput {
     voice.gain.gain.cancelScheduledValues(stopStart)
     voice.gain.gain.setValueAtTime(voice.gain.gain.value, stopStart)
     voice.gain.gain.linearRampToValueAtTime(0, stopTime)
+    voice.oscillator.onended = () => {
+      if (this.voices.get(voiceKey) === voice) {
+        this.voices.delete(voiceKey)
+      }
+    }
+    voice.stopScheduled = true
     voice.oscillator.stop(stopTime)
-    this.voices.delete(voiceKey)
   }
 
   private outputTime(timeMs: number): number {
