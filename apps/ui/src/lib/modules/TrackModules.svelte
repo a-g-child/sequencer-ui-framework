@@ -28,6 +28,8 @@
   export let webMidiEnabled = false
   export let webMidiLabel = 'MIDI'
   export let webMidiStatus = ''
+  export let samplerSampleName = 'No sample'
+  export let samplerSampleStatus = ''
   export let displayedTrackParameterValue: (
     property: InspectorPropertyView
   ) => ParameterValue
@@ -40,6 +42,7 @@
   export let onToggleBooleanParameter: (property: InspectorPropertyView) => void
   export let onToggleWebAudioOutput: () => void
   export let onToggleWebMidiOutput: () => void
+  export let onLoadSamplerSampleFile: (file: File) => void
   export let onSetDeviceParameterValue: (
     deviceInstanceId: string,
     parameterKey: string,
@@ -48,6 +51,14 @@
 
   function readNumberValue(event: Event): number {
     return Number((event.currentTarget as HTMLInputElement).value)
+  }
+
+  function loadSamplerFile(event: Event): void {
+    const file = (event.currentTarget as HTMLInputElement).files?.[0]
+
+    if (file) {
+      onLoadSamplerSampleFile(file)
+    }
   }
 </script>
 
@@ -145,6 +156,24 @@
         <p class="output-status">{webMidiStatus}</p>
       {/if}
     </div>
+
+    {#if selectedTrackId}
+      <div class="sample-loader">
+        <span>{samplerSampleName}</span>
+        <label class="sample-load-button">
+          Load
+          <input
+            type="file"
+            accept="audio/*"
+            on:change={loadSamplerFile}
+            disabled={!selectedTrackId}
+          />
+        </label>
+        {#if samplerSampleStatus}
+          <p class="output-status">{samplerSampleStatus}</p>
+        {/if}
+      </div>
+    {/if}
 
     {#if selectedTrackDeviceParameterViews.length > 0}
       <div class="parameter-module-grid device-parameter-grid">
@@ -287,6 +316,48 @@
     border-color: var(--accent);
     background: var(--accent-soft);
     color: var(--accent);
+  }
+
+  .sample-loader {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--spacing-sm);
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .sample-loader span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .sample-load-button {
+    min-height: var(--control-height-sm);
+    min-width: 56px;
+    display: inline-grid;
+    place-items: center;
+    padding: 0 var(--spacing-sm);
+    border: var(--border-width) solid var(--border);
+    border-radius: var(--radius-control);
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .sample-load-button:focus-within,
+  .sample-load-button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .sample-load-button input {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    opacity: 0;
+    pointer-events: none;
   }
 
   .device-parameter-grid {

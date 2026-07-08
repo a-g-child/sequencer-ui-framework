@@ -3,6 +3,7 @@ import type { SequencerDocument } from "./document";
 import type { MidiClip, Pattern, Track } from "./project";
 import type { Parameter, ParameterDefinition } from "./parameter";
 import type { Timeline } from "./timeline";
+import type { AssetReference } from "@sequencer/assets";
 import type { DeviceInstance } from "@sequencer/device";
 
 interface SerializedDocument {
@@ -10,6 +11,7 @@ interface SerializedDocument {
   name: string;
   bpm: number;
   timeline: Timeline;
+  assets?: AssetReference[];
   tracks: Track[];
   deviceInstances?: DeviceInstance[];
   midiClips?: MidiClip[];
@@ -24,6 +26,7 @@ export function serializeDocument(document: SequencerDocument): string {
     name: document.name,
     bpm: document.bpm,
     timeline: document.timeline,
+    assets: document.assets.values(),
     tracks: document.tracks.values(),
     deviceInstances: document.deviceInstances.values(),
     midiClips: document.midiClips.values(),
@@ -38,6 +41,7 @@ export function serializeDocument(document: SequencerDocument): string {
 export function deserializeDocument(json: string): SequencerDocument {
   const serialized = JSON.parse(json) as SerializedDocument;
   const tracks = new Registry<Track>();
+  const assets = new Registry<AssetReference>();
   const deviceInstances = new Registry<DeviceInstance>();
   const midiClips = new Registry<MidiClip>();
   const patterns = new Registry<Pattern>();
@@ -46,6 +50,10 @@ export function deserializeDocument(json: string): SequencerDocument {
 
   for (const pattern of serialized.patterns) {
     patterns.add(pattern);
+  }
+
+  for (const asset of serialized.assets ?? []) {
+    assets.add(asset);
   }
 
   for (const track of serialized.tracks) {
@@ -74,6 +82,7 @@ export function deserializeDocument(json: string): SequencerDocument {
     name: serialized.name,
     bpm: serialized.bpm,
     timeline: serialized.timeline,
+    assets,
     tracks,
     deviceInstances,
     midiClips,

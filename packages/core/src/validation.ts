@@ -1,4 +1,5 @@
 import type { SequencerDocument } from "./document";
+import type { SampleSlot } from "@sequencer/device";
 
 export interface ValidationIssue {
   level: "error" | "warning";
@@ -54,6 +55,21 @@ export function validateDocument(document: SequencerDocument): ValidationIssue[]
         message: `Track references missing device instance: ${track.deviceId}`,
         entityId: track.id
       });
+    }
+
+    if (track.deviceId) {
+      const device = document.deviceInstances.find(track.deviceId);
+      const sampleSlots = samplerSampleSlots(device);
+
+      for (const slot of sampleSlots) {
+        if (slot.assetId && !document.assets.has(slot.assetId)) {
+          issues.push({
+            level: "warning",
+            message: `Sampler slot references missing asset: ${slot.assetId}`,
+            entityId: track.id
+          });
+        }
+      }
     }
 
     const slotIndexes = new Set<number>();
@@ -294,6 +310,21 @@ export function validateDocument(document: SequencerDocument): ValidationIssue[]
   }
 
   return issues;
+}
+
+function samplerSampleSlots(device: unknown): SampleSlot[] {
+  if (
+    typeof device !== "object" ||
+    device === null ||
+    !("descriptorKey" in device) ||
+    device.descriptorKey !== "sampler" ||
+    !("sampleSlots" in device) ||
+    !Array.isArray(device.sampleSlots)
+  ) {
+    return [];
+  }
+
+  return device.sampleSlots;
 }
 
 export function validateProject(project: SequencerDocument): ValidationIssue[] {

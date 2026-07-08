@@ -1,3 +1,4 @@
+import type { AssetReference } from '@sequencer/assets'
 import type { DocumentObserver, Operation, Service, ServiceContext, ServiceEvent } from '@sequencer/core'
 import {
   BasicSynthFactory,
@@ -316,6 +317,10 @@ export class PlaybackService implements Service, DocumentObserver {
     }
 
     this.emitStatus()
+  }
+
+  async loadSampleAsset(asset: AssetReference): Promise<AudioBuffer> {
+    return this.webAudioOutput.loadSampleAsset(asset)
   }
 
   setWebAudioWaveform(waveform: WebAudioWaveform): void {

@@ -8,6 +8,7 @@
     "test": "node --experimental-transform-types --experimental-specifier-resolution=node --test tests/*.test.ts"
   },
   "dependencies": {
+    "@sequencer/assets": "file:../assets",
     "@sequencer/audio": "file:../audio",
     "@sequencer/core": "file:../core",
     "@sequencer/device": "file:../device",

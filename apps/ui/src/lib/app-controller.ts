@@ -2,6 +2,8 @@ import {
   AddTrackOperation,
   CompositeOperation,
   CreateClipForTrackOperation,
+  AddAssetOperation,
+  AddDeviceInstanceOperation,
   DeleteClipOperation,
   MovePatternPlacementOperation,
   RenameEntityOperation,
@@ -12,6 +14,8 @@ import {
   SetMidiClipLoopRegionOperation,
   SetDeviceParameterValueOperation,
   SetParameterValueOperation,
+  SetSamplerSampleSlotOperation,
+  SetTrackDeviceOperation,
   SetPatternPlacementLoopOperation,
   SetPatternPlacementLoopCountOperation,
   SetPatternPlacementLoopRegionOperation,
@@ -21,7 +25,8 @@ import {
   type SequencerApplication,
   type Track
 } from '@sequencer/core'
-import type { DeviceParameterValue } from '@sequencer/device'
+import type { AssetReference } from '@sequencer/assets'
+import type { DeviceInstance, DeviceParameterValue, SampleSlot } from '@sequencer/device'
 import {
   CreateNoteOperation,
   CreateNotesOperation,
@@ -232,6 +237,26 @@ export class AppController {
   ): void {
     this.app.documentStore.execute(
       new SetDeviceParameterValueOperation(deviceInstanceId, parameterKey, value)
+    )
+  }
+
+  addAsset(asset: AssetReference): void {
+    this.app.documentStore.execute(new AddAssetOperation(asset))
+  }
+
+  addDeviceInstance(device: DeviceInstance): void {
+    this.app.documentStore.execute(new AddDeviceInstanceOperation(device))
+  }
+
+  setTrackDevice(trackId: string, deviceInstanceId: string | undefined): void {
+    this.app.documentStore.execute(
+      new SetTrackDeviceOperation(trackId, deviceInstanceId)
+    )
+  }
+
+  setSamplerSampleSlot(deviceInstanceId: string, slot: SampleSlot): void {
+    this.app.documentStore.execute(
+      new SetSamplerSampleSlotOperation(deviceInstanceId, slot)
     )
   }
 

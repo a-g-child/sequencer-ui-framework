@@ -1,7 +1,9 @@
+import type { AssetReference } from '@sequencer/assets'
 import type { SampleVoiceAction, VoiceAction } from '@sequencer/audio'
 import type { PlaybackEvent } from '../events'
 import { noteOnlyCapabilities } from './OutputEvent'
 import type { PlaybackOutput } from './PlaybackOutput'
+import { WebAudioAssetLoader } from './WebAudioAssetLoader'
 
 export type WebAudioWaveform = OscillatorType
 
@@ -233,6 +235,19 @@ export class WebAudioOutput implements PlaybackOutput {
     }
   }
 
+  async loadSampleAsset(asset: AssetReference): Promise<AudioBuffer> {
+    await this.connect()
+
+    if (!this.context) {
+      throw new Error('Web Audio context is not available')
+    }
+
+    const loader = new WebAudioAssetLoader(this.context)
+    const buffer = await loader.load(asset)
+    this.sampleBuffers.set(asset.id, buffer)
+    return buffer
+  }
+
   panic(): void {
     if (!this.context) {
       this.voices.clear()
@@ -360,6 +375,10 @@ export class WebAudioOutput implements PlaybackOutput {
     if (!this.context || !this.masterGain) return
 
     const key = action.voiceId
+    const settings = this.settingsForTrack(action.trackId)
+
+    if (!settings.enabled) return
+
     const existingSample = this.samples.get(key)
     if (existingSample) {
       this.forceStopSample(key, existingSample, this.context.currentTime)

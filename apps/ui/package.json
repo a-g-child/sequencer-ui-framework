@@ -22,6 +22,7 @@
     "vite": "^8.1.0"
   },
   "dependencies": {
+    "@sequencer/assets": "file:../../packages/assets",
     "@sequencer/device": "file:../../packages/device"
   }
 }

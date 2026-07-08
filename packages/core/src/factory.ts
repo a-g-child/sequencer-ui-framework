@@ -5,6 +5,7 @@ import type {
   Track,
   TrackClipSlot
 } from "./project";
+import type { AssetReference } from "@sequencer/assets";
 import type { SequencerDocument } from "./document";
 import type { BeatTime } from "./events";
 import type { Timeline } from "./timeline";
@@ -133,6 +134,7 @@ export function createDocument(name = "Sequencer"): SequencerDocument {
   const patterns = new Registry<Pattern>();
   const midiClips = new Registry<MidiClip>();
   const tracks = new Registry<Track>();
+  const assets = new Registry<AssetReference>();
   const deviceInstances = new Registry<DeviceInstance>();
   const timeline = createTimeline();
 
@@ -150,6 +152,7 @@ export function createDocument(name = "Sequencer"): SequencerDocument {
     name,
     bpm: 120,
     timeline,
+    assets,
     tracks,
     deviceInstances,
     midiClips,

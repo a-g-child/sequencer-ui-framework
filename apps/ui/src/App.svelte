@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import {
     SequencerApplication,
+    createDeviceInstance,
     validateDocument,
     type SelectionItem,
     type ServiceEvent,
@@ -21,11 +22,15 @@
   import {
     BASIC_SYNTH_DESCRIPTOR,
     EXTERNAL_MIDI_DESCRIPTOR,
+    SAMPLER_DESCRIPTOR,
     type DeviceDescriptor,
     type DeviceInstance,
     type DeviceParameterDescriptor,
-    type DeviceParameterValue
+    type DeviceParameterValue,
+    type SampleSlot,
+    type SamplerDeviceInstance
   } from '@sequencer/device'
+  import type { AssetReference } from '@sequencer/assets'
   import { AppController, type TrackClipView } from './lib/app-controller'
   import {
     buildInspectorView,
@@ -67,7 +72,8 @@
 
   const DEVICE_DESCRIPTORS: DeviceDescriptor[] = [
     BASIC_SYNTH_DESCRIPTOR,
-    EXTERNAL_MIDI_DESCRIPTOR
+    EXTERNAL_MIDI_DESCRIPTOR,
+    SAMPLER_DESCRIPTOR
   ]
   const DEVICE_DESCRIPTORS_BY_KEY = new Map(
     DEVICE_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor])
@@ -145,6 +151,7 @@
     playbackStatus.outputManager.activeOutputIds.includes('web-midi')
   let webMidiLabel = 'MIDI'
   let webMidiStatus = ''
+  let samplerSampleStatus = ''
   let diagnosticsOpen = false
   let runtimeParameterValues: Record<string, ParameterValue> = {}
   let automatedRuntimeParameterIds = new Set<string>()
@@ -511,6 +518,25 @@
     })
   }
 
+  function selectedSamplerDevice(
+    track: Track | undefined
+  ): SamplerDeviceInstance | undefined {
+    const device = findTrackDeviceInstance(track)
+
+    return device?.descriptorKey === SAMPLER_DESCRIPTOR.key
+      ? (device as SamplerDeviceInstance)
+      : undefined
+  }
+
+  function buildSelectedSamplerSampleName(track: Track | undefined): string {
+    const sampler = selectedSamplerDevice(track)
+    const slot = sampler?.sampleSlots?.[0]
+
+    if (!slot?.assetId) return 'No sample'
+
+    return store.document.assets.find(slot.assetId)?.name ?? slot.name
+  }
+
   function findTrackDeviceInstance(
     track: Track | undefined
   ): DeviceInstance | undefined {
@@ -559,6 +585,72 @@
     await playback.setWebMidiEnabled(!webMidiEnabled)
     playbackStatus = playback.status
     refreshWebMidiStatus()
+  }
+
+  async function loadSamplerSampleFile(file: File) {
+    if (!selectedTrack) return
+
+    const uri = URL.createObjectURL(file)
+    const asset: AssetReference = {
+      id: `asset_${crypto.randomUUID()}`,
+      kind: 'audio-sample',
+      name: file.name,
+      uri,
+      mimeType: file.type || undefined,
+      sizeBytes: file.size
+    }
+
+    try {
+      const buffer = await playback.loadSampleAsset(asset)
+      const loadedAsset: AssetReference = {
+        ...asset,
+        durationSeconds: buffer.duration,
+        sampleRate: buffer.sampleRate,
+        channels: buffer.numberOfChannels
+      }
+      const sampler = ensureSelectedTrackSamplerDevice()
+
+      if (!sampler) return
+
+      const slot: SampleSlot = {
+        id: sampler.sampleSlots?.[0]?.id ?? 'slot-1',
+        name: file.name,
+        assetId: loadedAsset.id,
+        rootNote: 60,
+        gain: 1,
+        start: 0,
+        end: loadedAsset.durationSeconds,
+        loop: false
+      }
+
+      controller.addAsset(loadedAsset)
+      controller.setSamplerSampleSlot(sampler.id, slot)
+      samplerSampleStatus = `${file.name} loaded`
+      syncView()
+      playbackStatus = playback.status
+      refreshSelectedTrackWebAudioSettings()
+    } catch (error) {
+      URL.revokeObjectURL(uri)
+      samplerSampleStatus =
+        error instanceof Error ? error.message : 'Could not load sample'
+    }
+  }
+
+  function ensureSelectedTrackSamplerDevice(): SamplerDeviceInstance | undefined {
+    if (!selectedTrack) return undefined
+
+    const currentSampler = selectedSamplerDevice(selectedTrack)
+
+    if (currentSampler) return currentSampler
+
+    const sampler = createDeviceInstance(
+      SAMPLER_DESCRIPTOR,
+      'Sampler'
+    ) as SamplerDeviceInstance
+
+    controller.addDeviceInstance(sampler)
+    controller.setTrackDevice(selectedTrack.id, sampler.id)
+    return sampler
   }
 
   function setDeviceParameterValue(
@@ -1146,6 +1238,8 @@
       {webMidiEnabled}
       {webMidiLabel}
       {webMidiStatus}
+      samplerSampleName={buildSelectedSamplerSampleName(selectedTrack)}
+      {samplerSampleStatus}
       {displayedTrackParameterValue}
       onSetNumberPreview={setNumberPreview}
       onCommitNumberValue={commitNumberValue}
@@ -1153,6 +1247,7 @@
       onToggleBooleanParameter={toggleBooleanParameter}
       onToggleWebAudioOutput={toggleWebAudioOutput}
       onToggleWebMidiOutput={toggleWebMidiOutput}
+      onLoadSamplerSampleFile={loadSamplerSampleFile}
       onSetDeviceParameterValue={setDeviceParameterValue}
     />
 
