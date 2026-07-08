@@ -13,7 +13,6 @@ import {
 } from "./service";
 
 export class SequencerApplication {
-  readonly document: SequencerDocument;
   readonly documentStore: DocumentStore;
   readonly services = new ServiceRegistry();
   readonly serviceEvents = new ServiceEventBus();
@@ -24,7 +23,6 @@ export class SequencerApplication {
   readonly preferences: PreferencesService;
 
   constructor(document = createDocument()) {
-    this.document = document;
     this.documentStore = new DocumentStore(document);
     this.editorTransport = new EditorTransportService(document.bpm);
     this.transport = this.editorTransport;
@@ -43,6 +41,10 @@ export class SequencerApplication {
     this.services.add(this.audioEngine);
     this.services.add(this.midi);
     this.services.add(this.preferences);
+  }
+
+  get document(): SequencerDocument {
+    return this.documentStore.document;
   }
 
   async initialise(): Promise<void> {

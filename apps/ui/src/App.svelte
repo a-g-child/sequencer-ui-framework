@@ -3,6 +3,8 @@
   import {
     SequencerApplication,
     createDeviceInstance,
+    deserializeDocument,
+    serializeDocument,
     validateDocument,
     type SelectionItem,
     type ServiceEvent,
@@ -60,6 +62,7 @@
   import MatrixView from './lib/matrix/MatrixView.svelte';
   import type { MatrixClipView, MatrixTrackView } from './lib/matrix/matrix-view-model';
   import TrackModules from './lib/modules/TrackModules.svelte';
+  import { LocalProjectStore } from './lib/persistence/LocalProjectStore';
 
   type MainViewMode = 'matrix' | 'editor'
 
@@ -93,6 +96,7 @@
   const playback = app.services.add(new PlaybackService())
   const controller = new AppController(app)
   const store = app.documentStore
+  const localProjectStore = new LocalProjectStore()
   const launchQuantizeOptions: Array<{
     id: ClipLaunchQuantize
     label: string
@@ -105,11 +109,21 @@
   ]
   controller.selectInitialTrack()
   onMount(() => {
-    const unsubscribe = app.serviceEvents.subscribe(handleServiceEvent)
+    const unsubscribeServices = app.serviceEvents.subscribe(handleServiceEvent)
+    const unsubscribeDocument = store.events.subscribe((event) => {
+      if (
+        event.type === 'operation:executed' ||
+        event.type === 'operation:undone' ||
+        event.type === 'operation:redone'
+      ) {
+        projectPersistenceStatus = 'Unsaved changes'
+      }
+    })
     void app.initialise()
 
     return () => {
-      unsubscribe()
+      unsubscribeServices()
+      unsubscribeDocument()
       void app.shutdown()
     }
   })
@@ -161,6 +175,8 @@
   let webMidiLabel = 'MIDI'
   let webMidiStatus = ''
   let samplerSampleStatus = ''
+  let projectPersistenceStatus = 'Unsaved'
+  let lastProjectSavedAt: Date | undefined
   let selectedSamplerSlotId = 'slot-1'
   let diagnosticsOpen = false
   let runtimeParameterValues: Record<string, ParameterValue> = {}
@@ -965,6 +981,48 @@
     syncView()
   }
 
+  function saveProject() {
+    try {
+      localProjectStore.save(serializeDocument(store.document))
+      lastProjectSavedAt = new Date()
+      projectPersistenceStatus = `Saved ${lastProjectSavedAt.toLocaleTimeString()}`
+    } catch (error) {
+      projectPersistenceStatus =
+        error instanceof Error ? `Save failed: ${error.message}` : 'Save failed'
+    }
+  }
+
+  function loadProject() {
+    try {
+      const serialized = localProjectStore.load()
+
+      if (!serialized) {
+        projectPersistenceStatus = 'No saved project'
+        return
+      }
+
+      playback.panic()
+      store.replaceDocument(deserializeDocument(serialized))
+      controller.selectInitialTrack()
+      activeClipId = undefined
+      activePattern = store.document.patterns.values()[0]
+      activeEditor = 'piano-roll'
+      viewMode = 'matrix'
+      runtimeParameterValues = {}
+      automatedRuntimeParameterIds = new Set<string>()
+      samplerSampleStatus = 'Project loaded; sample files may need reloading'
+      lastProjectSavedAt = new Date()
+      projectPersistenceStatus = `Loaded ${lastProjectSavedAt.toLocaleTimeString()}`
+      syncView()
+      playbackStatus = playback.status
+      refreshSelectedTrackWebAudioSettings()
+      refreshWebMidiStatus()
+    } catch (error) {
+      projectPersistenceStatus =
+        error instanceof Error ? `Load failed: ${error.message}` : 'Load failed'
+    }
+  }
+
   function renameSelectedTrack() {
     const nextName = draftName.trim()
 
@@ -1225,8 +1283,11 @@
         <button type="button" on:click={showMatrixView}>Matrix</button>
       {/if}
       <button type="button" on:click={addTrack}>Add Track</button>
+      <button type="button" on:click={saveProject}>Save Project</button>
+      <button type="button" on:click={loadProject}>Load Project</button>
       <button type="button" on:click={undo} disabled={!canUndo}>Undo</button>
       <button type="button" on:click={redo} disabled={!canRedo}>Redo</button>
+      <span class="project-save-status">{projectPersistenceStatus}</span>
     </div>
   </svelte:fragment>
 

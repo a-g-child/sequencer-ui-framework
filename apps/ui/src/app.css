@@ -106,6 +106,16 @@ h2 {
   color: var(--text-primary);
 }
 
+.project-save-status {
+  min-height: var(--control-height-lg);
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
 .pane-heading {
   min-height: var(--pane-heading-min-height);
   display: flex;
@@ -593,6 +603,11 @@ select {
 
   .toolbar button {
     flex: 1 1 var(--mobile-toolbar-button-basis);
+  }
+
+  .project-save-status {
+    flex: 1 1 100%;
+    justify-content: center;
   }
 
 }

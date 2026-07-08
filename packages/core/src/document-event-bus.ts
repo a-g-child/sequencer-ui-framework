@@ -6,6 +6,7 @@ export type DocumentEventType =
   | "operation:executed"
   | "operation:undone"
   | "operation:redone"
+  | "document:replaced"
   | "selection:changed"
   | "clipboard:changed"
   | "parameter-preview";

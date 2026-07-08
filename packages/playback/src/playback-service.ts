@@ -294,6 +294,11 @@ export class PlaybackService implements Service, DocumentObserver {
     return this.liveClips.state.activeClipByTrackId[trackId]?.clipId
   }
 
+  panic(): void {
+    this.panicRuntimeVoices()
+    this.emitStatus()
+  }
+
   async setWebAudioEnabled(enabled: boolean): Promise<void> {
     if (enabled) {
       await this.outputManager.connect(this.webAudioOutput.id)

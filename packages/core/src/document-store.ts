@@ -20,7 +20,11 @@ export class DocumentStore {
 
   private readonly observers = new Set<DocumentObserver>();
 
-  constructor(public readonly document: SequencerDocument) {}
+  constructor(private currentDocument: SequencerDocument) {}
+
+  get document(): SequencerDocument {
+    return this.currentDocument;
+  }
 
   execute(operation: Operation): void {
     this.history.execute(this.document, operation);
@@ -85,6 +89,21 @@ export class DocumentStore {
       items: [],
       payload: undefined
     });
+  }
+
+  replaceDocument(document: SequencerDocument): void {
+    this.currentDocument = document;
+    this.history.clear();
+    this.selection.clear();
+    this.clipboard.clear();
+    const operation: Operation = {
+      name: "Replace Document",
+      execute: () => {},
+      undo: () => {}
+    };
+
+    this.events.emit({ type: "document:replaced", operation });
+    this.notifyCommandExecuted(operation);
   }
 
   previewParameterValue(parameterId: string, value: unknown): void {
