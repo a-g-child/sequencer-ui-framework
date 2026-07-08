@@ -140,6 +140,10 @@
   let selectedTrackWebAudioSettings =
     playback.webAudioTrackSettings(selectedTrackId)
   let webAudioEnabled = selectedTrackWebAudioSettings.enabled
+  let webMidiEnabled =
+    playbackStatus.webMidi.connected &&
+    playbackStatus.outputManager.activeOutputIds.includes('web-midi')
+  let webMidiLabel = 'MIDI'
   let diagnosticsOpen = false
   let runtimeParameterValues: Record<string, ParameterValue> = {}
   let automatedRuntimeParameterIds = new Set<string>()
@@ -220,6 +224,7 @@
     )
     refreshMatrixTracks()
     refreshSelectedTrackWebAudioSettings()
+    refreshWebMidiStatus()
     issues = validateDocument(store.document)
     canUndo = store.history.canUndo()
     canRedo = store.history.canRedo()
@@ -286,6 +291,7 @@
       refreshSelectedTrackClips()
       refreshMatrixTracks()
       refreshSelectedTrackWebAudioSettings()
+      refreshWebMidiStatus()
     }
 
     if (event.type === 'playback:runtime-parameters') {
@@ -341,6 +347,13 @@
     webAudioEnabled =
       selectedTrackWebAudioSettings.enabled &&
       playbackStatus.outputManager.activeOutputIds.includes('web-audio')
+  }
+
+  function refreshWebMidiStatus() {
+    webMidiEnabled =
+      playbackStatus.webMidi.connected &&
+      playbackStatus.outputManager.activeOutputIds.includes('web-midi')
+    webMidiLabel = playbackStatus.webMidi.outputName ?? 'MIDI'
   }
 
   function applyRuntimeParameterValues(
@@ -536,6 +549,12 @@
 
   async function toggleWebAudioOutput() {
     await setSelectedTrackWebAudioEnabled(!webAudioEnabled)
+  }
+
+  async function toggleWebMidiOutput() {
+    await playback.setWebMidiEnabled(!webMidiEnabled)
+    playbackStatus = playback.status
+    refreshWebMidiStatus()
   }
 
   function setDeviceParameterValue(
@@ -1120,12 +1139,15 @@
       {selectedTrackDeviceName}
       {selectedTrackDeviceParameterViews}
       {webAudioEnabled}
+      {webMidiEnabled}
+      {webMidiLabel}
       {displayedTrackParameterValue}
       onSetNumberPreview={setNumberPreview}
       onCommitNumberValue={commitNumberValue}
       onSetParameterValue={setParameterValue}
       onToggleBooleanParameter={toggleBooleanParameter}
       onToggleWebAudioOutput={toggleWebAudioOutput}
+      onToggleWebMidiOutput={toggleWebMidiOutput}
       onSetDeviceParameterValue={setDeviceParameterValue}
     />
 

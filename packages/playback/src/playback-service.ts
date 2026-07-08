@@ -27,6 +27,7 @@ import {
   OutputManager,
   StatisticsOutput,
   WebAudioOutput,
+  WebMidiOutput,
   type OutputManagerStatus
 } from './output'
 import type { PlaybackOutputStatistics } from './output/StatisticsOutput'
@@ -35,6 +36,7 @@ import type {
   WebAudioOscillatorSettingsUpdate,
   WebAudioWaveform
 } from './output/WebAudioOutput'
+import type { WebMidiOutputStatus } from './output/WebMidiOutput'
 import {
   samplePlaybackAutomationValues,
   TypeScriptScheduler,
@@ -55,6 +57,7 @@ export interface PlaybackServiceStatus extends SchedulerStatus {
     readonly defaultSettings: WebAudioOscillatorSettings
     readonly trackSettings: Readonly<Record<string, WebAudioOscillatorSettings>>
   }
+  readonly webMidi: WebMidiOutputStatus
 }
 
 export interface PlaybackVoiceStatus {
@@ -82,6 +85,7 @@ export class PlaybackService implements Service, DocumentObserver {
   private readonly nativeAudioAdapter = new NativeAudioAdapter()
   private readonly statisticsOutput = new StatisticsOutput()
   private readonly webAudioOutput = new WebAudioOutput()
+  private readonly webMidiOutput = new WebMidiOutput()
   private unsubscribeServiceEvents?: () => void
 
   constructor(scheduler?: Scheduler & { readonly status?: SchedulerStatus }) {
@@ -132,7 +136,8 @@ export class PlaybackService implements Service, DocumentObserver {
       deviceManager: this.deviceManager.status,
       voice: this.voiceStatus(),
       statistics: this.statisticsOutput.statistics,
-      webAudio: this.webAudioOutput.settings
+      webAudio: this.webAudioOutput.settings,
+      webMidi: this.webMidiOutput.status
     }
   }
 
@@ -298,6 +303,20 @@ export class PlaybackService implements Service, DocumentObserver {
     this.emitStatus()
   }
 
+  async setWebMidiEnabled(enabled: boolean): Promise<void> {
+    if (enabled) {
+      await this.outputManager.connect(this.webMidiOutput.id)
+
+      if (!this.webMidiOutput.status.connected) {
+        await this.outputManager.disconnect(this.webMidiOutput.id)
+      }
+    } else {
+      await this.outputManager.disconnect(this.webMidiOutput.id)
+    }
+
+    this.emitStatus()
+  }
+
   setWebAudioWaveform(waveform: WebAudioWaveform): void {
     this.webAudioOutput.setWaveform(waveform)
     this.emitStatus()
@@ -447,6 +466,7 @@ export class PlaybackService implements Service, DocumentObserver {
     await this.outputManager.register(new ConsoleOutput())
     await this.outputManager.register(new MidiOutputStub(), false)
     await this.outputManager.register(this.webAudioOutput, false)
+    await this.outputManager.register(this.webMidiOutput, false)
     await this.outputManager.register(new EventLoggerOutput(), false)
     await this.outputManager.register(this.statisticsOutput)
   }

@@ -25,6 +25,8 @@
   export let selectedTrackDeviceName = 'No device'
   export let selectedTrackDeviceParameterViews: DeviceParameterView[] = []
   export let webAudioEnabled = false
+  export let webMidiEnabled = false
+  export let webMidiLabel = 'MIDI'
   export let displayedTrackParameterValue: (
     property: InspectorPropertyView
   ) => ParameterValue
@@ -36,6 +38,7 @@
   ) => void
   export let onToggleBooleanParameter: (property: InspectorPropertyView) => void
   export let onToggleWebAudioOutput: () => void
+  export let onToggleWebMidiOutput: () => void
   export let onSetDeviceParameterValue: (
     deviceInstanceId: string,
     parameterKey: string,
@@ -122,6 +125,18 @@
           disabled={!selectedTrackId}
         >
           {webAudioEnabled ? 'On' : 'Off'}
+        </button>
+      </div>
+      <div class="audio-toggle">
+        <span>{webMidiLabel}</span>
+        <button
+          type="button"
+          class="audio-enable-button"
+          class:active={webMidiEnabled}
+          aria-pressed={webMidiEnabled}
+          on:click={onToggleWebMidiOutput}
+        >
+          {webMidiEnabled ? 'On' : 'Off'}
         </button>
       </div>
     </div>

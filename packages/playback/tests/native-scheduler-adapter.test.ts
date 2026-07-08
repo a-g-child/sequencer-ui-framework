@@ -5,6 +5,8 @@ import { createNativeSchedulerWasmStub } from '@sequencer/native-scheduler-wasm'
 import { NativeAudioAdapter } from '../src/native/NativeAudioAdapter.ts'
 import { NativeSchedulerAdapter } from '../src/native/NativeSchedulerAdapter.ts'
 import { WasmSchedulerAdapter } from '../src/native/WasmSchedulerAdapter.ts'
+import { midiMessagesForPlaybackEvent } from '../src/output/MidiMessages.ts'
+import { WebMidiOutput } from '../src/output/WebMidiOutput.ts'
 import type { DeviceCommand } from '../src/native/schemas.ts'
 import {
   createPanicDeviceCommand,
@@ -89,6 +91,62 @@ describe('NativeAudioAdapter', () => {
     assert.equal(adapter.status.receivedCommandCount, 2)
     assert.equal(adapter.status.lastCommand, commands[1])
     assert.equal(adapter.acks().length, 2)
+  })
+})
+
+describe('MIDI output messages', () => {
+  it('maps playback events to MIDI bytes', () => {
+    assert.deepEqual(
+      midiMessagesForPlaybackEvent({
+        id: 'note-1:on',
+        type: 'note:on',
+        noteId: 'note-1',
+        trackId: 'track-1',
+        channel: 1,
+        beat: 0,
+        timeMs: 0,
+        pitch: 60,
+        velocity: 0.5
+      }),
+      [[0x91, 60, 64]]
+    )
+    assert.deepEqual(
+      midiMessagesForPlaybackEvent({
+        id: 'note-1:off',
+        type: 'note:off',
+        noteId: 'note-1',
+        trackId: 'track-1',
+        channel: 1,
+        beat: 1,
+        timeMs: 500,
+        pitch: 60,
+        velocity: 0
+      }),
+      [[0x81, 60, 0]]
+    )
+    assert.deepEqual(
+      midiMessagesForPlaybackEvent({
+        id: 'automation-1',
+        type: 'automation:set',
+        automationId: 'automation-1',
+        parameterId: 'track-volume',
+        parameterKey: 'track.volume',
+        trackId: 'track-1',
+        channel: 1,
+        beat: 0,
+        timeMs: 0,
+        value: 0.25
+      }),
+      [[0xb1, 7, 32]]
+    )
+  })
+
+  it('keeps Web MIDI unavailable instead of throwing outside browsers', async () => {
+    const output = new WebMidiOutput()
+
+    await output.connect()
+
+    assert.equal(output.status.connected, false)
   })
 })
 
