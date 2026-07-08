@@ -454,6 +454,7 @@ export class PlaybackService implements Service, DocumentObserver {
       this.syncBasicSynthRuntimeParametersToWebAudio()
       this.nativeAudioAdapter.handleCommands(deviceResult.deviceCommands)
       this.webAudioOutput.handleVoiceActions(deviceResult.voiceActions)
+      this.webAudioOutput.handleSampleActions(deviceResult.sampleActions)
       this.outputManager.handleEvents(events)
       this.emitPlaybackEvents(events)
       this.emitRuntimeParameterValues(state)

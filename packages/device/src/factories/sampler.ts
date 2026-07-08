@@ -1,3 +1,4 @@
+import { VoiceManager, type SampleVoiceAction } from '@sequencer/audio';
 import { SAMPLER_DESCRIPTOR } from '../descriptors/sampler.ts';
 import type { DeviceFactory } from '../factory.ts';
 import type { DeviceInstance } from '../instance.ts';
@@ -24,6 +25,9 @@ export type SamplerDiagnostics = {
 export class SamplerRuntimeDevice<
   TEvent = unknown
 > extends BaseRuntimeDevice<TEvent> {
+  readonly voices = new VoiceManager(16);
+
+  private pendingSampleActions: SampleVoiceAction[] = [];
   private triggeredSamples = 0;
   private missingSamples = 0;
   private lastTriggeredSlot?: string;
@@ -48,13 +52,28 @@ export class SamplerRuntimeDevice<
   }
 
   processEvents(events: readonly TEvent[]): void {
+    this.pendingSampleActions = [];
+
     for (const event of events) {
       if (isNoteOnEvent(event)) {
-        this.triggerSampleForNote(event.pitch);
+        this.triggerSampleForNote(event);
         continue;
       }
 
       if (isNoteOffEvent(event)) {
+        const releasedVoices = this.voices.releaseVoiceByNote(
+          event.noteId,
+          event.timeMs
+        );
+
+        for (const voice of releasedVoices) {
+          this.pendingSampleActions.push({
+            type: 'sample:release',
+            voiceId: voice.id,
+            timeMs: event.timeMs
+          });
+        }
+
         continue;
       }
 
@@ -93,8 +112,19 @@ export class SamplerRuntimeDevice<
     };
   }
 
-  private triggerSampleForNote(pitch: number): void {
-    const slot = this.resolveSlotForNote(pitch);
+  consumeSampleActions(): SampleVoiceAction[] {
+    const actions = this.pendingSampleActions;
+    this.pendingSampleActions = [];
+    return actions;
+  }
+
+  panic(): void {
+    this.pendingSampleActions = [];
+    this.voices.clear();
+  }
+
+  private triggerSampleForNote(event: NoteOnLike): void {
+    const slot = this.resolveSlotForNote(event.pitch);
     this.lastTriggeredSlot = slot?.id;
 
     if (!slot?.assetId) {
@@ -102,7 +132,47 @@ export class SamplerRuntimeDevice<
       return;
     }
 
+    const result = this.voices.startVoiceWithStealing({
+      noteId: event.noteId,
+      trackId: event.destination?.trackId,
+      pitch: event.pitch,
+      velocity: event.velocity,
+      nowMs: event.timeMs
+    });
+
+    if (result.stolenVoice) {
+      this.pendingSampleActions.push({
+        type: 'sample:release',
+        voiceId: result.stolenVoice.id,
+        timeMs: event.timeMs
+      });
+    }
+
     this.triggeredSamples += 1;
+    this.pendingSampleActions.push({
+      type: 'sample:start',
+      voiceId: result.voice.id,
+      trackId: result.voice.trackId,
+      noteId: result.voice.noteId,
+      assetId: slot.assetId,
+      pitch: result.voice.pitch,
+      velocity: result.voice.velocity,
+      playbackRate: playbackRateForSlot(slot, result.voice.pitch, this.mode),
+      gain: sampleGain(slot, result.voice.velocity, this.volume),
+      startSeconds: Math.max(0, slot.start),
+      endSeconds: slot.end === undefined ? undefined : Math.max(0, slot.end),
+      loopEnabled: slot.loop,
+      loopStartSeconds: Math.max(0, slot.start),
+      loopEndSeconds: slot.end === undefined ? undefined : Math.max(0, slot.end),
+      timeMs: event.timeMs
+    });
+  }
+
+  private get volume(): number {
+    const value = getRuntimeParameterEffectiveValue(this.parameters, 'volume');
+    const volume = Number(value ?? 0.8);
+
+    return Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : 0.8;
   }
 }
 
@@ -138,27 +208,62 @@ function isParameterEvent(
   );
 }
 
-function isNoteOnEvent(event: unknown): event is {
+type NoteOnLike = {
   readonly type: 'note:on';
+  readonly noteId?: string;
+  readonly destination?: { readonly trackId?: string };
   readonly pitch: number;
-} {
+  readonly velocity: number;
+  readonly timeMs: number;
+};
+
+function isNoteOnEvent(event: unknown): event is NoteOnLike {
   return (
     typeof event === 'object' &&
     event !== null &&
     'type' in event &&
     event.type === 'note:on' &&
     'pitch' in event &&
-    typeof event.pitch === 'number'
+    typeof event.pitch === 'number' &&
+    'velocity' in event &&
+    typeof event.velocity === 'number' &&
+    'timeMs' in event &&
+    typeof event.timeMs === 'number'
   );
 }
 
 function isNoteOffEvent(event: unknown): event is {
   readonly type: 'note:off';
+  readonly noteId: string;
+  readonly timeMs: number;
 } {
   return (
     typeof event === 'object' &&
     event !== null &&
     'type' in event &&
-    event.type === 'note:off'
+    event.type === 'note:off' &&
+    'noteId' in event &&
+    typeof event.noteId === 'string' &&
+    'timeMs' in event &&
+    typeof event.timeMs === 'number'
   );
+}
+
+function playbackRateForSlot(
+  slot: SampleSlot,
+  pitch: number,
+  mode: SamplerMode
+): number {
+  if (mode === 'multi') return 1;
+
+  return 2 ** ((pitch - slot.rootNote) / 12);
+}
+
+function sampleGain(slot: SampleSlot, velocity: number, volume: number): number {
+  const slotGain = Number.isFinite(slot.gain) ? slot.gain : 1;
+  const normalizedVelocity = Number.isFinite(velocity)
+    ? Math.min(1, Math.max(0, velocity))
+    : 0;
+
+  return Math.max(0, slotGain) * normalizedVelocity * volume;
 }

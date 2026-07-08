@@ -1,4 +1,4 @@
-import type { VoiceAction } from '@sequencer/audio'
+import type { SampleVoiceAction, VoiceAction } from '@sequencer/audio'
 import type { PlaybackEvent } from '../events'
 import { noteOnlyCapabilities } from './OutputEvent'
 import type { PlaybackOutput } from './PlaybackOutput'
@@ -54,6 +54,14 @@ type ActiveVoice = {
   stopScheduled?: boolean
 }
 
+type ActiveSample = {
+  readonly source: AudioBufferSourceNode
+  readonly gain: GainNode
+  readonly trackId?: string
+  readonly startTime: number
+  stopScheduled?: boolean
+}
+
 type VoiceActionEnvelope = Extract<
   VoiceAction,
   { type: 'voice:start' }
@@ -69,6 +77,8 @@ export class WebAudioOutput implements PlaybackOutput {
   private defaultSettings: WebAudioOscillatorSettings
   private readonly trackSettings = new Map<string, WebAudioOscillatorSettings>()
   private readonly voices = new Map<string, ActiveVoice>()
+  private readonly samples = new Map<string, ActiveSample>()
+  private readonly sampleBuffers = new Map<string, AudioBuffer>()
 
   constructor(options: WebAudioOutputOptions = {}) {
     this.defaultSettings = {
@@ -209,9 +219,24 @@ export class WebAudioOutput implements PlaybackOutput {
     }
   }
 
+  handleSampleActions(actions: readonly SampleVoiceAction[]): void {
+    if (!this.context || !this.masterGain) return
+
+    for (const action of actions) {
+      if (action.type === 'sample:start') {
+        this.startSample(action)
+      }
+
+      if (action.type === 'sample:release') {
+        this.stopSample(action.voiceId, action.timeMs)
+      }
+    }
+  }
+
   panic(): void {
     if (!this.context) {
       this.voices.clear()
+      this.samples.clear()
       return
     }
 
@@ -220,6 +245,10 @@ export class WebAudioOutput implements PlaybackOutput {
     for (const [key, voice] of this.voices.entries()) {
       this.forceStopVoice(key, voice, stopTime)
     }
+
+    for (const [key, sample] of this.samples.entries()) {
+      this.forceStopSample(key, sample, stopTime)
+    }
   }
 
   panicTrack(trackId: string): void {
@@ -227,6 +256,11 @@ export class WebAudioOutput implements PlaybackOutput {
       for (const [key, voice] of this.voices.entries()) {
         if (voice.trackId === trackId) {
           this.voices.delete(key)
+        }
+      }
+      for (const [key, sample] of this.samples.entries()) {
+        if (sample.trackId === trackId) {
+          this.samples.delete(key)
         }
       }
       return
@@ -238,6 +272,12 @@ export class WebAudioOutput implements PlaybackOutput {
       if (voice.trackId !== trackId) continue
 
       this.forceStopVoice(key, voice, stopTime)
+    }
+
+    for (const [key, sample] of this.samples.entries()) {
+      if (sample.trackId !== trackId) continue
+
+      this.forceStopSample(key, sample, stopTime)
     }
   }
 
@@ -314,6 +354,81 @@ export class WebAudioOutput implements PlaybackOutput {
     voice.oscillator.stop(stopTime + 0.02)
   }
 
+  private startSample(
+    action: Extract<SampleVoiceAction, { type: 'sample:start' }>
+  ): void {
+    if (!this.context || !this.masterGain) return
+
+    const key = action.voiceId
+    const existingSample = this.samples.get(key)
+    if (existingSample) {
+      this.forceStopSample(key, existingSample, this.context.currentTime)
+    }
+
+    const source = this.context.createBufferSource()
+    const gain = this.context.createGain()
+    const buffer = this.bufferForSampleAction(action)
+    const startTime = this.outputTime(action.timeMs)
+    const offset = sampleOffsetSeconds(buffer, action)
+    const duration = sampleDurationSeconds(buffer, action)
+
+    source.buffer = buffer
+    source.playbackRate.setValueAtTime(
+      Math.max(0.001, action.playbackRate),
+      startTime
+    )
+    source.loop = action.loopEnabled
+    if (action.loopStartSeconds !== undefined) {
+      source.loopStart = Math.max(0, action.loopStartSeconds)
+    }
+    if (action.loopEndSeconds !== undefined) {
+      source.loopEnd = Math.max(0, action.loopEndSeconds)
+    }
+    gain.gain.setValueAtTime(Math.max(0, action.gain), startTime)
+
+    source.connect(gain)
+    gain.connect(this.masterGain)
+    source.onended = () => {
+      if (this.samples.get(key)?.source === source) {
+        this.samples.delete(key)
+      }
+    }
+
+    if (duration === undefined) {
+      source.start(startTime, offset)
+    } else {
+      source.start(startTime, offset, duration)
+    }
+
+    this.samples.set(key, {
+      source,
+      gain,
+      trackId: action.trackId,
+      startTime
+    })
+  }
+
+  private stopSample(sampleKey: string, timeMs: number): void {
+    const sample = this.samples.get(sampleKey)
+
+    if (!sample || !this.context) return
+    if (sample.stopScheduled) return
+
+    const stopStart = this.outputTime(timeMs)
+    const stopTime = stopStart + 0.02
+
+    sample.gain.gain.cancelScheduledValues(stopStart)
+    sample.gain.gain.setValueAtTime(sample.gain.gain.value, stopStart)
+    sample.gain.gain.linearRampToValueAtTime(0, stopTime)
+    sample.source.onended = () => {
+      if (this.samples.get(sampleKey) === sample) {
+        this.samples.delete(sampleKey)
+      }
+    }
+    sample.stopScheduled = true
+    sample.source.stop(stopTime + 0.01)
+  }
+
   private forceStopVoice(
     voiceKey: string,
     voice: ActiveVoice,
@@ -341,6 +456,51 @@ export class WebAudioOutput implements PlaybackOutput {
       }
     }
     this.voices.delete(voiceKey)
+  }
+
+  private forceStopSample(
+    sampleKey: string,
+    sample: ActiveSample,
+    stopTime: number
+  ): void {
+    const safeStopTime = Math.max(stopTime, sample.startTime) + 0.001
+
+    sample.gain.gain.cancelScheduledValues(stopTime)
+    sample.gain.gain.setValueAtTime(0, stopTime)
+    try {
+      sample.gain.disconnect()
+    } catch {
+      // Already disconnected samples are safe to ignore during panic cleanup.
+    }
+    if (!sample.stopScheduled) {
+      sample.stopScheduled = true
+      try {
+        sample.source.stop(safeStopTime)
+      } catch {
+        try {
+          sample.source.stop()
+        } catch {
+          // Already stopped samples are safe to ignore during panic cleanup.
+        }
+      }
+    }
+    this.samples.delete(sampleKey)
+  }
+
+  private bufferForSampleAction(
+    action: Extract<SampleVoiceAction, { type: 'sample:start' }>
+  ): AudioBuffer {
+    if (!this.context) {
+      throw new Error('Web Audio context is not available')
+    }
+
+    const existingBuffer = this.sampleBuffers.get(action.assetId)
+
+    if (existingBuffer) return existingBuffer
+
+    const buffer = createFallbackSampleBuffer(this.context, action.assetId)
+    this.sampleBuffers.set(action.assetId, buffer)
+    return buffer
   }
 
   private outputTime(timeMs: number): number {
@@ -555,6 +715,59 @@ function effectiveCutoff(
   const trackingRatio = 2 ** (((pitch - 60) / 12) * settings.keyTracking)
 
   return clampFrequency(settings.cutoff * trackingRatio)
+}
+
+function sampleDurationSeconds(
+  buffer: AudioBuffer,
+  action: Extract<SampleVoiceAction, { type: 'sample:start' }>
+): number | undefined {
+  if (action.loopEnabled) return undefined
+
+  const start = sampleOffsetSeconds(buffer, action)
+  const end = action.endSeconds === undefined
+    ? buffer.duration
+    : Math.min(buffer.duration, Math.max(start, action.endSeconds))
+  const duration = end - start
+
+  return duration > 0 ? duration : undefined
+}
+
+function sampleOffsetSeconds(
+  buffer: AudioBuffer,
+  action: Extract<SampleVoiceAction, { type: 'sample:start' }>
+): number {
+  return Math.min(buffer.duration, Math.max(0, action.startSeconds))
+}
+
+function createFallbackSampleBuffer(
+  context: AudioContext,
+  assetId: string
+): AudioBuffer {
+  const durationSeconds = 0.18
+  const length = Math.max(1, Math.floor(context.sampleRate * durationSeconds))
+  const buffer = context.createBuffer(1, length, context.sampleRate)
+  const data = buffer.getChannelData(0)
+  const frequency = fallbackSampleFrequency(assetId)
+
+  for (let index = 0; index < data.length; index += 1) {
+    const progress = index / data.length
+    const envelope = Math.exp(-progress * 8)
+    data[index] = Math.sin((index / context.sampleRate) * frequency * Math.PI * 2) *
+      envelope *
+      0.4
+  }
+
+  return buffer
+}
+
+function fallbackSampleFrequency(assetId: string): number {
+  let hash = 0
+
+  for (let index = 0; index < assetId.length; index += 1) {
+    hash = (hash * 31 + assetId.charCodeAt(index)) >>> 0
+  }
+
+  return 110 + (hash % 36) * 10
 }
 
 function performanceNow(): number {

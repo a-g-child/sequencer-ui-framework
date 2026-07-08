@@ -40,3 +40,27 @@ export type VoiceAction =
     }
   | { type: 'voice:release'; voiceId: string; timeMs: number }
   | { type: 'voice:steal'; voiceId: string; timeMs: number };
+
+export type SampleVoiceAction =
+  | {
+      type: 'sample:start';
+      voiceId: string;
+      trackId?: string;
+      noteId?: string;
+      assetId: string;
+      pitch: number;
+      velocity: number;
+      playbackRate: number;
+      gain: number;
+      startSeconds: number;
+      endSeconds?: number;
+      loopEnabled: boolean;
+      loopStartSeconds?: number;
+      loopEndSeconds?: number;
+      timeMs: number;
+    }
+  | {
+      type: 'sample:release';
+      voiceId: string;
+      timeMs: number;
+    };

@@ -8,7 +8,7 @@ import {
   type DeviceParameterValue,
   type RuntimeDevice
 } from '@sequencer/device'
-import type { VoiceAction } from '@sequencer/audio'
+import type { SampleVoiceAction, VoiceAction } from '@sequencer/audio'
 import type { PlaybackEvent } from './events'
 import type { DeviceCommand } from './native/schemas.ts'
 import { voiceActionsToDeviceCommands } from './native/voice-action-commands.ts'
@@ -31,6 +31,7 @@ export interface PlaybackDeviceDiagnostics {
 
 export interface PlaybackDeviceProcessResult {
   readonly voiceActions: VoiceAction[]
+  readonly sampleActions: SampleVoiceAction[]
   readonly deviceCommands: DeviceCommand[]
 }
 
@@ -117,10 +118,11 @@ export class PlaybackDeviceManager {
 
   processEvents(events: readonly PlaybackEvent[]): PlaybackDeviceProcessResult {
     const voiceActions: VoiceAction[] = []
+    const sampleActions: SampleVoiceAction[] = []
     const deviceCommands: DeviceCommand[] = []
 
     if (events.length === 0) {
-      return { voiceActions, deviceCommands }
+      return { voiceActions, sampleActions, deviceCommands }
     }
 
     for (const device of this.runtimeDevices.values()) {
@@ -138,9 +140,13 @@ export class PlaybackDeviceManager {
         voiceActions.push(...actions)
         deviceCommands.push(...voiceActionsToDeviceCommands(actions, device.instanceId))
       }
+
+      if (hasSampleActions(device)) {
+        sampleActions.push(...device.consumeSampleActions())
+      }
     }
 
-    return { voiceActions, deviceCommands }
+    return { voiceActions, sampleActions, deviceCommands }
   }
 
   getDiagnostics(): PlaybackDeviceDiagnostics[] {
@@ -160,6 +166,17 @@ function hasVoiceActions(
   return (
     'consumeVoiceActions' in device &&
     typeof device.consumeVoiceActions === 'function'
+  )
+}
+
+function hasSampleActions(
+  device: PlaybackRuntimeDevice
+): device is PlaybackRuntimeDevice & {
+  consumeSampleActions(): SampleVoiceAction[]
+} {
+  return (
+    'consumeSampleActions' in device &&
+    typeof device.consumeSampleActions === 'function'
   )
 }
 

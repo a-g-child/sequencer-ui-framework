@@ -1,2 +1,2 @@
-export * from './voice';
-export * from './voice-manager';
+export * from './voice.ts';
+export * from './voice-manager.ts';

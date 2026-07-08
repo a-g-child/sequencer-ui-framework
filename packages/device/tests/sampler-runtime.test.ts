@@ -61,22 +61,60 @@ describe('SamplerRuntimeDevice', () => {
     sampler.processEvents([
       {
         type: 'note:on',
-        pitch: 36
+        noteId: 'note-1',
+        destination: { trackId: 'track-1' },
+        pitch: 36,
+        velocity: 0.5,
+        timeMs: 100
       },
       {
         type: 'note:on',
-        pitch: 38
+        noteId: 'note-2',
+        destination: { trackId: 'track-1' },
+        pitch: 38,
+        velocity: 0.75,
+        timeMs: 200
       },
       {
         type: 'note:on',
-        pitch: 40
+        noteId: 'note-3',
+        destination: { trackId: 'track-1' },
+        pitch: 40,
+        velocity: 1,
+        timeMs: 300
       },
       {
         type: 'note:off',
-        pitch: 36
+        noteId: 'note-1',
+        pitch: 36,
+        timeMs: 400
       }
     ]);
 
+    assert.deepEqual(sampler.consumeSampleActions(), [
+      {
+        type: 'sample:start',
+        voiceId: 'voice-1',
+        trackId: 'track-1',
+        noteId: 'note-1',
+        assetId: 'asset-kick',
+        pitch: 36,
+        velocity: 0.5,
+        playbackRate: 1,
+        gain: 0.4,
+        startSeconds: 0,
+        endSeconds: undefined,
+        loopEnabled: false,
+        loopStartSeconds: 0,
+        loopEndSeconds: undefined,
+        timeMs: 100
+      },
+      {
+        type: 'sample:release',
+        voiceId: 'voice-1',
+        timeMs: 400
+      }
+    ]);
     assert.deepEqual(sampler.getDiagnostics(), {
       triggeredSamples: 1,
       missingSamples: 2,
