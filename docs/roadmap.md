@@ -524,10 +524,121 @@ value:
 - sampler device foundation
 - clip matrix polish
 
-## Phase 10: Native Audio And Device Execution
+## Phase 10: Musical Devices
+
+Phase 10 should stop expanding execution backends and start making the
+groovebox musically useful.
+
+The project now has enough execution surfaces:
+
+- Web Audio
+- Web MIDI
+- native/WASM adapter seams
+
+Those are sufficient to prove the architecture. New backends such as OSC,
+JACK, ALSA, CoreAudio, ASIO, VST, CLAP, or LV2 should wait until a musical
+device needs them.
+
+The next product milestone is the sampler. It should validate that the runtime
+device architecture works for a second instrument family, not just for the
+Golden Device synth.
+
+```text
+Document
+  -> PlaybackModel
+  -> RuntimeDevice
+  -> VoiceManager
+  -> SampleVoiceAction
+  -> WebAudioOutput
+```
+
+The important change is execution, not the creative model.
+
+### Phase 10.1: Assets
+
+Before building the sampler, introduce an asset vocabulary. Samples are the
+first use case, but the same model should later support impulse responses,
+wavetables, firmware, patches, MIDI files, and other device resources.
+
+Suggested package:
+
+```text
+packages/assets/
+  src/
+    asset.ts
+    registry.ts
+    loader.ts
+```
+
+Initial vocabulary:
+
+- `AssetId`
+- `AssetDescriptor`
+- `AssetReference`
+- `AssetRegistry`
+- `AssetLoader`
+
+The document should reference assets by identity, not by browser file handles,
+absolute paths, or decoded buffers.
+
+```text
+AssetReference
+  -> AssetLoader
+  -> Decoded runtime resource
+```
+
+Later, the same reference can resolve through a native sample loader, a browser
+file loader, a bundled project asset, or a hardware upload path.
+
+### Phase 10.2: Sampler Device Foundation
+
+The sampler should be a `RuntimeDevice`, not a special output mode.
+
+Suggested document/runtime shape:
+
+```text
+SampleSlot
+  assetId
+  rootNote
+  gain
+  start
+  end
+  loop
+```
+
+The sampler runtime should reuse the existing voice lifecycle:
+
+```text
+PlaybackEvent
+  -> SamplerRuntimeDevice
+  -> VoiceManager
+  -> SampleVoiceAction
+  -> WebAudioOutput
+```
+
+The first sampler does not need stretching, slicing, reverse playback, or
+advanced modulation. Its purpose is to prove that assets, runtime devices,
+voices, and Web Audio execution compose cleanly.
+
+### Phase 10.3: Groovebox Workflow
+
+Once synth, sampler, and MIDI all exist as devices, return to the product
+surface:
+
+- sample grid polish
+- scene launching
+- clip matrix performance
+- device browser
+- track/device status
+- lightweight mixer controls
+
+These are the workflows that make the architecture feel like an instrument.
+
+## Phase 11: Native Audio And Device Execution
 
 After Phase 9 proves the adapter seam, native audio can become a serious
-runtime implementation.
+runtime implementation. It should wait until the musical device model has put
+real pressure on the execution path.
 
 Audio should enter through the runtime device and command boundary:
 
@@ -545,7 +656,7 @@ drivers.
 Voice allocation belongs inside runtime devices and reusable audio packages,
 not in the scheduler.
 
-## Phase 11: Plugin Host
+## Phase 12: Plugin Host
 
 Once real outputs and audio exist, the plugin host can become another consumer
 in the playback chain.
