@@ -162,8 +162,13 @@ export class SamplerRuntimeDevice<
       startSeconds: Math.max(0, slot.start),
       endSeconds: slot.end === undefined ? undefined : Math.max(0, slot.end),
       loopEnabled: slot.loop,
-      loopStartSeconds: Math.max(0, slot.start),
-      loopEndSeconds: slot.end === undefined ? undefined : Math.max(0, slot.end),
+      loopStartSeconds: Math.max(0, slot.loopStart ?? slot.start),
+      loopEndSeconds:
+        slot.loopEnd === undefined
+          ? slot.end === undefined
+            ? undefined
+            : Math.max(0, slot.end)
+          : Math.max(0, slot.loopEnd),
       timeMs: event.timeMs
     });
   }

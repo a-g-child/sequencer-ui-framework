@@ -530,11 +530,15 @@
 
   function buildSelectedSamplerSampleName(track: Track | undefined): string {
     const sampler = selectedSamplerDevice(track)
-    const slot = sampler?.sampleSlots?.[0]
+    const slot = selectedSamplerSlot(track)
 
     if (!slot?.assetId) return 'No sample'
 
     return store.document.assets.find(slot.assetId)?.name ?? slot.name
+  }
+
+  function selectedSamplerSlot(track: Track | undefined): SampleSlot | undefined {
+    return selectedSamplerDevice(track)?.sampleSlots?.[0]
   }
 
   function findTrackDeviceInstance(
@@ -659,6 +663,15 @@
     value: DeviceParameterValue
   ) {
     controller.setDeviceParameterValue(deviceInstanceId, parameterKey, value)
+    syncView()
+  }
+
+  function setSamplerSampleSlot(slot: SampleSlot) {
+    const sampler = selectedSamplerDevice(selectedTrack)
+
+    if (!sampler) return
+
+    controller.setSamplerSampleSlot(sampler.id, slot)
     syncView()
   }
 
@@ -1239,6 +1252,7 @@
       {webMidiLabel}
       {webMidiStatus}
       samplerSampleName={buildSelectedSamplerSampleName(selectedTrack)}
+      samplerSlot={selectedSamplerSlot(selectedTrack)}
       {samplerSampleStatus}
       {displayedTrackParameterValue}
       onSetNumberPreview={setNumberPreview}
@@ -1248,6 +1262,7 @@
       onToggleWebAudioOutput={toggleWebAudioOutput}
       onToggleWebMidiOutput={toggleWebMidiOutput}
       onLoadSamplerSampleFile={loadSamplerSampleFile}
+      onSetSamplerSampleSlot={setSamplerSampleSlot}
       onSetDeviceParameterValue={setDeviceParameterValue}
     />
 

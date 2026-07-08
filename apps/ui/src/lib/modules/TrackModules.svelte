@@ -6,7 +6,8 @@
   import type {
     DeviceInstance,
     DeviceParameterDescriptor,
-    DeviceParameterValue
+    DeviceParameterValue,
+    SampleSlot
   } from '@sequencer/device'
   import type { InspectorPropertyView } from '../inspector/inspector-model'
   import ParameterEditor from '../framework/parameter/ParameterEditor.svelte'
@@ -29,6 +30,7 @@
   export let webMidiLabel = 'MIDI'
   export let webMidiStatus = ''
   export let samplerSampleName = 'No sample'
+  export let samplerSlot: SampleSlot | undefined = undefined
   export let samplerSampleStatus = ''
   export let displayedTrackParameterValue: (
     property: InspectorPropertyView
@@ -43,6 +45,7 @@
   export let onToggleWebAudioOutput: () => void
   export let onToggleWebMidiOutput: () => void
   export let onLoadSamplerSampleFile: (file: File) => void
+  export let onSetSamplerSampleSlot: (slot: SampleSlot) => void
   export let onSetDeviceParameterValue: (
     deviceInstanceId: string,
     parameterKey: string,
@@ -59,6 +62,21 @@
     if (file) {
       onLoadSamplerSampleFile(file)
     }
+  }
+
+  function updateSamplerSlot(patch: Partial<SampleSlot>): void {
+    if (!samplerSlot) return
+
+    onSetSamplerSampleSlot({
+      ...samplerSlot,
+      ...patch
+    })
+  }
+
+  function readOptionalNumberValue(event: Event): number | undefined {
+    const value = (event.currentTarget as HTMLInputElement).value
+
+    return value === '' ? undefined : Number(value)
   }
 </script>
 
@@ -173,6 +191,92 @@
           <p class="output-status">{samplerSampleStatus}</p>
         {/if}
       </div>
+
+      {#if samplerSlot}
+        <div class="sample-slot-grid" aria-label="Sample slot settings">
+          <label class="sample-slot-control">
+            <span>Root</span>
+            <input
+              type="number"
+              min="0"
+              max="127"
+              step="1"
+              value={samplerSlot.rootNote}
+              on:change={(event) =>
+                updateSamplerSlot({ rootNote: readNumberValue(event) })}
+            />
+          </label>
+          <label class="sample-slot-control">
+            <span>Gain</span>
+            <input
+              type="number"
+              min="0"
+              max="4"
+              step="0.01"
+              value={samplerSlot.gain}
+              on:change={(event) =>
+                updateSamplerSlot({ gain: readNumberValue(event) })}
+            />
+          </label>
+          <label class="sample-slot-control">
+            <span>Start</span>
+            <input
+              type="number"
+              min="0"
+              step="0.001"
+              value={samplerSlot.start}
+              on:change={(event) =>
+                updateSamplerSlot({ start: readNumberValue(event) })}
+            />
+          </label>
+          <label class="sample-slot-control">
+            <span>End</span>
+            <input
+              type="number"
+              min="0"
+              step="0.001"
+              value={samplerSlot.end ?? ''}
+              on:change={(event) =>
+                updateSamplerSlot({ end: readOptionalNumberValue(event) })}
+            />
+          </label>
+          <label class="sample-slot-toggle">
+            <span>Loop</span>
+            <button
+              type="button"
+              class:active={samplerSlot.loop}
+              aria-pressed={samplerSlot.loop}
+              on:click={() => updateSamplerSlot({ loop: !samplerSlot.loop })}
+            >
+              {samplerSlot.loop ? 'On' : 'Off'}
+            </button>
+          </label>
+          <label class="sample-slot-control">
+            <span>Loop Start</span>
+            <input
+              type="number"
+              min="0"
+              step="0.001"
+              value={samplerSlot.loopStart ?? samplerSlot.start}
+              disabled={!samplerSlot.loop}
+              on:change={(event) =>
+                updateSamplerSlot({ loopStart: readOptionalNumberValue(event) })}
+            />
+          </label>
+          <label class="sample-slot-control">
+            <span>Loop End</span>
+            <input
+              type="number"
+              min="0"
+              step="0.001"
+              value={samplerSlot.loopEnd ?? samplerSlot.end ?? ''}
+              disabled={!samplerSlot.loop}
+              on:change={(event) =>
+                updateSamplerSlot({ loopEnd: readOptionalNumberValue(event) })}
+            />
+          </label>
+        </div>
+      {/if}
     {/if}
 
     {#if selectedTrackDeviceParameterViews.length > 0}
@@ -360,6 +464,52 @@
     pointer-events: none;
   }
 
+  .sample-slot-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--spacing-sm);
+  }
+
+  .sample-slot-control,
+  .sample-slot-toggle {
+    min-width: 0;
+    display: grid;
+    gap: var(--spacing-2xs);
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .sample-slot-control input {
+    min-width: 0;
+    min-height: var(--control-height-sm);
+    padding: 0 var(--spacing-xs);
+    border: var(--border-width) solid var(--border);
+    border-radius: var(--radius-control);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+  }
+
+  .sample-slot-control input:disabled {
+    opacity: 0.45;
+  }
+
+  .sample-slot-toggle button {
+    min-height: var(--control-height-sm);
+    border-radius: var(--radius-control);
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+  }
+
+  .sample-slot-toggle button.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
   .device-parameter-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -378,7 +528,8 @@
     }
 
     .parameter-module-grid,
-    .audio-output-panel {
+    .audio-output-panel,
+    .sample-slot-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 

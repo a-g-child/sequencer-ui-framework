@@ -11,4 +11,6 @@ export type SampleSlot = {
   start: number;
   end?: number;
   loop: boolean;
+  loopStart?: number;
+  loopEnd?: number;
 };

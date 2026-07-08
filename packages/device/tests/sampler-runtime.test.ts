@@ -17,6 +17,8 @@ const instance: SamplerDeviceInstance = {
       rootNote: 36,
       gain: 1,
       start: 0,
+      loopStart: 0.01,
+      loopEnd: 0.12,
       loop: false
     },
     {
@@ -105,8 +107,8 @@ describe('SamplerRuntimeDevice', () => {
         startSeconds: 0,
         endSeconds: undefined,
         loopEnabled: false,
-        loopStartSeconds: 0,
-        loopEndSeconds: undefined,
+        loopStartSeconds: 0.01,
+        loopEndSeconds: 0.12,
         timeMs: 100
       },
       {
