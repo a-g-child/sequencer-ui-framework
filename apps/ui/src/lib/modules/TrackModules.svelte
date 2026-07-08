@@ -20,6 +20,11 @@
     automated?: boolean
   }
 
+  type SamplerSlotView = SampleSlot & {
+    loaded: boolean
+    label: string
+  }
+
   export let selectedTrack: Track | undefined = undefined
   export let selectedTrackId = ''
   export let selectedTrackParameterViews: InspectorPropertyView[] = []
@@ -31,6 +36,8 @@
   export let webMidiStatus = ''
   export let samplerSampleName = 'No sample'
   export let samplerSlot: SampleSlot | undefined = undefined
+  export let samplerSlots: SamplerSlotView[] = []
+  export let selectedSamplerSlotId = 'slot-1'
   export let samplerSampleStatus = ''
   export let displayedTrackParameterValue: (
     property: InspectorPropertyView
@@ -46,6 +53,7 @@
   export let onToggleWebMidiOutput: () => void
   export let onLoadSamplerSampleFile: (file: File) => void
   export let onSetSamplerSampleSlot: (slot: SampleSlot) => void
+  export let onSelectSamplerSlot: (slotId: string) => void
   export let onSetDeviceParameterValue: (
     deviceInstanceId: string,
     parameterKey: string,
@@ -176,6 +184,22 @@
     </div>
 
     {#if selectedTrackId}
+      <div class="sample-slot-selector" aria-label="Sampler slots">
+        {#each samplerSlots as slot, index (slot.id)}
+          <button
+            type="button"
+            class:active={slot.id === selectedSamplerSlotId}
+            class:loaded={slot.loaded}
+            aria-pressed={slot.id === selectedSamplerSlotId}
+            title={slot.label}
+            on:click={() => onSelectSamplerSlot(slot.id)}
+          >
+            <strong>{index + 1}</strong>
+            <span>{slot.loaded ? slot.label : slot.rootNote}</span>
+          </button>
+        {/each}
+      </div>
+
       <div class="sample-loader">
         <span>{samplerSampleName}</span>
         <label class="sample-load-button">
@@ -433,6 +457,48 @@
     text-transform: uppercase;
   }
 
+  .sample-slot-selector {
+    display: grid;
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    gap: var(--spacing-2xs);
+  }
+
+  .sample-slot-selector button {
+    min-width: 0;
+    min-height: 44px;
+    display: grid;
+    align-content: center;
+    gap: 1px;
+    padding: var(--spacing-2xs);
+    border-radius: var(--radius-control);
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+  }
+
+  .sample-slot-selector button.loaded {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  .sample-slot-selector button.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .sample-slot-selector strong,
+  .sample-slot-selector span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sample-slot-selector span {
+    font-size: 10px;
+  }
+
   .sample-loader span {
     min-width: 0;
     overflow-wrap: anywhere;
@@ -529,7 +595,8 @@
 
     .parameter-module-grid,
     .audio-output-panel,
-    .sample-slot-grid {
+    .sample-slot-grid,
+    .sample-slot-selector {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 

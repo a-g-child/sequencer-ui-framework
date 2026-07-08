@@ -25,7 +25,8 @@ import {
   SAMPLE_GRID_LANE_COUNT,
   SampleGridRenderer,
   type PatternRenderModel,
-  type PatternRenderer
+  type PatternRenderer,
+  type SampleGridLane
 } from './pattern-renderer';
 import {
   defaultScaleState,
@@ -131,6 +132,7 @@ export class PatternEditorSession implements EditorSession {
   private explicitVisibleLength: number | undefined;
   private viewportWidth = 0;
   private viewportHeight = 0;
+  private sampleGridLaneCount = SAMPLE_GRID_LANE_COUNT;
 
   constructor(options: PatternEditorSessionOptions) {
     const resizeNoteTool = new ResizeNoteTool();
@@ -386,7 +388,7 @@ export class PatternEditorSession implements EditorSession {
   }
 
   private activePitchCount(pianoRoll: PianoRollView | undefined): number {
-    if (this.activeRendererId === 'sample-grid') return SAMPLE_GRID_LANE_COUNT;
+    if (this.activeRendererId === 'sample-grid') return this.sampleGridLaneCount;
     if (this.scale.mode === 'fold' && pianoRoll) {
       return Math.max(
         1,
@@ -422,6 +424,19 @@ export class PatternEditorSession implements EditorSession {
       session: this,
       renderer: this.renderer
     });
+  }
+
+  setSampleGridLanes(lanes: readonly SampleGridLane[] | undefined): void {
+    const renderer = this.rendererRegistry.get('sample-grid');
+
+    if (renderer instanceof SampleGridRenderer) {
+      renderer.setLanes(lanes);
+    }
+
+    this.sampleGridLaneCount = Math.max(
+      1,
+      lanes?.length ?? SAMPLE_GRID_LANE_COUNT
+    );
   }
 
   handleWheel(event: WheelEvent, pianoRoll: PianoRollView | undefined): void {

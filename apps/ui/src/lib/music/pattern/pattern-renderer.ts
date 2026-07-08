@@ -67,6 +67,11 @@ export type PatternRenderModel = RenderModel & {
   scale: PatternScaleState;
 };
 
+export type SampleGridLane = {
+  pitch: number;
+  label: string;
+};
+
 export type PatternRenderInput<TViewModel> = {
   viewModel: TViewModel;
   viewport: PatternViewport;
@@ -210,8 +215,14 @@ export class PianoRollRenderer implements PatternRenderer<PianoRollView> {
 export class SampleGridRenderer implements PatternRenderer<PianoRollView> {
   readonly id = 'sample-grid';
 
+  private customLanes: readonly SampleGridLane[] | undefined;
+
+  setLanes(lanes: readonly SampleGridLane[] | undefined): void {
+    this.customLanes = lanes;
+  }
+
   render(input: PatternRenderInput<PianoRollView>): PatternRenderModel {
-    const lanes = buildSampleGridLanes();
+    const lanes = buildSampleGridLanes(this.customLanes);
     const laneByPitch = new Map(
       lanes.map((lane) => [lane.pitch, lane.lanePitch])
     );
@@ -287,7 +298,7 @@ export class SampleGridRenderer implements PatternRenderer<PianoRollView> {
     y: number,
     _renderModel?: PatternRenderModel
   ): PatternMusicalPoint {
-    const lanes = buildSampleGridLanes();
+    const lanes = buildSampleGridLanes(this.customLanes);
     const highestLanePitch = highestVisualPitch(lanes);
     const lanePitch = clampPitch(
       screenYToPitch(y, viewport, highestLanePitch),
@@ -311,8 +322,10 @@ function clampPitch(pitch: number, lowestPitch: number, highestPitch: number) {
 
 export const SAMPLE_GRID_LANE_COUNT = getGeneralMidiDrumLanes().length;
 
-function buildSampleGridLanes() {
-  return getGeneralMidiDrumLanes().map((lane, index) => ({
+function buildSampleGridLanes(customLanes?: readonly SampleGridLane[]) {
+  const sourceLanes = customLanes?.length ? customLanes : getGeneralMidiDrumLanes();
+
+  return sourceLanes.map((lane, index) => ({
     ...lane,
     lanePitch: index
   }));

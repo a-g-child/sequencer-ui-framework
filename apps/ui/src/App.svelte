@@ -48,6 +48,7 @@
   } from './lib/editors/piano-roll/piano-roll-model'
   import type { EditorKind } from './lib/editors/editor-types';
   import PatternEditor from './lib/music/pattern/PatternEditor.svelte';
+  import type { SampleGridLane } from './lib/music/pattern/pattern-renderer';
   import {
     buildPatternAutomationTargets,
     deviceAutomationTargetId
@@ -69,6 +70,14 @@
     runtimeValue?: DeviceParameterValue
     automated?: boolean
   }
+
+  type SamplerSlotView = SampleSlot & {
+    loaded: boolean
+    label: string
+  }
+
+  const SAMPLER_SLOT_COUNT = 8
+  const DEFAULT_SAMPLER_ROOT_NOTES = [36, 38, 42, 46, 49, 51, 45, 48]
 
   const DEVICE_DESCRIPTORS: DeviceDescriptor[] = [
     BASIC_SYNTH_DESCRIPTOR,
@@ -152,6 +161,7 @@
   let webMidiLabel = 'MIDI'
   let webMidiStatus = ''
   let samplerSampleStatus = ''
+  let selectedSamplerSlotId = 'slot-1'
   let diagnosticsOpen = false
   let runtimeParameterValues: Record<string, ParameterValue> = {}
   let automatedRuntimeParameterIds = new Set<string>()
@@ -529,7 +539,6 @@
   }
 
   function buildSelectedSamplerSampleName(track: Track | undefined): string {
-    const sampler = selectedSamplerDevice(track)
     const slot = selectedSamplerSlot(track)
 
     if (!slot?.assetId) return 'No sample'
@@ -537,8 +546,55 @@
     return store.document.assets.find(slot.assetId)?.name ?? slot.name
   }
 
-  function selectedSamplerSlot(track: Track | undefined): SampleSlot | undefined {
-    return selectedSamplerDevice(track)?.sampleSlots?.[0]
+  function selectedSamplerSlot(track: Track | undefined): SamplerSlotView | undefined {
+    return selectedSamplerSlots(track).find((slot) => slot.id === selectedSamplerSlotId)
+  }
+
+  function selectedSamplerSlots(track: Track | undefined): SamplerSlotView[] {
+    const sampler = selectedSamplerDevice(track)
+    const slotsById = new Map(
+      (sampler?.sampleSlots ?? []).map((slot) => [slot.id, slot])
+    )
+
+    return Array.from({ length: SAMPLER_SLOT_COUNT }, (_, index) => {
+      const fallback = defaultSamplerSlot(index)
+      const slot = slotsById.get(fallback.id) ?? fallback
+
+      return {
+        ...fallback,
+        ...slot,
+        loaded: Boolean(slot.assetId),
+        label: slot.assetId
+          ? store.document.assets.find(slot.assetId)?.name ?? slot.name
+          : fallback.name
+      }
+    })
+  }
+
+  function selectedSamplerGridLanes(track: Track | undefined): SampleGridLane[] {
+    const sampler = selectedSamplerDevice(track)
+
+    if (!sampler) return []
+
+    return selectedSamplerSlots(track).map((slot) => ({
+      pitch: slot.rootNote,
+      label: slot.label
+    }))
+  }
+
+  function defaultSamplerSlot(index: number): SampleSlot {
+    const slotNumber = index + 1
+
+    return {
+      id: `slot-${slotNumber}`,
+      name: `Slot ${slotNumber}`,
+      rootNote:
+        DEFAULT_SAMPLER_ROOT_NOTES[index] ??
+        DEFAULT_SAMPLER_ROOT_NOTES.at(-1)! + index,
+      gain: 1,
+      start: 0,
+      loop: false
+    }
   }
 
   function findTrackDeviceInstance(
@@ -593,6 +649,8 @@
 
   async function loadSamplerSampleFile(file: File) {
     if (!selectedTrack) return
+    const selectedSlot =
+      selectedSamplerSlot(selectedTrack) ?? defaultSamplerSlot(0)
 
     const uri = URL.createObjectURL(file)
     const asset: AssetReference = {
@@ -617,14 +675,10 @@
       if (!sampler) return
 
       const slot: SampleSlot = {
-        id: sampler.sampleSlots?.[0]?.id ?? 'slot-1',
+        ...selectedSlot,
         name: file.name,
         assetId: loadedAsset.id,
-        rootNote: 60,
-        gain: 1,
-        start: 0,
         end: loadedAsset.durationSeconds,
-        loop: false
       }
 
       controller.addAsset(loadedAsset)
@@ -651,6 +705,7 @@
       SAMPLER_DESCRIPTOR,
       'Sampler'
     ) as SamplerDeviceInstance
+    sampler.parameterValues.mode = 'multi'
 
     controller.addDeviceInstance(sampler)
     controller.setTrackDevice(selectedTrack.id, sampler.id)
@@ -667,12 +722,16 @@
   }
 
   function setSamplerSampleSlot(slot: SampleSlot) {
-    const sampler = selectedSamplerDevice(selectedTrack)
+    const sampler = ensureSelectedTrackSamplerDevice()
 
     if (!sampler) return
 
     controller.setSamplerSampleSlot(sampler.id, slot)
     syncView()
+  }
+
+  function selectSamplerSlot(slotId: string) {
+    selectedSamplerSlotId = slotId
   }
 
   function toggleDiagnosticsOverlay() {
@@ -1228,6 +1287,7 @@
           onClipBoundsChange={setActivePatternClipBounds}
           onRenderModelRebuild={setRenderModelRebuildTime}
           {automationTargets}
+          sampleGridLanes={selectedSamplerGridLanes(selectedTrack)}
           onEditorChange={(editor) => {
             activeEditor = editor;
             syncView();
@@ -1253,6 +1313,8 @@
       {webMidiStatus}
       samplerSampleName={buildSelectedSamplerSampleName(selectedTrack)}
       samplerSlot={selectedSamplerSlot(selectedTrack)}
+      samplerSlots={selectedSamplerSlots(selectedTrack)}
+      {selectedSamplerSlotId}
       {samplerSampleStatus}
       {displayedTrackParameterValue}
       onSetNumberPreview={setNumberPreview}
@@ -1263,6 +1325,7 @@
       onToggleWebMidiOutput={toggleWebMidiOutput}
       onLoadSamplerSampleFile={loadSamplerSampleFile}
       onSetSamplerSampleSlot={setSamplerSampleSlot}
+      onSelectSamplerSlot={selectSamplerSlot}
       onSetDeviceParameterValue={setDeviceParameterValue}
     />
 

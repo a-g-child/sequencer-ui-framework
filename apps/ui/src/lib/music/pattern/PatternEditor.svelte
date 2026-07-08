@@ -20,6 +20,7 @@
     PatternPointerResult,
     PatternRendererId
   } from './PatternEditorSession';
+  import type { SampleGridLane } from './pattern-renderer';
   import type { PatternScaleMode } from './pattern-scale';
   import type {
     AutomationCurvePoint,
@@ -49,6 +50,7 @@
   export let beatsPerBar: number | undefined = undefined;
   export let beatDivisions: number | undefined = undefined;
   export let automationTargets: PatternAutomationTarget[] = [];
+  export let sampleGridLanes: SampleGridLane[] = [];
 
   const viewportZoomStep = 1.25;
   const viewportBeatScrollStep = 1;
@@ -64,6 +66,7 @@
   let selectedAutomationTargetId = '';
   let automationPointsByTarget: Record<string, AutomationCurvePoint[]> = {};
   let automationRevision = '';
+  let sampleGridLaneRevision = '';
 
   $: if (
     automationTargets.length > 0 &&
@@ -81,6 +84,7 @@
       beatDivisions,
       visibleLength: clipLength
     });
+    sampleGridLaneRevision = '';
   }
 
   $: nextTimelineRevision =
@@ -106,6 +110,15 @@
 
   $: if (session && session.activeClipId !== activeClipId) {
     session.setActiveClip(activeClipId);
+  }
+
+  $: nextSampleGridLaneRevision = sampleGridLanes
+    .map((lane) => `${lane.pitch}:${lane.label}`)
+    .join('|');
+  $: if (session && nextSampleGridLaneRevision !== sampleGridLaneRevision) {
+    sampleGridLaneRevision = nextSampleGridLaneRevision;
+    session.setSampleGridLanes(sampleGridLanes);
+    invalidateSession();
   }
 
   $: nextAutomationRevision =
