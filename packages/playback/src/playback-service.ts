@@ -2,6 +2,7 @@ import type { DocumentObserver, Operation, Service, ServiceContext, ServiceEvent
 import {
   BasicSynthFactory,
   ExternalMidiFactory,
+  SamplerFactory,
   getRuntimeParameterEffectiveValue
 } from '@sequencer/device'
 import { PlaybackModelBuilder } from './builder'
@@ -474,6 +475,7 @@ export class PlaybackService implements Service, DocumentObserver {
   private async initialiseDevices(): Promise<void> {
     this.deviceManager.register(new BasicSynthFactory<PlaybackEvent>())
     this.deviceManager.register(new ExternalMidiFactory<PlaybackEvent>())
+    this.deviceManager.register(new SamplerFactory<PlaybackEvent>())
     await this.rebuildRuntimeDevices()
   }
 

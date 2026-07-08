@@ -1,4 +1,4 @@
-import type { DeviceDescriptor } from '../device';
+import type { DeviceDescriptor } from '../device.ts';
 
 export type SamplerDeviceDescriptor = DeviceDescriptor & {
   key: 'sampler';
