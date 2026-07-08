@@ -27,6 +27,7 @@
   export let webAudioEnabled = false
   export let webMidiEnabled = false
   export let webMidiLabel = 'MIDI'
+  export let webMidiStatus = ''
   export let displayedTrackParameterValue: (
     property: InspectorPropertyView
   ) => ParameterValue
@@ -134,11 +135,15 @@
           class="audio-enable-button"
           class:active={webMidiEnabled}
           aria-pressed={webMidiEnabled}
+          title={webMidiStatus}
           on:click={onToggleWebMidiOutput}
         >
           {webMidiEnabled ? 'On' : 'Off'}
         </button>
       </div>
+      {#if webMidiStatus && !webMidiEnabled}
+        <p class="output-status">{webMidiStatus}</p>
+      {/if}
     </div>
 
     {#if selectedTrackDeviceParameterViews.length > 0}
@@ -257,6 +262,15 @@
     font-size: var(--font-size-xs);
     font-weight: 800;
     text-transform: uppercase;
+  }
+
+  .output-status {
+    grid-column: 1 / -1;
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 700;
+    text-transform: none;
   }
 
   .audio-enable-button {

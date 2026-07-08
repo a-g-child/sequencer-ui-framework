@@ -6,6 +6,8 @@ import type { PlaybackOutput } from './PlaybackOutput'
 type MidiOutputPort = {
   readonly id: string
   readonly name?: string | null
+  readonly state?: string
+  readonly connection?: string
   send(data: number[] | Uint8Array, timestamp?: number): void
 }
 
@@ -111,6 +113,8 @@ export class WebMidiOutput implements PlaybackOutput {
   }
 
   private firstOutput(access: MidiAccess): MidiOutputPort | undefined {
-    return access.outputs.values().next().value
+    const outputs = [...access.outputs.values()]
+
+    return outputs.find((output) => output.state !== 'disconnected') ?? outputs[0]
   }
 }

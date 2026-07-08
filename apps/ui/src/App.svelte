@@ -144,6 +144,7 @@
     playbackStatus.webMidi.connected &&
     playbackStatus.outputManager.activeOutputIds.includes('web-midi')
   let webMidiLabel = 'MIDI'
+  let webMidiStatus = ''
   let diagnosticsOpen = false
   let runtimeParameterValues: Record<string, ParameterValue> = {}
   let automatedRuntimeParameterIds = new Set<string>()
@@ -354,6 +355,9 @@
       playbackStatus.webMidi.connected &&
       playbackStatus.outputManager.activeOutputIds.includes('web-midi')
     webMidiLabel = playbackStatus.webMidi.outputName ?? 'MIDI'
+    webMidiStatus = webMidiEnabled
+      ? `Connected to ${webMidiLabel}`
+      : playbackStatus.webMidi.lastError ?? 'Web MIDI output is off'
   }
 
   function applyRuntimeParameterValues(
@@ -1141,6 +1145,7 @@
       {webAudioEnabled}
       {webMidiEnabled}
       {webMidiLabel}
+      {webMidiStatus}
       {displayedTrackParameterValue}
       onSetNumberPreview={setNumberPreview}
       onCommitNumberValue={commitNumberValue}
