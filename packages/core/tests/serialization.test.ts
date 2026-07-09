@@ -26,7 +26,7 @@ type SamplerDeviceInstance = DeviceInstance & {
 };
 
 describe('document serialization', () => {
-  it('round-trips assets, device instances, and matrix clip slots', () => {
+  it('round-trips assets, device instances, matrix clip slots, and mixer state', () => {
     const pattern: Pattern = {
       id: 'pattern-1',
       name: 'Pattern 1',

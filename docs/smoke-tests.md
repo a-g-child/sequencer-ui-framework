@@ -155,3 +155,86 @@ Goal: confirm the clip matrix behaves like a groovebox scene launcher.
    - all matrix tracks show stopped or empty state
    - runtime voices are cleared
    - no stuck notes remain in Web Audio or MIDI
+
+## Mixer Mute / Solo
+
+Goal: confirm mixer intent controls audible Web Audio output across device
+types.
+
+1. Start the UI.
+
+   ```sh
+   npm run dev
+   ```
+
+2. Create two Web Audio tracks.
+
+   Use Basic Synth on one track and Sampler on another. Load or use a fallback
+   sampler slot so both tracks can make sound.
+
+3. Add clips to both tracks in the same scene row.
+
+4. Launch the scene.
+
+   Confirm both tracks are audible.
+
+5. Select the synth track and lower `Volume`.
+
+   Confirm:
+
+   - the synth track gets quieter
+   - the sampler track is unchanged
+   - existing sustained notes respond without restarting playback
+
+6. Move `Pan` left and right.
+
+   Confirm:
+
+   - the selected track moves in the stereo field
+   - the other track remains centered unless its pan is changed
+
+7. Toggle `Mute` on the synth track.
+
+   Confirm:
+
+   - the synth track is silent
+   - the sampler track remains audible
+
+8. Toggle `Solo` on the sampler track.
+
+   Confirm:
+
+   - only the sampler track is audible
+   - unmuting the synth track does not make it audible while the sampler is
+     soloed
+
+9. Toggle `Solo` off.
+
+   Confirm:
+
+   - non-muted tracks are audible again
+   - muted tracks stay silent
+
+## Matrix + Mixer Persistence
+
+Goal: confirm matrix placement and mixer intent survive local project save/load.
+
+1. Create two tracks with clips in different matrix scene rows.
+
+2. Set mixer values on each track.
+
+   Use distinct values such as:
+
+   - Track 1: volume `0.50`, pan `-0.50`, mute `false`, solo `true`
+   - Track 2: volume `0.75`, pan `0.50`, mute `true`, solo `false`
+
+3. Click `Save Project`.
+
+4. Reload the page and click `Load Project`.
+
+   Confirm:
+
+   - clips return to the same matrix scene rows
+   - track volume, pan, mute, and solo values return
+   - scene launch still queues the restored clips
+   - mixer controls still affect Web Audio output after load
