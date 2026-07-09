@@ -1,12 +1,14 @@
 # Persistence
 
-Persistence v1 saves and restores the creative document locally. It deliberately
-does not save runtime execution state.
+Persistence v1 saves and restores the creative document locally. It also keeps
+browser-imported sampler files in local browser storage so projects can be
+reopened without manually reloading every sample.
 
 ## Current Scope
 
 The UI stores a serialized `SequencerDocument` in `localStorage` through
-`LocalProjectStore`.
+`LocalProjectStore`. Imported sample files are stored separately in IndexedDB
+through `BrowserAssetStore`.
 
 Storage key:
 
@@ -38,11 +40,22 @@ The serialized document includes:
 This is enough to restore the musical shape of a project: tracks, devices,
 clips, sampler assignments, and matrix placement.
 
+Sampler `AssetReference.uri` values use a durable local URI shape:
+
+```text
+indexeddb://sequencer.assets/<asset-id>
+```
+
+On load, the UI resolves those references from IndexedDB, creates temporary
+runtime object URLs, and asks Web Audio to decode them back into its sample
+buffer cache.
+
 ## Runtime State
 
 Persistence does not save:
 
 - decoded `AudioBuffer` objects
+- temporary object URLs
 - Web Audio nodes
 - active voices
 - scheduler queues
@@ -52,22 +65,22 @@ Persistence does not save:
 
 Those are runtime concerns. Loading a project rebuilds them from the document.
 
-## Asset Caveat
+## Asset Storage
 
-Sampler assets are saved as `AssetReference` metadata only. File-backed sample
-bytes are not durable in local persistence v1, so loaded sample files may need
-to be reselected after a browser reload.
+Sampler asset metadata is saved in the document. Imported sample bytes are saved
+in IndexedDB, keyed by asset id.
 
-The intended boundary is:
+The boundary remains:
 
 ```text
 AssetReference in document
-  -> AssetLoader at runtime
+  -> BrowserAssetStore at project load
+  -> temporary runtime URI
   -> decoded AudioBuffer/native sample handle
 ```
 
-Durable asset bytes should move to IndexedDB or a packaged project asset store
-later. The document should continue to store references, not decoded buffers.
+If IndexedDB data is cleared by the browser, the document still loads, but those
+sample buffers will be missing until files are imported again.
 
 ## Regression Coverage
 
@@ -78,6 +91,7 @@ The core serialization test round-trips:
 - sampler slot settings
 - track device assignment
 - matrix clip slot index
+- track mixer state
 
 That test protects the save/load contract without depending on browser
-`localStorage`.
+`localStorage` or IndexedDB.

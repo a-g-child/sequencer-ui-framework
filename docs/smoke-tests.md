@@ -62,8 +62,8 @@ state, and outputs receive playback events.
 
 ## Local Project Persistence
 
-Goal: confirm the creative document can be saved to local storage and restored
-without persisting runtime-only audio buffers.
+Goal: confirm the creative document can be saved to local storage and restored,
+with sampler files restored from browser asset storage.
 
 1. Start the UI.
 
@@ -95,13 +95,13 @@ without persisting runtime-only audio buffers.
    Confirm:
 
    - tracks, clips, devices, asset references, and sampler slot settings return
-   - the project reports that sample files may need reloading
-   - playback still works for loaded or fallback sample buffers
+   - the project reports that samples were restored
+   - sampler playback uses the restored sample without reselecting the file
 
-File-backed sample bytes are not part of persistence v1. `AssetReference`
-metadata is saved in the document, while decoded `AudioBuffer` instances remain
-runtime-only. Durable sample bytes should be handled later with IndexedDB or a
-project asset package.
+`AssetReference` metadata is saved in the document. Imported sample bytes are
+stored in IndexedDB and decoded back into runtime `AudioBuffer` instances when a
+project is loaded. If the browser clears IndexedDB data, the project still loads
+but those sample files need to be imported again.
 
 ## Matrix Scene Launch
 

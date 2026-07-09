@@ -67,6 +67,7 @@
     MatrixTrackView
   } from './lib/matrix/matrix-view-model';
   import TrackModules from './lib/modules/TrackModules.svelte';
+  import { BrowserAssetStore } from './lib/persistence/BrowserAssetStore';
   import { LocalProjectStore } from './lib/persistence/LocalProjectStore';
 
   type MainViewMode = 'matrix' | 'editor'
@@ -103,6 +104,7 @@
   const controller = new AppController(app)
   const store = app.documentStore
   const localProjectStore = new LocalProjectStore()
+  const browserAssetStore = new BrowserAssetStore()
   const launchQuantizeOptions: Array<{
     id: ClipLaunchQuantize
     label: string
@@ -700,18 +702,23 @@
     const selectedSlot =
       selectedSamplerSlot(selectedTrack) ?? defaultSamplerSlot(0)
 
-    const uri = URL.createObjectURL(file)
+    const assetId = `asset_${crypto.randomUUID()}`
+    const runtimeUri = URL.createObjectURL(file)
     const asset: AssetReference = {
-      id: `asset_${crypto.randomUUID()}`,
+      id: assetId,
       kind: 'audio-sample',
       name: file.name,
-      uri,
+      uri: browserAssetStore.uriFor(assetId),
       mimeType: file.type || undefined,
       sizeBytes: file.size
     }
 
     try {
-      const buffer = await playback.loadSampleAsset(asset)
+      await browserAssetStore.saveFile(asset.id, file)
+      const buffer = await playback.loadSampleAsset({
+        ...asset,
+        uri: runtimeUri
+      })
       const loadedAsset: AssetReference = {
         ...asset,
         durationSeconds: buffer.duration,
@@ -736,9 +743,10 @@
       playbackStatus = playback.status
       refreshSelectedTrackWebAudioSettings()
     } catch (error) {
-      URL.revokeObjectURL(uri)
       samplerSampleStatus =
         error instanceof Error ? error.message : 'Could not load sample'
+    } finally {
+      URL.revokeObjectURL(runtimeUri)
     }
   }
 
@@ -1122,7 +1130,7 @@
     }
   }
 
-  function loadProject() {
+  async function loadProject() {
     try {
       const serialized = localProjectStore.load()
 
@@ -1140,7 +1148,8 @@
       viewMode = 'matrix'
       runtimeParameterValues = {}
       automatedRuntimeParameterIds = new Set<string>()
-      samplerSampleStatus = 'Project loaded; sample files may need reloading'
+      const restoredAssets = await restoreStoredSampleAssets()
+      samplerSampleStatus = sampleRestoreStatus(restoredAssets)
       lastProjectSavedAt = new Date()
       projectPersistenceStatus = `Loaded ${lastProjectSavedAt.toLocaleTimeString()}`
       syncView()
@@ -1151,6 +1160,47 @@
       projectPersistenceStatus =
         error instanceof Error ? `Load failed: ${error.message}` : 'Load failed'
     }
+  }
+
+  async function restoreStoredSampleAssets(): Promise<{
+    loaded: number
+    missing: number
+  }> {
+    let loaded = 0
+    let missing = 0
+
+    for (const asset of store.document.assets.values()) {
+      if (asset.kind !== 'audio-sample') continue
+      if (!browserAssetStore.isStoredAsset(asset)) continue
+
+      const runtimeAsset = await browserAssetStore.createRuntimeAsset(asset)
+
+      if (!runtimeAsset) {
+        missing += 1
+        continue
+      }
+
+      try {
+        await playback.loadSampleAsset(runtimeAsset.asset)
+        loaded += 1
+      } finally {
+        runtimeAsset.revoke()
+      }
+    }
+
+    return { loaded, missing }
+  }
+
+  function sampleRestoreStatus(result: { loaded: number; missing: number }): string {
+    if (result.loaded === 0 && result.missing === 0) {
+      return 'Project loaded'
+    }
+
+    if (result.missing > 0) {
+      return `${result.loaded} samples restored, ${result.missing} missing`
+    }
+
+    return `${result.loaded} samples restored`
   }
 
   function renameSelectedTrack() {
