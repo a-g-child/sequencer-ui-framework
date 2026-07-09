@@ -102,3 +102,56 @@ File-backed sample bytes are not part of persistence v1. `AssetReference`
 metadata is saved in the document, while decoded `AudioBuffer` instances remain
 runtime-only. Durable sample bytes should be handled later with IndexedDB or a
 project asset package.
+
+## Matrix Scene Launch
+
+Goal: confirm the clip matrix behaves like a groovebox scene launcher.
+
+1. Start the UI.
+
+   ```sh
+   npm run dev
+   ```
+
+2. Create at least three tracks.
+
+   Use different devices if available: Basic Synth, Sampler, and External MIDI.
+
+3. Add clips into the same scene row.
+
+   Use the empty matrix slots so each track has a clip in `Scene 1`. Add a
+   second row for at least one track so track-level switching can be checked.
+
+4. Set launch quantize to `bar`.
+
+5. Click the scene launch button for `Scene 1`.
+
+   Confirm:
+
+   - every non-empty clip in that row changes to `queued`
+   - queued clips show the same launch beat
+   - all queued clips become `playing` together at the quantized boundary
+   - synth, sampler, and MIDI tracks receive playback from their own clips
+
+6. Click a different clip on one track.
+
+   Confirm:
+
+   - only that track queues the new clip
+   - the other scene clips continue playing
+
+7. Click the scene stop button.
+
+   Confirm:
+
+   - clips in that row stop or clear their queued state
+   - clips outside the row are not stopped unless they belong to the same
+     track and are replaced by the track stop behavior
+
+8. Click `Stop All`.
+
+   Confirm:
+
+   - all matrix tracks show stopped or empty state
+   - runtime voices are cleared
+   - no stuck notes remain in Web Audio or MIDI

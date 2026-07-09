@@ -1,6 +1,6 @@
-import type { EntityId } from "./entity";
-import type { Parameter } from "./parameter";
-import type { EntityRef } from "./reference";
+import type { EntityId } from "./entity.ts";
+import type { Parameter } from "./parameter.ts";
+import type { EntityRef } from "./reference.ts";
 
 export type EventType = "set" | "trigger" | "ramp";
 export type BeatTime = number;

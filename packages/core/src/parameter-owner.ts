@@ -1,6 +1,6 @@
-import type { Entity } from "./entity";
-import type { Parameter } from "./parameter";
-import type { EntityRef } from "./reference";
+import type { Entity } from "./entity.ts";
+import type { Parameter } from "./parameter.ts";
+import type { EntityRef } from "./reference.ts";
 
 export interface ParameterOwner extends Entity {
   parameters: EntityRef<Parameter>[];

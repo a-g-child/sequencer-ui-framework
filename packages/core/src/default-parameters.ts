@@ -1,15 +1,15 @@
-import { DEFAULT_TRACK_PARAMETER_DEFINITIONS } from "./default-parameter-definitions";
+import { DEFAULT_TRACK_PARAMETER_DEFINITIONS } from "./default-parameter-definitions.ts";
 import {
   createParameter,
   createParameterDefinition
-} from "./parameter";
+} from "./parameter.ts";
 import type {
   ParameterDefinition,
   ParameterKind,
   ParameterValue
-} from "./parameter";
-import type { SequencerDocument } from "./document";
-import type { Track } from "./project";
+} from "./parameter.ts";
+import type { SequencerDocument } from "./document.ts";
+import type { Track } from "./project.ts";
 
 interface DefaultParameterDefinition {
   key: string;

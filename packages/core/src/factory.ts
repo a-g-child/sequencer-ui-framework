@@ -4,15 +4,15 @@ import type {
   PatternPlacement,
   Track,
   TrackClipSlot
-} from "./project";
+} from "./project.ts";
 import type { AssetReference } from "@sequencer/assets";
-import type { SequencerDocument } from "./document";
-import type { BeatTime } from "./events";
-import type { Timeline } from "./timeline";
-import { createId } from "./entity";
-import { Registry } from "./registry";
-import type { Parameter, ParameterDefinition } from "./parameter";
-import { addDefaultTrackParameters } from "./default-parameters";
+import type { SequencerDocument } from "./document.ts";
+import type { BeatTime } from "./events.ts";
+import type { Timeline } from "./timeline.ts";
+import { createId } from "./entity.ts";
+import { Registry } from "./registry.ts";
+import type { Parameter, ParameterDefinition } from "./parameter.ts";
+import { addDefaultTrackParameters } from "./default-parameters.ts";
 import {
   BASIC_SYNTH_DESCRIPTOR,
   type DeviceDescriptor,

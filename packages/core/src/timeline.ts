@@ -1,5 +1,5 @@
-import type { Entity } from "./entity";
-import type { BeatTime } from "./events";
+import type { Entity } from "./entity.ts";
+import type { BeatTime } from "./events.ts";
 
 export interface TimelineMarker extends Entity {
   time: BeatTime;

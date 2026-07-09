@@ -1,5 +1,5 @@
-import type { Entity, EntityId } from "./entity";
-import type { EntityRef } from "./reference";
+import type { Entity, EntityId } from "./entity.ts";
+import type { EntityRef } from "./reference.ts";
 
 export interface Relationship<
   TSource extends Entity = Entity,

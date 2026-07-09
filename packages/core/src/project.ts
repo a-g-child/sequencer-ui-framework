@@ -1,9 +1,9 @@
-import type { Entity } from "./entity";
-import type { Relationship } from "./relationship";
-import type { BeatTime, TimelineEvent } from "./events";
-import type { ParameterOwner } from "./parameter-owner";
-import type { SequencerDocument } from "./document";
-import type { EntityRef } from "./reference";
+import type { Entity } from "./entity.ts";
+import type { Relationship } from "./relationship.ts";
+import type { BeatTime, TimelineEvent } from "./events.ts";
+import type { ParameterOwner } from "./parameter-owner.ts";
+import type { SequencerDocument } from "./document.ts";
+import type { EntityRef } from "./reference.ts";
 import type { DeviceInstance } from "@sequencer/device";
 
 export interface Pattern extends Entity {

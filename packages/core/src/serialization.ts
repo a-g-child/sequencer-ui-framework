@@ -1,8 +1,8 @@
-import { Registry } from "./registry";
-import type { SequencerDocument } from "./document";
-import type { MidiClip, Pattern, Track } from "./project";
-import type { Parameter, ParameterDefinition } from "./parameter";
-import type { Timeline } from "./timeline";
+import { Registry } from "./registry.ts";
+import type { SequencerDocument } from "./document.ts";
+import type { MidiClip, Pattern, Track } from "./project.ts";
+import type { Parameter, ParameterDefinition } from "./parameter.ts";
+import type { Timeline } from "./timeline.ts";
 import type { AssetReference } from "@sequencer/assets";
 import type { DeviceInstance } from "@sequencer/device";
 

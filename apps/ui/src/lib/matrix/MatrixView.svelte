@@ -82,7 +82,7 @@
               <span>{scene.label}</span>
               <small>
                 {#if scene.queued}
-                  queued
+                  cueing
                 {:else if scene.playing}
                   playing
                 {:else if scene.hasClips}
@@ -158,7 +158,7 @@
                 <span>{clip.name}</span>
                 <small>
                   {#if clip.pendingLaunch}
-                    queued {formatBeat(clip.launchAtBeat)}
+                    cue {formatBeat(clip.launchAtBeat)}
                   {:else if clip.playbackActive}
                     playing
                   {:else}
@@ -397,6 +397,7 @@
     border-color: var(--accent);
     background: var(--accent);
     color: var(--surface-0);
+    box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--surface-0) 24%, transparent);
   }
 
   .matrix-scene-row.playing .matrix-scene-launch small {
@@ -404,8 +405,9 @@
   }
 
   .matrix-scene-row.queued .matrix-scene-launch {
-    border-color: var(--accent-strong);
-    background: var(--accent-soft);
+    border-color: var(--note-fill);
+    background: color-mix(in srgb, var(--note-fill) 16%, var(--surface-2));
+    color: var(--text-primary);
   }
 
   .matrix-scene-row.empty .matrix-scene-launch,
@@ -429,6 +431,7 @@
     border-color: var(--accent);
     background: var(--accent);
     color: var(--surface-0);
+    box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--surface-0) 24%, transparent);
   }
 
   .matrix-clip.playing small {
@@ -436,13 +439,13 @@
   }
 
   .matrix-clip.queued {
-    border-color: var(--accent-strong);
-    background: var(--accent-soft);
+    border-color: var(--note-fill);
+    background: color-mix(in srgb, var(--note-fill) 16%, var(--surface-2));
   }
 
   .matrix-clip.stopped {
     border-color: var(--border);
-    background: var(--surface);
+    background: color-mix(in srgb, var(--surface) 88%, var(--surface-2));
   }
 
   .matrix-clip-queue-progress {
@@ -451,7 +454,7 @@
     z-index: 1;
     height: 100%;
     width: calc(var(--clip-queue-progress) * 100%);
-    background: color-mix(in srgb, var(--accent-strong) 28%, transparent);
+    background: color-mix(in srgb, var(--note-fill) 28%, transparent);
     pointer-events: none;
     opacity: 0;
   }

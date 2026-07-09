@@ -1,5 +1,5 @@
-import { createId } from "./entity";
-import type { Entity } from "./entity";
+import { createId } from "./entity.ts";
+import type { Entity } from "./entity.ts";
 
 export type ParameterValue = number | string | boolean;
 

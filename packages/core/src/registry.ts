@@ -1,4 +1,4 @@
-import type { Entity, EntityId } from "./entity";
+import type { Entity, EntityId } from "./entity.ts";
 
 export class Registry<T extends Entity> {
   private readonly entities = new Map<EntityId, T>();
