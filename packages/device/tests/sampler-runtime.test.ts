@@ -120,7 +120,14 @@ describe('SamplerRuntimeDevice', () => {
     assert.deepEqual(sampler.getDiagnostics(), {
       triggeredSamples: 1,
       missingSamples: 2,
-      lastTriggeredSlot: undefined
+      lastTriggeredSlot: undefined,
+      graph: {
+        presetId: 'preset.sampler',
+        nodeCount: 4,
+        connectionCount: 3,
+        executionOrder: ['clip-notes', 'sample-player', 'track-gain', 'audio-out'],
+        diagnostics: []
+      }
     });
   });
 });

@@ -1,3 +1,5 @@
+import type { AudioGraphDocument } from '@sequencer/audio-graph';
+
 export type DeviceCapability =
   | 'instrument'
   | 'sampler'
@@ -54,4 +56,5 @@ export type DeviceDescriptor = {
   capabilities: DeviceCapability[];
   ports: DevicePort[];
   parameters: DeviceParameterDescriptor[];
+  graphPreset?: AudioGraphDocument;
 };

@@ -1,3 +1,4 @@
+import type { RuntimeAudioGraph } from '@sequencer/audio-graph';
 import type { DeviceId, DeviceInstance } from './instance';
 import type { RuntimeParameter } from './parameter-runtime';
 
@@ -8,6 +9,7 @@ export interface RuntimeDevice<TEvent = unknown> {
   readonly descriptorKey: string;
   readonly status: RuntimeDeviceStatus;
   readonly parameters: RuntimeParameter[];
+  readonly runtimeGraph?: RuntimeAudioGraph;
 
   connect(): Promise<void>;
   disconnect(): Promise<void>;
@@ -44,7 +46,8 @@ export abstract class BaseRuntimeDevice<TEvent = unknown>
 
   constructor(
     readonly instance: DeviceInstance,
-    readonly parameters: RuntimeParameter[] = []
+    readonly parameters: RuntimeParameter[] = [],
+    readonly runtimeGraph?: RuntimeAudioGraph
   ) {}
 
   get instanceId(): DeviceId {

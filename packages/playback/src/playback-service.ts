@@ -10,6 +10,7 @@ import { PlaybackModelBuilder } from './builder'
 import type { ClockState } from './clock'
 import {
   PlaybackDeviceManager,
+  type PlaybackDeviceDiagnostics,
   type PlaybackDeviceManagerStatus
 } from './device'
 import type { PlaybackEvent } from './events'
@@ -53,6 +54,7 @@ export interface PlaybackServiceStatus extends SchedulerStatus {
   readonly liveClips: LiveClipState
   readonly outputManager: OutputManagerStatus
   readonly deviceManager: PlaybackDeviceManagerStatus
+  readonly deviceDiagnostics: readonly PlaybackDeviceDiagnostics[]
   readonly voice?: PlaybackVoiceStatus
   readonly statistics: PlaybackOutputStatistics
   readonly webAudio: {
@@ -136,6 +138,7 @@ export class PlaybackService implements Service, DocumentObserver {
       liveClips: this.liveClips.state,
       outputManager: this.outputManager.status,
       deviceManager: this.deviceManager.status,
+      deviceDiagnostics: this.deviceManager.getDiagnostics(),
       voice: this.voiceStatus(),
       statistics: this.statisticsOutput.statistics,
       webAudio: this.webAudioOutput.settings,

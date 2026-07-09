@@ -1,3 +1,4 @@
+import { SAMPLER_AUDIO_GRAPH } from '@sequencer/audio-graph';
 import type { DeviceDescriptor } from '../device.ts';
 
 export type SamplerDeviceDescriptor = DeviceDescriptor & {
@@ -10,6 +11,7 @@ export const SAMPLER_DESCRIPTOR: SamplerDeviceDescriptor = {
   name: 'Sampler',
   manufacturer: 'Sequencer',
   capabilities: ['instrument', 'sampler', 'automation-target'],
+  graphPreset: SAMPLER_AUDIO_GRAPH,
   ports: [
     { id: 'midi-in', name: 'MIDI In', kind: 'midi-in' },
     { id: 'audio-out', name: 'Audio Out', kind: 'audio-out', channels: 2 }

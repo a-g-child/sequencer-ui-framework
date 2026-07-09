@@ -1,4 +1,5 @@
-import type { DeviceDescriptor } from '../device';
+import { BASIC_SYNTH_AUDIO_GRAPH } from '@sequencer/audio-graph';
+import type { DeviceDescriptor } from '../device.ts';
 
 export const BASIC_SYNTH_DESCRIPTOR: DeviceDescriptor = {
   id: 'device.basic-synth',
@@ -6,6 +7,7 @@ export const BASIC_SYNTH_DESCRIPTOR: DeviceDescriptor = {
   name: 'Basic Synth',
   manufacturer: 'Sequencer',
   capabilities: ['instrument', 'automation-target'],
+  graphPreset: BASIC_SYNTH_AUDIO_GRAPH,
   ports: [
     { id: 'midi-in', name: 'MIDI In', kind: 'midi-in' },
     { id: 'audio-out', name: 'Audio Out', kind: 'audio-out', channels: 2 }

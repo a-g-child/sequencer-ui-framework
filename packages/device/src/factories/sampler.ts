@@ -1,3 +1,9 @@
+import {
+  AudioGraphBuilder,
+  DEFAULT_AUDIO_NODE_DESCRIPTORS,
+  SAMPLER_AUDIO_GRAPH,
+  type RuntimeAudioGraph
+} from '@sequencer/audio-graph';
 import { VoiceManager, type SampleVoiceAction } from '@sequencer/audio';
 import { SAMPLER_DESCRIPTOR } from '../descriptors/sampler.ts';
 import type { DeviceFactory } from '../factory.ts';
@@ -11,6 +17,10 @@ import {
 import { BaseRuntimeDevice } from '../runtime.ts';
 import type { SampleSlot, SamplerMode } from '../sampler.ts';
 
+const samplerGraphBuilder = new AudioGraphBuilder(
+  DEFAULT_AUDIO_NODE_DESCRIPTORS
+);
+
 export type SamplerDeviceInstance = DeviceInstance & {
   descriptorKey: 'sampler';
   sampleSlots?: SampleSlot[];
@@ -20,6 +30,15 @@ export type SamplerDiagnostics = {
   readonly triggeredSamples: number;
   readonly missingSamples: number;
   readonly lastTriggeredSlot?: string;
+  readonly graph?: SamplerGraphDiagnostics;
+};
+
+export type SamplerGraphDiagnostics = {
+  readonly presetId: string;
+  readonly nodeCount: number;
+  readonly connectionCount: number;
+  readonly executionOrder: readonly string[];
+  readonly diagnostics: RuntimeAudioGraph['diagnostics'];
 };
 
 export class SamplerRuntimeDevice<
@@ -34,9 +53,10 @@ export class SamplerRuntimeDevice<
 
   constructor(
     instance: DeviceInstance,
-    parameters = createRuntimeParameters(SAMPLER_DESCRIPTOR, instance)
+    parameters = createRuntimeParameters(SAMPLER_DESCRIPTOR, instance),
+    runtimeGraph = samplerGraphBuilder.build(SAMPLER_AUDIO_GRAPH)
   ) {
-    super(instance, parameters);
+    super(instance, parameters, runtimeGraph);
   }
 
   get sampleSlots(): readonly SampleSlot[] {
@@ -108,7 +128,16 @@ export class SamplerRuntimeDevice<
     return {
       triggeredSamples: this.triggeredSamples,
       missingSamples: this.missingSamples,
-      lastTriggeredSlot: this.lastTriggeredSlot
+      lastTriggeredSlot: this.lastTriggeredSlot,
+      graph: this.runtimeGraph
+        ? {
+            presetId: this.runtimeGraph.document.id,
+            nodeCount: this.runtimeGraph.nodes.length,
+            connectionCount: this.runtimeGraph.connections.length,
+            executionOrder: this.runtimeGraph.executionOrder,
+            diagnostics: this.runtimeGraph.diagnostics
+          }
+        : undefined
     };
   }
 
@@ -189,7 +218,8 @@ export class SamplerFactory<TEvent = unknown>
   create(instance: DeviceInstance): SamplerRuntimeDevice<TEvent> {
     return new SamplerRuntimeDevice(
       instance,
-      createRuntimeParameters(this.descriptor, instance)
+      createRuntimeParameters(this.descriptor, instance),
+      samplerGraphBuilder.build(SAMPLER_AUDIO_GRAPH)
     );
   }
 }

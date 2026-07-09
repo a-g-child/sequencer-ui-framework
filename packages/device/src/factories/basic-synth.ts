@@ -1,12 +1,18 @@
 import {
+  AudioGraphBuilder,
+  BASIC_SYNTH_AUDIO_GRAPH,
+  DEFAULT_AUDIO_NODE_DESCRIPTORS,
+  type RuntimeAudioGraph
+} from '@sequencer/audio-graph';
+import {
   VoiceManager,
   type AdsrEnvelope,
   type Glide,
   type VoiceAction
 } from '@sequencer/audio';
-import { BASIC_SYNTH_DESCRIPTOR } from '../descriptors/basic-synth';
-import type { DeviceFactory } from '../factory';
-import type { DeviceInstance } from '../instance';
+import { BASIC_SYNTH_DESCRIPTOR } from '../descriptors/basic-synth.ts';
+import type { DeviceFactory } from '../factory.ts';
+import type { DeviceInstance } from '../instance.ts';
 import {
   advanceRuntimeParameters,
   createRuntimeParameters,
@@ -14,8 +20,25 @@ import {
   getRuntimeParameterEffectiveValue,
   setRuntimeParameterModulation,
   setRuntimeParameterValue
-} from '../parameter-runtime';
-import { BaseRuntimeDevice } from '../runtime';
+} from '../parameter-runtime.ts';
+import { BaseRuntimeDevice } from '../runtime.ts';
+
+const basicSynthGraphBuilder = new AudioGraphBuilder(
+  DEFAULT_AUDIO_NODE_DESCRIPTORS
+);
+
+export interface BasicSynthGraphDiagnostics {
+  readonly presetId: string;
+  readonly nodeCount: number;
+  readonly connectionCount: number;
+  readonly executionOrder: readonly string[];
+  readonly diagnostics: RuntimeAudioGraph['diagnostics'];
+}
+
+export interface BasicSynthDiagnostics {
+  readonly voices: ReturnType<VoiceManager['stats']>;
+  readonly graph?: BasicSynthGraphDiagnostics;
+}
 
 export class BasicSynthRuntimeDevice<
   TEvent = unknown
@@ -109,9 +132,18 @@ export class BasicSynthRuntimeDevice<
     this.advanceLfo(deltaMs);
   }
 
-  getDiagnostics(): { voices: ReturnType<VoiceManager['stats']> } {
+  getDiagnostics(): BasicSynthDiagnostics {
     return {
-      voices: this.voices.stats()
+      voices: this.voices.stats(),
+      graph: this.runtimeGraph
+        ? {
+            presetId: this.runtimeGraph.document.id,
+            nodeCount: this.runtimeGraph.nodes.length,
+            connectionCount: this.runtimeGraph.connections.length,
+            executionOrder: this.runtimeGraph.executionOrder,
+            diagnostics: this.runtimeGraph.diagnostics
+          }
+        : undefined
     };
   }
 
@@ -246,7 +278,8 @@ export class BasicSynthFactory<TEvent = unknown>
   create(instance: DeviceInstance): BasicSynthRuntimeDevice<TEvent> {
     return new BasicSynthRuntimeDevice(
       instance,
-      createRuntimeParameters(this.descriptor, instance)
+      createRuntimeParameters(this.descriptor, instance),
+      basicSynthGraphBuilder.build(BASIC_SYNTH_AUDIO_GRAPH)
     );
   }
 }
