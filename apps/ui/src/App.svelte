@@ -10,7 +10,8 @@
     type ServiceEvent,
     type ParameterValue,
     type Pattern,
-    type Track
+    type Track,
+    type TrackMixerState
   } from '@sequencer/core'
   import {
     ClockService,
@@ -213,7 +214,6 @@
     runtimeParameterValues
   )
   $: selectedTrack = tracks.find((track) => track.id === selectedTrackId)
-  $: selectedTrackParameterViews = buildTrackParameterViews(selectedTrack)
   $: selectedTrackDeviceName = buildSelectedTrackDeviceName(selectedTrack)
   $: selectedTrackDeviceParameterViews =
     buildSelectedTrackDeviceParameterViews(
@@ -766,6 +766,16 @@
     value: DeviceParameterValue
   ) {
     controller.setDeviceParameterValue(deviceInstanceId, parameterKey, value)
+    syncView()
+  }
+
+  function setTrackMixerValue<K extends keyof TrackMixerState>(
+    key: K,
+    value: TrackMixerState[K]
+  ) {
+    if (!selectedTrackId) return
+
+    controller.setTrackMixerValue(selectedTrackId, key, value)
     syncView()
   }
 
@@ -1490,7 +1500,6 @@
     <TrackModules
       {selectedTrack}
       {selectedTrackId}
-      {selectedTrackParameterViews}
       {selectedTrackDeviceName}
       {selectedTrackDeviceParameterViews}
       {webAudioEnabled}
@@ -1502,17 +1511,13 @@
       samplerSlots={selectedSamplerSlots(selectedTrack)}
       {selectedSamplerSlotId}
       {samplerSampleStatus}
-      {displayedTrackParameterValue}
-      onSetNumberPreview={setNumberPreview}
-      onCommitNumberValue={commitNumberValue}
-      onSetParameterValue={setParameterValue}
-      onToggleBooleanParameter={toggleBooleanParameter}
       onToggleWebAudioOutput={toggleWebAudioOutput}
       onToggleWebMidiOutput={toggleWebMidiOutput}
       onLoadSamplerSampleFile={loadSamplerSampleFile}
       onSetSamplerSampleSlot={setSamplerSampleSlot}
       onSelectSamplerSlot={selectSamplerSlot}
       onSetDeviceParameterValue={setDeviceParameterValue}
+      onSetTrackMixerValue={setTrackMixerValue}
     />
 
     <footer class="statusbar">

@@ -1,4 +1,4 @@
-import type { BeatTime } from '@sequencer/core'
+import type { BeatTime, TrackMixerState } from '@sequencer/core'
 
 export type PlaybackEvent =
   | NoteOnEvent
@@ -18,6 +18,7 @@ export interface PlaybackEventBase {
   readonly trackId?: string
   readonly channel?: number
   readonly destination?: PlaybackDestination
+  readonly mixer?: TrackMixerState
   readonly beat: BeatTime
   readonly timeMs: number
 }

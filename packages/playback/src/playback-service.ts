@@ -168,6 +168,11 @@ export class PlaybackService implements Service, DocumentObserver {
       return
     }
 
+    if (isTrackMixerOperation(operation)) {
+      this.rebuildModel()
+      return
+    }
+
     if (isPlaybackModelOperation(operation)) {
       this.panicRuntimeVoices()
       this.rebuildModel()
@@ -185,6 +190,11 @@ export class PlaybackService implements Service, DocumentObserver {
       return
     }
 
+    if (isTrackMixerOperation(operation)) {
+      this.rebuildModel()
+      return
+    }
+
     if (isPlaybackModelOperation(operation)) {
       this.panicRuntimeVoices()
       this.rebuildModel()
@@ -199,6 +209,11 @@ export class PlaybackService implements Service, DocumentObserver {
     if (this.applyRuntimeDeviceParameterOperation(operation)) {
       this.syncBasicSynthRuntimeParametersToWebAudio()
       this.emitStatus()
+      return
+    }
+
+    if (isTrackMixerOperation(operation)) {
+      this.rebuildModel()
       return
     }
 
@@ -402,6 +417,7 @@ export class PlaybackService implements Service, DocumentObserver {
       { activeClipsByTrackId: this.liveClips.state.activeClipByTrackId }
     )
     this.scheduler.setModel(this.model)
+    this.syncTrackMixersToWebAudio()
     this.statisticsOutput.recordPlaybackModelRebuild(nowMs() - startedAt)
     this.emitStatus()
   }
@@ -577,6 +593,16 @@ export class PlaybackService implements Service, DocumentObserver {
     }
   }
 
+  private syncTrackMixersToWebAudio(): void {
+    if (!this.model) return
+
+    this.webAudioOutput.setTrackMixers(
+      Object.fromEntries(
+        this.model.tracks.map((track) => [track.id, track.mixer])
+      )
+    )
+  }
+
   private emitStatus(): void {
     this.context?.events.emit({
       type: 'playback:status-changed',
@@ -675,6 +701,10 @@ function isDeviceParameterOperation(
     'parameterKey' in operation &&
     typeof operation.parameterKey === 'string'
   )
+}
+
+function isTrackMixerOperation(operation: Operation): boolean {
+  return operation.name === 'Set Track Mixer Value'
 }
 
 function isPlaybackModelOperation(operation: Operation): boolean {

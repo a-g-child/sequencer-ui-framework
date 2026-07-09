@@ -28,6 +28,7 @@ The serialized document includes:
 
 - project id, name, BPM, and timeline
 - tracks and matrix clip slots
+- track mixer state
 - MIDI clips and patterns
 - document parameter definitions and values
 - device instances and parameter values

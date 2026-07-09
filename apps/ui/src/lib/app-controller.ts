@@ -16,6 +16,7 @@ import {
   SetParameterValueOperation,
   SetSamplerSampleSlotOperation,
   SetTrackDeviceOperation,
+  SetTrackMixerValueOperation,
   SetPatternPlacementLoopOperation,
   SetPatternPlacementLoopCountOperation,
   SetPatternPlacementLoopRegionOperation,
@@ -23,7 +24,8 @@ import {
   type Operation,
   type ParameterValue,
   type SequencerApplication,
-  type Track
+  type Track,
+  type TrackMixerState
 } from '@sequencer/core'
 import type { AssetReference } from '@sequencer/assets'
 import type { DeviceInstance, DeviceParameterValue, SampleSlot } from '@sequencer/device'
@@ -251,6 +253,16 @@ export class AppController {
   setTrackDevice(trackId: string, deviceInstanceId: string | undefined): void {
     this.app.documentStore.execute(
       new SetTrackDeviceOperation(trackId, deviceInstanceId)
+    )
+  }
+
+  setTrackMixerValue<K extends keyof TrackMixerState>(
+    trackId: string,
+    key: K,
+    value: TrackMixerState[K]
+  ): void {
+    this.app.documentStore.execute(
+      new SetTrackMixerValueOperation(trackId, key, value)
     )
   }
 

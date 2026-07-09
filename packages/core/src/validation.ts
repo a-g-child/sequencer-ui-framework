@@ -39,6 +39,46 @@ export function validateDocument(document: SequencerDocument): ValidationIssue[]
   for (const track of document.tracks.values()) {
     track.clips ??= [];
 
+    if (!track.mixer) {
+      issues.push({
+        level: "warning",
+        message: "Track is missing mixer state",
+        entityId: track.id
+      });
+    } else {
+      if (!isUnit(track.mixer.volume)) {
+        issues.push({
+          level: "error",
+          message: "Track mixer volume must be between 0 and 1",
+          entityId: track.id
+        });
+      }
+
+      if (!isBipolar(track.mixer.pan)) {
+        issues.push({
+          level: "error",
+          message: "Track mixer pan must be between -1 and 1",
+          entityId: track.id
+        });
+      }
+
+      if (typeof track.mixer.mute !== "boolean") {
+        issues.push({
+          level: "error",
+          message: "Track mixer mute must be boolean",
+          entityId: track.id
+        });
+      }
+
+      if (typeof track.mixer.solo !== "boolean") {
+        issues.push({
+          level: "error",
+          message: "Track mixer solo must be boolean",
+          entityId: track.id
+        });
+      }
+    }
+
     for (const parameterId of track.parameters) {
       if (!document.parameters.has(parameterId)) {
         issues.push({
@@ -310,6 +350,14 @@ export function validateDocument(document: SequencerDocument): ValidationIssue[]
   }
 
   return issues;
+}
+
+function isUnit(value: number): boolean {
+  return Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function isBipolar(value: number): boolean {
+  return Number.isFinite(value) && value >= -1 && value <= 1;
 }
 
 function samplerSampleSlots(device: unknown): SampleSlot[] {

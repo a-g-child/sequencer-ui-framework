@@ -17,3 +17,4 @@ export * from "./set-pattern-placement-loop-region";
 export * from "./set-parameter-value";
 export * from "./set-sampler-sample-slot";
 export * from "./set-track-device";
+export * from "./set-track-mixer-value";

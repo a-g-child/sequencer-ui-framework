@@ -1,4 +1,4 @@
-import type { BeatTime } from '@sequencer/core'
+import type { BeatTime, TrackMixerState } from '@sequencer/core'
 import type { ClockState } from './clock.ts'
 import type { PlaybackEvent } from './events.ts'
 import type { PlaybackModel } from './model.ts'
@@ -201,7 +201,11 @@ export class TypeScriptScheduler implements Scheduler {
     events: PlaybackEvent[],
     tracksById: Map<
       string,
-      { readonly channel: number; readonly deviceInstanceId?: string }
+      {
+        readonly channel: number
+        readonly mixer: TrackMixerState
+        readonly deviceInstanceId?: string
+      }
     >,
     note: { readonly id: string; readonly trackId: string; readonly pitch: number; readonly velocity: number; readonly duration: number },
     beat: BeatTime,
@@ -223,6 +227,7 @@ export class TypeScriptScheduler implements Scheduler {
         trackId: note.trackId,
         channel: track?.channel,
         destination,
+        mixer: track?.mixer,
         pitch: note.pitch,
         velocity: note.velocity,
         beat,
@@ -238,6 +243,7 @@ export class TypeScriptScheduler implements Scheduler {
         trackId: note.trackId,
         channel: track?.channel,
         destination,
+        mixer: track?.mixer,
         pitch: note.pitch,
         velocity: 0,
         beat: noteOffBeat,
@@ -250,7 +256,11 @@ export class TypeScriptScheduler implements Scheduler {
     events: PlaybackEvent[],
     tracksById: Map<
       string,
-      { readonly channel: number; readonly deviceInstanceId?: string }
+      {
+        readonly channel: number
+        readonly mixer: TrackMixerState
+        readonly deviceInstanceId?: string
+      }
     >,
     automation: {
       readonly id: string
@@ -281,6 +291,7 @@ export class TypeScriptScheduler implements Scheduler {
       trackId: automation.trackId,
       channel: track?.channel,
       destination,
+      mixer: track?.mixer,
       parameterId: automation.parameterId,
       parameterKey: automation.parameterKey,
       value: automation.value,
@@ -293,7 +304,11 @@ export class TypeScriptScheduler implements Scheduler {
     events: PlaybackEvent[],
     tracksById: Map<
       string,
-      { readonly channel: number; readonly deviceInstanceId?: string }
+      {
+        readonly channel: number
+        readonly mixer: TrackMixerState
+        readonly deviceInstanceId?: string
+      }
     >,
     lane: AutomationLane,
     fromBeat: BeatTime,

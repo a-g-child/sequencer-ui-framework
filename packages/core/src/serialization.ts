@@ -1,6 +1,7 @@
 import { Registry } from "./registry.ts";
 import type { SequencerDocument } from "./document.ts";
 import type { MidiClip, Pattern, Track } from "./project.ts";
+import { createDefaultTrackMixerState } from "./project.ts";
 import type { Parameter, ParameterDefinition } from "./parameter.ts";
 import type { Timeline } from "./timeline.ts";
 import type { AssetReference } from "@sequencer/assets";
@@ -58,6 +59,7 @@ export function deserializeDocument(json: string): SequencerDocument {
 
   for (const track of serialized.tracks) {
     track.clips ??= [];
+    track.mixer = normalizeSerializedTrackMixer(track.mixer);
     tracks.add(track);
   }
 
@@ -98,4 +100,28 @@ export function serializeProject(project: SequencerDocument): string {
 
 export function deserializeProject(json: string): SequencerDocument {
   return deserializeDocument(json);
+}
+
+function normalizeSerializedTrackMixer(
+  mixer: Track["mixer"] | undefined
+): Track["mixer"] {
+  const defaults = createDefaultTrackMixerState();
+
+  return {
+    volume: clampNumber(mixer?.volume, 0, 1, defaults.volume),
+    pan: clampNumber(mixer?.pan, -1, 1, defaults.pan),
+    mute: typeof mixer?.mute === "boolean" ? mixer.mute : defaults.mute,
+    solo: typeof mixer?.solo === "boolean" ? mixer.solo : defaults.solo
+  };
+}
+
+function clampNumber(
+  value: number | undefined,
+  min: number,
+  max: number,
+  fallback: number
+): number {
+  if (!Number.isFinite(value)) return fallback;
+
+  return Math.min(max, Math.max(min, value ?? fallback));
 }

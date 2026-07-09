@@ -1,16 +1,13 @@
 <script lang="ts">
-  import type {
-    ParameterValue,
-    Track
-  } from '@sequencer/core'
+  import type { Track } from '@sequencer/core'
   import type {
     DeviceInstance,
     DeviceParameterDescriptor,
     DeviceParameterValue,
     SampleSlot
   } from '@sequencer/device'
-  import type { InspectorPropertyView } from '../inspector/inspector-model'
   import ParameterEditor from '../framework/parameter/ParameterEditor.svelte'
+  import MixerPanel from './MixerPanel.svelte'
 
   type DeviceParameterView = {
     device: DeviceInstance
@@ -27,7 +24,6 @@
 
   export let selectedTrack: Track | undefined = undefined
   export let selectedTrackId = ''
-  export let selectedTrackParameterViews: InspectorPropertyView[] = []
   export let selectedTrackDeviceName = 'No device'
   export let selectedTrackDeviceParameterViews: DeviceParameterView[] = []
   export let webAudioEnabled = false
@@ -39,16 +35,6 @@
   export let samplerSlots: SamplerSlotView[] = []
   export let selectedSamplerSlotId = 'slot-1'
   export let samplerSampleStatus = ''
-  export let displayedTrackParameterValue: (
-    property: InspectorPropertyView
-  ) => ParameterValue
-  export let onSetNumberPreview: (parameterId: string, value: number) => void
-  export let onCommitNumberValue: (parameterId: string, value: number) => void
-  export let onSetParameterValue: (
-    parameterId: string,
-    value: ParameterValue
-  ) => void
-  export let onToggleBooleanParameter: (property: InspectorPropertyView) => void
   export let onToggleWebAudioOutput: () => void
   export let onToggleWebMidiOutput: () => void
   export let onLoadSamplerSampleFile: (file: File) => void
@@ -58,6 +44,10 @@
     deviceInstanceId: string,
     parameterKey: string,
     value: DeviceParameterValue
+  ) => void
+  export let onSetTrackMixerValue: <K extends keyof Track['mixer']>(
+    key: K,
+    value: Track['mixer'][K]
   ) => void
 
   function readNumberValue(event: Event): number {
@@ -96,53 +86,15 @@
 
   <section class="track-module" aria-label="Track parameters">
     <div class="module-heading">
-      <h2>Track</h2>
-      <span>Volume / Pan / Mute</span>
+      <h2>Mixer</h2>
+      <span>Volume / Pan / Mute / Solo</span>
     </div>
 
-    <div class="parameter-module-grid">
-      {#each selectedTrackParameterViews as property (property.parameter.id)}
-        <label class="module-control">
-          <span>{property.definition.name}</span>
-          {#if property.definition.kind === 'number'}
-            <input
-              type="range"
-              min={property.definition.min ?? 0}
-              max={property.definition.max ?? 1}
-              step={property.definition.step ?? 0.01}
-              value={Number(displayedTrackParameterValue(property))}
-              on:input={(event) =>
-                onSetNumberPreview(property.parameter.id, readNumberValue(event))}
-              on:change={(event) =>
-                onCommitNumberValue(property.parameter.id, readNumberValue(event))}
-              disabled={!selectedTrackId}
-            />
-            <strong>{Number(displayedTrackParameterValue(property)).toFixed(2)}</strong>
-          {:else if property.definition.kind === 'boolean'}
-            <button
-              type="button"
-              class="module-toggle"
-              class:active={Boolean(displayedTrackParameterValue(property))}
-              aria-pressed={Boolean(displayedTrackParameterValue(property))}
-              on:click={() => onToggleBooleanParameter(property)}
-              disabled={!selectedTrackId}
-            >
-              {Boolean(displayedTrackParameterValue(property)) ? 'On' : 'Off'}
-            </button>
-          {:else}
-            <input
-              value={String(displayedTrackParameterValue(property))}
-              on:change={(event) =>
-                onSetParameterValue(
-                  property.parameter.id,
-                  (event.currentTarget as HTMLInputElement).value
-                )}
-              disabled={!selectedTrackId}
-            />
-          {/if}
-        </label>
-      {/each}
-    </div>
+    <MixerPanel
+      track={selectedTrack}
+      disabled={!selectedTrackId}
+      onChange={onSetTrackMixerValue}
+    />
   </section>
 
   <section class="track-module" aria-label="Track device">
@@ -371,35 +323,6 @@
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: var(--spacing-sm);
-  }
-
-  .module-control {
-    min-width: 0;
-    display: grid;
-    gap: var(--spacing-2xs);
-    color: var(--muted);
-    font-size: var(--font-size-xs);
-    font-weight: 800;
-    text-transform: uppercase;
-  }
-
-  .module-control strong {
-    color: var(--text);
-    font-size: var(--font-size-xs);
-  }
-
-  .module-toggle {
-    min-height: var(--control-height-sm);
-    border-radius: var(--radius-control);
-    color: var(--muted);
-    font-size: var(--font-size-xs);
-    font-weight: 800;
-  }
-
-  .module-toggle.active {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-    color: var(--accent);
   }
 
   .audio-output-panel {

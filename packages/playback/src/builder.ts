@@ -1,4 +1,9 @@
-import type { Pattern, SequencerDocument, TimelineEvent } from '@sequencer/core'
+import {
+  createDefaultTrackMixerState,
+  type Pattern,
+  type SequencerDocument,
+  type TimelineEvent
+} from '@sequencer/core'
 import { getEffectiveBeat, getEffectiveVelocity, isNoteEvent } from '@sequencer/music'
 import { freezePlaybackModel, type PlaybackAutomation, type PlaybackClip, type PlaybackModel, type PlaybackNote, type PlaybackTrack } from './model'
 import type { ActiveClipLaunch } from './live-clips'
@@ -24,6 +29,7 @@ export class PlaybackModelBuilder {
         id: track.id,
         name: track.name,
         channel: trackIndex % 16,
+        mixer: track.mixer ?? createDefaultTrackMixerState(),
         deviceInstanceId: track.deviceId,
         target: track.target
       }

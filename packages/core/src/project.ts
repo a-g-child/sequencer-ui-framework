@@ -22,8 +22,25 @@ export interface MidiClip extends Entity {
 export interface Track extends Entity, ParameterOwner {
   clips: TrackClipSlot[];
   placements: PatternPlacement[];
+  mixer: TrackMixerState;
   deviceId?: EntityRef<DeviceInstance>;
   target?: string;
+}
+
+export interface TrackMixerState {
+  volume: number;
+  pan: number;
+  mute: boolean;
+  solo: boolean;
+}
+
+export function createDefaultTrackMixerState(): TrackMixerState {
+  return {
+    volume: 0.8,
+    pan: 0,
+    mute: false,
+    solo: false
+  };
 }
 
 export interface TrackClipSlot extends Relationship<Track, MidiClip> {

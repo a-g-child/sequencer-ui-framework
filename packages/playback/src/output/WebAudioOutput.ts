@@ -1,5 +1,6 @@
 import type { AssetReference } from '@sequencer/assets'
 import type { SampleVoiceAction, VoiceAction } from '@sequencer/audio'
+import type { TrackMixerState } from '@sequencer/core'
 import type { PlaybackEvent } from '../events'
 import { noteOnlyCapabilities } from './OutputEvent'
 import type { PlaybackOutput } from './PlaybackOutput'
@@ -47,6 +48,8 @@ type ActiveVoice = {
   readonly oscillator: OscillatorNode
   readonly filter: BiquadFilterNode
   readonly gain: GainNode
+  readonly mixerGain: GainNode
+  readonly panner: StereoPannerNode
   readonly envelope?: VoiceActionEnvelope
   readonly trackId?: string
   readonly startTime: number
@@ -59,6 +62,8 @@ type ActiveVoice = {
 type ActiveSample = {
   readonly source: AudioBufferSourceNode
   readonly gain: GainNode
+  readonly mixerGain: GainNode
+  readonly panner: StereoPannerNode
   readonly trackId?: string
   readonly startTime: number
   stopScheduled?: boolean
@@ -78,6 +83,7 @@ export class WebAudioOutput implements PlaybackOutput {
   private masterGain?: GainNode
   private defaultSettings: WebAudioOscillatorSettings
   private readonly trackSettings = new Map<string, WebAudioOscillatorSettings>()
+  private readonly trackMixers = new Map<string, TrackMixerState>()
   private readonly voices = new Map<string, ActiveVoice>()
   private readonly samples = new Map<string, ActiveSample>()
   private readonly sampleBuffers = new Map<string, AudioBuffer>()
@@ -183,6 +189,16 @@ export class WebAudioOutput implements PlaybackOutput {
 
     this.trackSettings.set(trackId, nextSettings)
     this.updateActiveTrackVoices(trackId, currentSettings, nextSettings)
+  }
+
+  setTrackMixers(mixers: Readonly<Record<string, TrackMixerState>>): void {
+    this.trackMixers.clear()
+
+    for (const [trackId, mixer] of Object.entries(mixers)) {
+      this.trackMixers.set(trackId, normalizeTrackMixer(mixer))
+    }
+
+    this.updateActiveMixerNodes()
   }
 
   trackSettingsFor(trackId: string | undefined): WebAudioOscillatorSettings {
@@ -314,6 +330,8 @@ export class WebAudioOutput implements PlaybackOutput {
     const oscillator = this.context.createOscillator()
     const filter = this.context.createBiquadFilter()
     const gain = this.context.createGain()
+    const panner = this.context.createStereoPanner()
+    const mixerGain = this.context.createGain()
     const startTime = this.outputTime(action.timeMs)
     const envelope = normalizeVoiceEnvelope(action.envelope)
     const attackTime = startTime + envelope.attack
@@ -332,12 +350,17 @@ export class WebAudioOutput implements PlaybackOutput {
 
     oscillator.connect(filter)
     filter.connect(gain)
-    gain.connect(this.masterGain)
+    gain.connect(panner)
+    panner.connect(mixerGain)
+    mixerGain.connect(this.masterGain)
+    this.applyMixerToNodes(action.trackId, mixerGain, panner, startTime, true)
     oscillator.start(startTime)
     this.voices.set(key, {
       oscillator,
       filter,
       gain,
+      mixerGain,
+      panner,
       envelope,
       trackId: action.trackId,
       startTime,
@@ -386,6 +409,8 @@ export class WebAudioOutput implements PlaybackOutput {
 
     const source = this.context.createBufferSource()
     const gain = this.context.createGain()
+    const panner = this.context.createStereoPanner()
+    const mixerGain = this.context.createGain()
     const buffer = this.bufferForSampleAction(action)
     const startTime = this.outputTime(action.timeMs)
     const offset = sampleOffsetSeconds(buffer, action)
@@ -406,7 +431,10 @@ export class WebAudioOutput implements PlaybackOutput {
     gain.gain.setValueAtTime(Math.max(0, action.gain), startTime)
 
     source.connect(gain)
-    gain.connect(this.masterGain)
+    gain.connect(panner)
+    panner.connect(mixerGain)
+    mixerGain.connect(this.masterGain)
+    this.applyMixerToNodes(action.trackId, mixerGain, panner, startTime, true)
     source.onended = () => {
       if (this.samples.get(key)?.source === source) {
         this.samples.delete(key)
@@ -422,6 +450,8 @@ export class WebAudioOutput implements PlaybackOutput {
     this.samples.set(key, {
       source,
       gain,
+      mixerGain,
+      panner,
       trackId: action.trackId,
       startTime
     })
@@ -537,6 +567,51 @@ export class WebAudioOutput implements PlaybackOutput {
     return this.trackSettings.get(trackId) ?? this.defaultSettings
   }
 
+  private updateActiveMixerNodes(): void {
+    if (!this.context) return
+
+    const time = this.context.currentTime
+
+    for (const voice of this.voices.values()) {
+      this.applyMixerToNodes(voice.trackId, voice.mixerGain, voice.panner, time)
+    }
+
+    for (const sample of this.samples.values()) {
+      this.applyMixerToNodes(sample.trackId, sample.mixerGain, sample.panner, time)
+    }
+  }
+
+  private applyMixerToNodes(
+    trackId: string | undefined,
+    mixerGain: GainNode,
+    panner: StereoPannerNode,
+    time: number,
+    immediate = false
+  ): void {
+    const mixer = this.mixerForTrack(trackId)
+    const gain = effectiveMixerGain(mixer, this.anySoloedTrack())
+    const pan = mixer.pan
+
+    if (immediate) {
+      mixerGain.gain.setValueAtTime(gain, time)
+      panner.pan.setValueAtTime(pan, time)
+      return
+    }
+
+    mixerGain.gain.setTargetAtTime(gain, time, 0.01)
+    panner.pan.setTargetAtTime(pan, time, 0.01)
+  }
+
+  private mixerForTrack(trackId: string | undefined): TrackMixerState {
+    if (!trackId) return defaultTrackMixer()
+
+    return this.trackMixers.get(trackId) ?? defaultTrackMixer()
+  }
+
+  private anySoloedTrack(): boolean {
+    return [...this.trackMixers.values()].some((mixer) => mixer.solo)
+  }
+
   private updateActiveTrackVoices(
     trackId: string,
     previousSettings: WebAudioOscillatorSettings,
@@ -613,6 +688,40 @@ function clampUnit(value: number): number {
   if (!Number.isFinite(value)) return 0
 
   return Math.min(1, Math.max(0, value))
+}
+
+function clampBipolar(value: number): number {
+  if (!Number.isFinite(value)) return 0
+
+  return Math.min(1, Math.max(-1, value))
+}
+
+function defaultTrackMixer(): TrackMixerState {
+  return {
+    volume: 0.8,
+    pan: 0,
+    mute: false,
+    solo: false
+  }
+}
+
+function normalizeTrackMixer(mixer: TrackMixerState): TrackMixerState {
+  return {
+    volume: clampUnit(mixer.volume),
+    pan: clampBipolar(mixer.pan),
+    mute: Boolean(mixer.mute),
+    solo: Boolean(mixer.solo)
+  }
+}
+
+function effectiveMixerGain(
+  mixer: TrackMixerState,
+  anySoloedTrack: boolean
+): number {
+  if (anySoloedTrack && !mixer.solo) return 0
+  if (mixer.mute) return 0
+
+  return clampUnit(mixer.volume)
 }
 
 function normalizeAdsr(

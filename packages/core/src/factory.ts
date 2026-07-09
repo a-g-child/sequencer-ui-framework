@@ -5,6 +5,7 @@ import type {
   Track,
   TrackClipSlot
 } from "./project.ts";
+import { createDefaultTrackMixerState } from "./project.ts";
 import type { AssetReference } from "@sequencer/assets";
 import type { SequencerDocument } from "./document.ts";
 import type { BeatTime } from "./events.ts";
@@ -57,6 +58,7 @@ export function createTrack(
     name,
     clips: [],
     placements: [],
+    mixer: createDefaultTrackMixerState(),
     parameters: [],
     deviceId,
     target

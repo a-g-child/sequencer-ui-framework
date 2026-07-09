@@ -1,4 +1,4 @@
-import type { BeatTime } from '@sequencer/core'
+import type { BeatTime, TrackMixerState } from '@sequencer/core'
 
 export interface TempoMap {
   readonly defaultBpm: number
@@ -25,6 +25,7 @@ export interface PlaybackTrack {
   readonly id: string
   readonly name: string
   readonly channel: number
+  readonly mixer: TrackMixerState
   readonly deviceInstanceId?: string
   readonly target?: string
 }

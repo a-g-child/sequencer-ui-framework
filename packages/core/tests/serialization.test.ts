@@ -79,6 +79,12 @@ describe('document serialization', () => {
       id: 'track-1',
       name: 'Track 1',
       deviceId: sampler.id,
+      mixer: {
+        volume: 0.64,
+        pan: -0.25,
+        mute: false,
+        solo: true
+      },
       clips: [
         {
           id: 'clip-slot-1',
@@ -116,9 +122,40 @@ describe('document serialization', () => {
 
     assert.deepEqual(restored.assets.get(asset.id), asset);
     assert.equal(restoredTrack.deviceId, sampler.id);
+    assert.deepEqual(restoredTrack.mixer, track.mixer);
     assert.equal(restoredTrack.clips[0].slotIndex, 3);
     assert.deepEqual(restoredSampler.parameterValues, sampler.parameterValues);
     assert.deepEqual(restoredSampler.sampleSlots, sampler.sampleSlots);
+  });
+
+  it('adds default mixer state when loading older documents', () => {
+    const serialized = JSON.stringify({
+      id: 'document-legacy',
+      name: 'Legacy',
+      bpm: 120,
+      timeline: { length: 16, markers: [] },
+      tracks: [
+        {
+          id: 'track-legacy',
+          name: 'Track',
+          clips: [],
+          placements: [],
+          parameters: []
+        }
+      ],
+      patterns: [],
+      parameterDefinitions: [],
+      parameters: []
+    });
+
+    const restored = deserializeDocument(serialized);
+
+    assert.deepEqual(restored.tracks.get('track-legacy').mixer, {
+      volume: 0.8,
+      pan: 0,
+      mute: false,
+      solo: false
+    });
   });
 });
 
