@@ -649,15 +649,23 @@ export class AppController {
       })
   }
 
-  createClipForTrack(trackId: string | undefined): string | undefined {
+  createClipForTrack(
+    trackId: string | undefined,
+    slotIndex?: number
+  ): string | undefined {
     if (!trackId) return undefined
 
     const track = this.app.documentStore.document.tracks.find(trackId)
 
     if (!track) return undefined
 
-    const clipName = `Clip ${track.clips.length + 1}`
-    const operation = new CreateClipForTrackOperation(trackId, clipName, 4)
+    const clipName = `Clip ${(slotIndex ?? track.clips.length) + 1}`
+    const operation = new CreateClipForTrackOperation(
+      trackId,
+      clipName,
+      4,
+      slotIndex
+    )
 
     this.app.documentStore.execute(operation)
     return operation.clip.id

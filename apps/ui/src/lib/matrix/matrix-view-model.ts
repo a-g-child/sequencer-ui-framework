@@ -11,3 +11,11 @@ export type MatrixTrackView = {
   readonly clips: MatrixClipView[]
   readonly queuedLaunch: string
 }
+
+export type MatrixSceneRow = {
+  readonly slotIndex: number
+  readonly label: string
+  readonly hasClips: boolean
+  readonly playing: boolean
+  readonly queued: boolean
+}

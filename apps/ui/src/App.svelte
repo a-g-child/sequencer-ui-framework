@@ -60,7 +60,11 @@
   import RuntimePanel from './lib/panels/RuntimePanel.svelte';
   import TransportPanel from './lib/panels/TransportPanel.svelte';
   import MatrixView from './lib/matrix/MatrixView.svelte';
-  import type { MatrixClipView, MatrixTrackView } from './lib/matrix/matrix-view-model';
+  import type {
+    MatrixClipView,
+    MatrixSceneRow,
+    MatrixTrackView
+  } from './lib/matrix/matrix-view-model';
   import TrackModules from './lib/modules/TrackModules.svelte';
   import { LocalProjectStore } from './lib/persistence/LocalProjectStore';
 
@@ -81,6 +85,7 @@
 
   const SAMPLER_SLOT_COUNT = 8
   const DEFAULT_SAMPLER_ROOT_NOTES = [36, 38, 42, 46, 49, 51, 45, 48]
+  const MATRIX_SCENE_ROW_COUNT = 8
 
   const DEVICE_DESCRIPTORS: DeviceDescriptor[] = [
     BASIC_SYNTH_DESCRIPTOR,
@@ -192,6 +197,7 @@
     playbackStatus.liveClips.pendingLaunchByTrackId[selectedTrackId]
   )
   let matrixTracks: MatrixTrackView[] = buildMatrixTracks()
+  let matrixSceneRows: MatrixSceneRow[] = buildMatrixSceneRows(matrixTracks)
   let activeEditor: EditorKind = 'piano-roll';
   let viewMode: MainViewMode = 'matrix'
   let clipPressTimer: ReturnType<typeof setTimeout> | undefined
@@ -366,6 +372,7 @@
 
   function refreshMatrixTracks() {
     matrixTracks = buildMatrixTracks()
+    matrixSceneRows = buildMatrixSceneRows(matrixTracks)
   }
 
   function buildMatrixTracks(): MatrixTrackView[] {
@@ -374,6 +381,31 @@
       clips: matrixTrackClips(track.id),
       queuedLaunch: trackQueuedLaunch(track.id)
     }))
+  }
+
+  function buildMatrixSceneRows(
+    matrixTracks: MatrixTrackView[]
+  ): MatrixSceneRow[] {
+    const highestSlotIndex = Math.max(
+      MATRIX_SCENE_ROW_COUNT - 1,
+      ...matrixTracks.flatMap((track) =>
+        track.clips.map((clip) => clip.slotIndex)
+      )
+    )
+
+    return Array.from({ length: highestSlotIndex + 1 }, (_, slotIndex) => {
+      const clips = matrixTracks.flatMap((track) =>
+        track.clips.filter((clip) => clip.slotIndex === slotIndex)
+      )
+
+      return {
+        slotIndex,
+        label: `Scene ${slotIndex + 1}`,
+        hasClips: clips.length > 0,
+        playing: clips.some((clip) => clip.playbackActive),
+        queued: clips.some((clip) => clip.pendingLaunch)
+      }
+    })
   }
 
   function refreshSelectedTrackWebAudioSettings() {
@@ -926,6 +958,88 @@
     syncView()
   }
 
+  function launchMatrixScene(slotIndex: number) {
+    const clips = matrixTracks.flatMap((track) =>
+      track.clips.filter((clip) => clip.slotIndex === slotIndex)
+    )
+
+    for (const clip of clips) {
+      playback.requestClipLaunch(clip.trackId, clip.id)
+    }
+
+    playbackStatus = playback.status
+    refreshSelectedTrackClips()
+    refreshMatrixTracks()
+    syncView()
+  }
+
+  function stopMatrixTrack(trackId: string) {
+    const pendingLaunch =
+      playbackStatus.liveClips.pendingLaunchByTrackId[trackId]
+    const activeLaunch =
+      playbackStatus.liveClips.activeClipByTrackId[trackId]
+
+    if (pendingLaunch) {
+      playback.cancelClipLaunch(trackId)
+    }
+
+    if (activeLaunch) {
+      playback.clearActiveClipForTrack(trackId)
+    }
+
+    if (
+      activeClipId &&
+      matrixTrackClips(trackId).some((clip) => clip.id === activeClipId)
+    ) {
+      activeClipId = undefined
+    }
+  }
+
+  function stopMatrixScene(slotIndex: number) {
+    const clips = matrixTracks.flatMap((track) =>
+      track.clips.filter((clip) => clip.slotIndex === slotIndex)
+    )
+
+    for (const clip of clips) {
+      if (clip.pendingLaunch) {
+        playback.cancelClipLaunch(clip.trackId)
+      }
+
+      if (clip.playbackActive) {
+        playback.clearActiveClipForTrack(clip.trackId)
+      }
+
+      if (activeClipId === clip.id) {
+        activeClipId = undefined
+      }
+    }
+
+    playbackStatus = playback.status
+    refreshSelectedTrackClips()
+    refreshMatrixTracks()
+    syncView()
+  }
+
+  function stopMatrixAll() {
+    for (const track of tracks) {
+      stopMatrixTrack(track.id)
+    }
+
+    activeClipId = undefined
+    playbackStatus = playback.status
+    refreshSelectedTrackClips()
+    refreshMatrixTracks()
+    syncView()
+  }
+
+  function stopMatrixTrackAndRefresh(trackId: string) {
+    stopMatrixTrack(trackId)
+    playbackStatus = playback.status
+    refreshSelectedTrackClips()
+    refreshMatrixTracks()
+    syncView()
+  }
+
   function addClipToSelectedTrack() {
     const clipId = addClipToTrack(selectedTrackId)
 
@@ -936,14 +1050,17 @@
     syncView()
   }
 
-  function addClipToTrack(trackId: string | undefined): string | undefined {
+  function addClipToTrack(
+    trackId: string | undefined,
+    slotIndex?: number
+  ): string | undefined {
     const track = tracks.find((item) => item.id === trackId)
 
     if (track) {
       controller.selectTrack(track)
     }
 
-    const clipId = controller.createClipForTrack(trackId)
+    const clipId = controller.createClipForTrack(trackId, slotIndex)
 
     if (trackId && clipId) {
       ensureClipActiveWhenStopped(trackId, clipId)
@@ -1316,6 +1433,7 @@
     {#if viewMode === 'matrix'}
       <MatrixView
         {matrixTracks}
+        sceneRows={matrixSceneRows}
         {selectedTrackId}
         launchQuantize={playbackStatus.liveClips.launchQuantize}
         {launchQuantizeOptions}
@@ -1326,6 +1444,10 @@
         onClipPointerDown={startClipPress}
         onClipPointerEnd={endClipPress}
         onClipClick={launchMatrixClip}
+        onSceneLaunch={launchMatrixScene}
+        onSceneStop={stopMatrixScene}
+        onTrackStop={stopMatrixTrackAndRefresh}
+        onStopAll={stopMatrixAll}
         onAddClipToTrack={addClipToTrack}
       />
     {:else}
