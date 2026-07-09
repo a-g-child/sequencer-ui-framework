@@ -158,11 +158,11 @@ export class AudioGraphBuilder {
       return undefined;
     }
 
-    if (sourcePort.kind !== targetPort.kind) {
+    if (!arePortsCompatible(sourcePort, targetPort)) {
       diagnostics.push({
         severity: 'error',
         code: 'incompatible-port-kind',
-        message: `Connection "${connection.id}" cannot connect ${sourcePort.kind} to ${targetPort.kind}.`,
+        message: `Connection "${connection.id}" cannot connect ${sourcePort.kind} output to ${targetPort.kind} input.`,
         connectionId: connection.id
       });
       return undefined;
@@ -190,6 +190,13 @@ export class AudioGraphBuilder {
       targetPort
     };
   }
+}
+
+function arePortsCompatible(
+  sourcePort: AudioNodePortDescriptor,
+  targetPort: AudioNodePortDescriptor
+): boolean {
+  return sourcePort.kind === targetPort.kind;
 }
 
 function resolveParameters(
