@@ -524,10 +524,10 @@ value:
 - sampler device foundation
 - clip matrix polish
 
-## Phase 10: Musical Devices
+## Phase 10: Musical Devices And Architecture V2 Proofs
 
-Phase 10 should stop expanding execution backends and start making the
-groovebox musically useful.
+Phase 10 should stop expanding execution backends and start proving that new
+musical ideas can be built through the existing execution architecture.
 
 The project now has enough execution surfaces:
 
@@ -539,20 +539,38 @@ Those are sufficient to prove the architecture. New backends such as OSC,
 JACK, ALSA, CoreAudio, ASIO, VST, CLAP, or LV2 should wait until a musical
 device needs them.
 
-The next product milestone is the sampler. It should validate that the runtime
-device architecture works for a second instrument family, not just for the
-Golden Device synth.
+Basic Synth and Sampler now validate the first graph-executed instrument
+families:
 
 ```text
-Document
-  -> PlaybackModel
-  -> RuntimeDevice
-  -> VoiceManager
-  -> SampleVoiceAction
-  -> WebAudioOutput
+Basic Synth
+oscillator -> filter -> ADSR gain -> track gain -> pan -> mixer -> output
+
+Sampler
+sample-player -> ADSR gain -> track gain -> pan -> mixer -> output
 ```
 
-The important change is execution, not the creative model.
+The next milestone is not another framework layer. It is proving that different
+musical families fit the same pipeline:
+
+```text
+Descriptor
+  -> execution graph preset
+  -> RuntimeDevice
+  -> RuntimeGraph
+  -> ExecutionExecutor
+```
+
+Acid-test devices:
+
+- Mono Synth: single voice, glide, legato, retrigger behavior
+- Drum Sampler: fixed 16-slot sample triggering with no pitch tracking
+- Delay: audio input to delay/mix/output, with no voices and no MIDI
+- LFO Device: control output only, with no audio
+- MIDI Effect / Arpeggiator: MIDI input to MIDI output, with no audio path
+
+If those fit naturally, the graph is no longer merely an audio graph. It is an
+execution graph for musical computation.
 
 ### Phase 10.1: Assets
 
@@ -592,7 +610,7 @@ file loader, a bundled project asset, or a hardware upload path.
 
 ### Phase 10.2: Sampler Device Foundation
 
-The sampler should be a `RuntimeDevice`, not a special output mode.
+Status: landed as a graph-backed `RuntimeDevice`, not a special output mode.
 
 Suggested document/runtime shape:
 
@@ -606,7 +624,7 @@ SampleSlot
   loop
 ```
 
-The sampler runtime should reuse the existing voice lifecycle:
+The sampler runtime reuses the existing voice lifecycle:
 
 ```text
 PlaybackEvent
@@ -618,9 +636,27 @@ PlaybackEvent
 
 The first sampler does not need stretching, slicing, reverse playback, or
 advanced modulation. Its purpose is to prove that assets, runtime devices,
-voices, and Web Audio execution compose cleanly.
+voices, graph presets, and Web Audio execution compose cleanly.
 
-### Phase 10.3: Groovebox Workflow
+### Phase 10.3: MIDI Effect Acid Test
+
+The next architecture proof should be a MIDI effect, preferably an arpeggiator:
+
+```text
+MIDI In
+  -> Arpeggiator
+  -> MIDI Out
+```
+
+This device should have no oscillators, no samples, no audio output, and no
+voice manager unless the musical behavior truly requires one. It should still
+fit the same descriptor, graph preset, runtime graph, diagnostics, and executor
+pipeline.
+
+If it fits without changing the framework, the execution graph model has moved
+beyond synthesizers and into general musical computation.
+
+### Phase 10.4: Groovebox Workflow
 
 Once synth, sampler, and MIDI all exist as devices, return to the product
 surface:

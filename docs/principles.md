@@ -114,6 +114,26 @@ view model.
 Features should make the framework richer. They should not carve private paths
 around it.
 
+## New Ideas Should Not Require New Frameworks
+
+The architecture is healthy when new musical ideas require new devices, graph
+presets, nodes, and executor implementations, not new framework abstractions.
+
+Before adding another layer, ask whether the idea can be expressed through the
+existing pipeline:
+
+```text
+Descriptor
+  -> Execution Graph
+  -> Runtime Graph
+  -> Executor
+```
+
+A mono synth, drum sampler, delay, LFO device, or MIDI arpeggiator should prove
+the framework by using it. If each new musical family needs a private pathway,
+the abstraction is not finished. If it needs only new nodes, device behavior,
+and executor support, the architecture is doing its job.
+
 ## Intent Is Edited, State Is Observed
 
 User actions should edit intent through operations.
