@@ -1,10 +1,16 @@
 import type { AssetReference } from '@sequencer/assets'
 import type { SampleVoiceAction, VoiceAction } from '@sequencer/audio'
+import {
+  AudioGraphBuilder,
+  BASIC_SYNTH_AUDIO_GRAPH,
+  DEFAULT_AUDIO_NODE_DESCRIPTORS
+} from '@sequencer/audio-graph'
 import type { TrackMixerState } from '@sequencer/core'
 import type { PlaybackEvent } from '../events'
 import { noteOnlyCapabilities } from './OutputEvent'
 import type { PlaybackOutput } from './PlaybackOutput'
 import { WebAudioAssetLoader } from './WebAudioAssetLoader'
+import { WebAudioExecutor } from './WebAudioExecutor'
 
 export type WebAudioWaveform = OscillatorType
 
@@ -87,6 +93,10 @@ export class WebAudioOutput implements PlaybackOutput {
   private readonly voices = new Map<string, ActiveVoice>()
   private readonly samples = new Map<string, ActiveSample>()
   private readonly sampleBuffers = new Map<string, AudioBuffer>()
+  private readonly executor = new WebAudioExecutor()
+  private readonly basicSynthRuntimeGraph = new AudioGraphBuilder(
+    DEFAULT_AUDIO_NODE_DESCRIPTORS
+  ).build(BASIC_SYNTH_AUDIO_GRAPH)
 
   constructor(options: WebAudioOutputOptions = {}) {
     this.defaultSettings = {
@@ -116,6 +126,10 @@ export class WebAudioOutput implements PlaybackOutput {
     if (this.context.state === 'suspended') {
       await this.context.resume()
     }
+
+    if (this.executor.status === 'idle' || this.executor.status === 'shutdown') {
+      await this.executor.initialise(this.basicSynthRuntimeGraph)
+    }
   }
 
   async disconnect(): Promise<void> {
@@ -127,6 +141,7 @@ export class WebAudioOutput implements PlaybackOutput {
 
     this.context = undefined
     this.masterGain = undefined
+    this.executor.shutdown()
   }
 
   setWaveform(waveform: WebAudioWaveform): void {
@@ -327,12 +342,17 @@ export class WebAudioOutput implements PlaybackOutput {
       this.forceStopVoice(key, existingVoice, this.context.currentTime)
     }
 
-    const oscillator = this.context.createOscillator()
+    const startTime = this.outputTime(action.timeMs)
+    const oscillator = this.executor.createOscillatorNode(this.context, {
+      waveform: settings.waveform,
+      pitch: action.pitch,
+      glide: action.glide,
+      startTime
+    })
     const filter = this.context.createBiquadFilter()
     const gain = this.context.createGain()
     const panner = this.context.createStereoPanner()
     const mixerGain = this.context.createGain()
-    const startTime = this.outputTime(action.timeMs)
     const envelope = normalizeVoiceEnvelope(action.envelope)
     const attackTime = startTime + envelope.attack
     const decayTime = attackTime + envelope.decay
@@ -340,8 +360,6 @@ export class WebAudioOutput implements PlaybackOutput {
     const peakGain = amplitude * settings.volume
     const sustainGain = peakGain * envelope.sustain
 
-    oscillator.type = settings.waveform
-    configureOscillatorFrequency(oscillator, action, startTime)
     configureFilter(filter, settings.filter, action.pitch, startTime, true)
     gain.gain.cancelScheduledValues(startTime)
     gain.gain.setValueAtTime(0, startTime)
@@ -656,32 +674,6 @@ export class WebAudioOutput implements PlaybackOutput {
       }
     }
   }
-}
-
-function midiNoteToFrequency(note: number): number {
-  return 440 * 2 ** ((note - 69) / 12)
-}
-
-function configureOscillatorFrequency(
-  oscillator: OscillatorNode,
-  action: Extract<VoiceAction, { type: 'voice:start' }>,
-  startTime: number
-): void {
-  const targetFrequency = midiNoteToFrequency(action.pitch)
-  const glideTime = Math.max(0, action.glide?.time ?? 0)
-
-  if (!action.glide || glideTime <= 0) {
-    oscillator.frequency.setValueAtTime(targetFrequency, startTime)
-    return
-  }
-
-  const startFrequency = midiNoteToFrequency(action.glide.startPitch)
-
-  oscillator.frequency.setValueAtTime(startFrequency, startTime)
-  oscillator.frequency.exponentialRampToValueAtTime(
-    targetFrequency,
-    startTime + glideTime
-  )
 }
 
 function clampUnit(value: number): number {
