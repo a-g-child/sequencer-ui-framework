@@ -6,7 +6,7 @@ across playback, devices, and audio graphs:
 ```text
 Descriptor
   -> Graph Preset
-  -> AudioGraphBuilder
+  -> AudioGraphBuilder / ExecutionGraphBuilder
   -> RuntimeGraph
   -> Execution Backend
   -> Driver
@@ -14,6 +14,10 @@ Descriptor
 
 This is the Phase 10 contract. The document remains creative intent. Graphs
 describe execution. Backends execute resolved graphs.
+
+The graph layer should be understood as an execution graph, not only an audio
+graph. Audio, MIDI, control, and hardware signals all use the same underlying
+idea: typed ports connected through reusable nodes.
 
 ## Core Principle
 
@@ -110,13 +114,22 @@ Device graphs are implementation details of devices. Project graphs are routing
 and mixing structure for the song/session. They can share concepts, but they
 should not collapse into one model too early.
 
-## Audio Node Vocabulary
+## Node Vocabulary
 
-A future package can hold shared node definitions without tying them to a
-backend:
+A shared package should hold node definitions without tying them to a backend:
 
 ```text
-packages/audio-nodes
+packages/nodes
+  audio/
+  midi/
+  control/
+  hardware/
+```
+
+Concrete node families include:
+
+```text
+Audio
   oscillator/
   sample-player/
   adsr/
@@ -126,12 +139,82 @@ packages/audio-nodes
   delay/
   compressor/
   output/
+
+MIDI
+  midi-input/
+  midi-filter/
+  midi-channel/
+  midi-transpose/
+  midi-split/
+  midi-merge/
+
+Control
+  automation/
+  lfo/
+  envelope/
+  macro/
+  math/
+  random/
+  sequencer/
+
+Hardware
+  cv-output/
+  gate-output/
+  gpio/
+  serial/
+  network/
+  lighting/
 ```
 
 This package should not be WebAudio, Rust, C++, or hardware specific. It should
 define node identities, ports, parameters, metadata, and validation rules. The
 same node vocabulary can then feed WebAudio, native audio, DSP modules, or
 hardware modules.
+
+Nodes themselves become reusable components. A synth is a graph of nodes, not a
+bespoke monolith:
+
+```text
+MIDI Input
+  -> Oscillator
+  -> Filter
+  -> Envelope / Gain
+  -> Output
+```
+
+A sampler is the same pattern with a different source:
+
+```text
+MIDI Input
+  -> Sample Player
+  -> Envelope / Gain
+  -> Output
+```
+
+The backend should not need to know what a synth is. It should know how to run
+oscillator, sample-player, filter, gain, delay, mixer, and hardware I/O nodes.
+
+## Typed Ports
+
+Ports are the validation contract. Every node advertises typed inputs and
+outputs:
+
+- audio
+- stereo audio
+- MIDI
+- gate
+- trigger
+- control
+- boolean
+- CV
+- GPIO
+- serial
+- network
+- lighting
+
+The graph builder validates port compatibility before execution. A MIDI output
+connected to an audio input should fail as a type mismatch. A control signal can
+modulate cutoff because both sides agree on a control-compatible port.
 
 ## Migration Strategy
 

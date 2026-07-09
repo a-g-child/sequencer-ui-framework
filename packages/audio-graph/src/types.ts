@@ -1,16 +1,24 @@
-export type AudioGraphPortKind = 'midi' | 'audio' | 'control';
+import type {
+  NodeCategory,
+  NodeDescriptor,
+  NodeParameterDescriptor,
+  NodeParameterKind,
+  NodeParameterOption,
+  NodeParameterValue,
+  NodePortDescriptor,
+  NodePortDirection,
+  NodeSignalKind
+} from '@sequencer/nodes';
 
-export type AudioGraphPortDirection = 'input' | 'output';
+export type AudioGraphPortKind = NodeSignalKind;
 
-export type AudioGraphNodeCategory =
-  | 'source'
-  | 'processor'
-  | 'control'
-  | 'output';
+export type AudioGraphPortDirection = NodePortDirection;
 
-export type AudioGraphParameterValue = string | number | boolean;
+export type AudioGraphNodeCategory = NodeCategory;
 
-export type AudioGraphParameterKind = 'number' | 'choice' | 'boolean' | 'text';
+export type AudioGraphParameterValue = NodeParameterValue;
+
+export type AudioGraphParameterKind = NodeParameterKind;
 
 export type AudioGraphDiagnosticSeverity = 'error' | 'warning';
 
@@ -51,40 +59,13 @@ export interface AudioGraphEndpoint {
   readonly portId: string;
 }
 
-export interface AudioNodeDescriptor {
-  readonly id: string;
-  readonly type: string;
-  readonly name: string;
-  readonly category: AudioGraphNodeCategory;
-  readonly ports: readonly AudioNodePortDescriptor[];
-  readonly parameters?: readonly AudioNodeParameterDescriptor[];
-  readonly latencySamples?: number;
-}
+export type AudioNodeDescriptor = NodeDescriptor;
 
-export interface AudioNodePortDescriptor {
-  readonly id: string;
-  readonly name: string;
-  readonly kind: AudioGraphPortKind;
-  readonly direction: AudioGraphPortDirection;
-  readonly channels?: number;
-}
+export type AudioNodePortDescriptor = NodePortDescriptor;
 
-export interface AudioNodeParameterDescriptor {
-  readonly id: string;
-  readonly name: string;
-  readonly kind: AudioGraphParameterKind;
-  readonly defaultValue: AudioGraphParameterValue;
-  readonly min?: number;
-  readonly max?: number;
-  readonly step?: number;
-  readonly unit?: string;
-  readonly options?: readonly AudioNodeParameterOption[];
-}
+export type AudioNodeParameterDescriptor = NodeParameterDescriptor;
 
-export interface AudioNodeParameterOption {
-  readonly label: string;
-  readonly value: string | number | boolean;
-}
+export type AudioNodeParameterOption = NodeParameterOption;
 
 export interface RuntimeAudioGraph {
   readonly document: AudioGraphDocument;
