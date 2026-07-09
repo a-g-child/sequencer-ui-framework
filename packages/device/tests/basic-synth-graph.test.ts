@@ -26,8 +26,8 @@ describe('Basic Synth graph preset', () => {
     });
 
     assert.equal(device.runtimeGraph?.document.id, BASIC_SYNTH_AUDIO_GRAPH.id);
-    assert.equal(device.runtimeGraph?.nodes.length, 7);
-    assert.equal(device.runtimeGraph?.connections.length, 7);
+    assert.equal(device.runtimeGraph?.nodes.length, 9);
+    assert.equal(device.runtimeGraph?.connections.length, 9);
     assert.deepEqual(device.runtimeGraph?.diagnostics, []);
     assert.deepEqual(
       device.runtimeGraph?.nodes.map((node) => node.descriptor.id),
@@ -37,6 +37,8 @@ describe('Basic Synth graph preset', () => {
         'sequencer.processor.filter',
         'sequencer.processor.adsr-gain',
         'sequencer.processor.gain',
+        'sequencer.processor.pan',
+        'sequencer.processor.mixer',
         'sequencer.output.audio-out',
         'sequencer.control.lfo'
       ]

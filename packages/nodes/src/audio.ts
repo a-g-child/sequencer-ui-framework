@@ -131,7 +131,7 @@ export const PAN_NODE: NodeDescriptor = {
   capabilities: ['audio-processor'],
   ports: [
     { id: 'audio-in', name: 'Audio In', kind: 'audio', direction: 'input' },
-    { id: 'audio-out', name: 'Audio Out', kind: 'stereo-audio', direction: 'output', channels: 2 },
+    { id: 'audio-out', name: 'Audio Out', kind: 'audio', direction: 'output', channels: 2 },
     { id: 'pan-mod', name: 'Pan Mod', kind: 'control', direction: 'input' }
   ],
   parameters: [{ id: 'pan', name: 'Pan', kind: 'number', defaultValue: 0, min: -1, max: 1 }]

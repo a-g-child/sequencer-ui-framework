@@ -24,9 +24,39 @@ export interface WebAudioFilterNodeOptions {
   readonly immediate?: boolean
 }
 
+export interface WebAudioEnvelopeGainNodeOptions {
+  readonly peakGain: number
+  readonly sustainGain: number
+  readonly startTime: number
+  readonly attackTime: number
+  readonly decayTime: number
+}
+
+export interface WebAudioEnvelopeReleaseOptions {
+  readonly startTime: number
+  readonly stopTime: number
+}
+
+export interface WebAudioGainNodeOptions {
+  readonly gain: number
+  readonly time: number
+  readonly immediate?: boolean
+}
+
+export interface WebAudioPanNodeOptions {
+  readonly pan: number
+  readonly time: number
+  readonly immediate?: boolean
+}
+
 export class WebAudioExecutor extends BaseExecutionExecutor {
   private oscillatorNodeId?: string
   private filterNodeId?: string
+  private envelopeGainNodeId?: string
+  private gainNodeId?: string
+  private panNodeId?: string
+  private mixerNodeId?: string
+  private outputNodeId?: string
 
   constructor() {
     super('web-audio-executor', 'WebAudio Executor')
@@ -39,6 +69,21 @@ export class WebAudioExecutor extends BaseExecutionExecutor {
     )?.id
     this.filterNodeId = graph.nodes.find(
       (node) => node.descriptorId === 'sequencer.processor.filter'
+    )?.id
+    this.envelopeGainNodeId = graph.nodes.find(
+      (node) => node.descriptorId === 'sequencer.processor.adsr-gain'
+    )?.id
+    this.gainNodeId = graph.nodes.find(
+      (node) => node.descriptorId === 'sequencer.processor.gain'
+    )?.id
+    this.panNodeId = graph.nodes.find(
+      (node) => node.descriptorId === 'sequencer.processor.pan'
+    )?.id
+    this.mixerNodeId = graph.nodes.find(
+      (node) => node.descriptorId === 'sequencer.processor.mixer'
+    )?.id
+    this.outputNodeId = graph.nodes.find(
+      (node) => node.descriptorId === 'sequencer.output.audio-out'
     )?.id
   }
 
@@ -73,10 +118,105 @@ export class WebAudioExecutor extends BaseExecutionExecutor {
     return filter
   }
 
+  createEnvelopeGainNode(
+    context: AudioContext,
+    options: WebAudioEnvelopeGainNodeOptions
+  ): GainNode {
+    if (!this.envelopeGainNodeId) {
+      throw new Error('WebAudioExecutor has no envelope gain node in its graph')
+    }
+
+    const gain = context.createGain()
+
+    gain.gain.cancelScheduledValues(options.startTime)
+    gain.gain.setValueAtTime(0, options.startTime)
+    gain.gain.linearRampToValueAtTime(options.peakGain, options.attackTime)
+    gain.gain.linearRampToValueAtTime(options.sustainGain, options.decayTime)
+
+    return gain
+  }
+
+  releaseEnvelopeGainNode(
+    gain: GainNode,
+    options: WebAudioEnvelopeReleaseOptions
+  ): void {
+    this.requireEnvelopeGainNode()
+
+    gain.gain.cancelScheduledValues(options.startTime)
+    gain.gain.setValueAtTime(gain.gain.value, options.startTime)
+    gain.gain.linearRampToValueAtTime(0, options.stopTime)
+  }
+
+  clearEnvelopeGainNode(gain: GainNode, time: number): void {
+    this.requireEnvelopeGainNode()
+
+    gain.gain.cancelScheduledValues(time)
+    gain.gain.setValueAtTime(0, time)
+  }
+
+  createGainNode(
+    context: AudioContext,
+    options: WebAudioGainNodeOptions
+  ): GainNode {
+    if (!this.gainNodeId) {
+      throw new Error('WebAudioExecutor has no gain node in its graph')
+    }
+
+    const gain = context.createGain()
+
+    configureParam(gain.gain, options.gain, options.time, options.immediate)
+
+    return gain
+  }
+
+  createPanNode(
+    context: AudioContext,
+    options: WebAudioPanNodeOptions
+  ): StereoPannerNode {
+    if (!this.panNodeId) {
+      throw new Error('WebAudioExecutor has no pan node in its graph')
+    }
+
+    const panner = context.createStereoPanner()
+
+    configureParam(panner.pan, options.pan, options.time, options.immediate)
+
+    return panner
+  }
+
+  createMixerNode(
+    context: AudioContext,
+    options: WebAudioGainNodeOptions
+  ): GainNode {
+    if (!this.mixerNodeId) {
+      throw new Error('WebAudioExecutor has no mixer node in its graph')
+    }
+
+    const mixer = context.createGain()
+
+    configureParam(mixer.gain, options.gain, options.time, options.immediate)
+
+    return mixer
+  }
+
+  connectOutputNode(source: AudioNode, destination: AudioNode): void {
+    if (!this.outputNodeId) {
+      throw new Error('WebAudioExecutor has no output node in its graph')
+    }
+
+    source.connect(destination)
+  }
+
   override process(
     context: ExecutionProcessContext
   ): ExecutionProcessResult | void {
     return super.process(context)
+  }
+
+  private requireEnvelopeGainNode(): void {
+    if (!this.envelopeGainNodeId) {
+      throw new Error('WebAudioExecutor has no envelope gain node in its graph')
+    }
   }
 }
 
@@ -132,4 +272,18 @@ function clampFrequency(value: number): number {
   if (!Number.isFinite(value)) return 20000
 
   return Math.min(20000, Math.max(20, value))
+}
+
+function configureParam(
+  param: AudioParam,
+  value: number,
+  time: number,
+  immediate = false
+): void {
+  if (immediate) {
+    param.setValueAtTime(value, time)
+    return
+  }
+
+  param.setTargetAtTime(value, time, 0.01)
 }

@@ -27,7 +27,9 @@ test('creates an execution plan from a runtime graph', () => {
       { nodeId: 'filter', executionIndex: 3 },
       { nodeId: 'amp-envelope', executionIndex: 4 },
       { nodeId: 'track-gain', executionIndex: 5 },
-      { nodeId: 'audio-out', executionIndex: 6 }
+      { nodeId: 'pan', executionIndex: 6 },
+      { nodeId: 'mixer', executionIndex: 7 },
+      { nodeId: 'audio-out', executionIndex: 8 }
     ]
   );
   assert.deepEqual(plan.executionBlocks[0], {

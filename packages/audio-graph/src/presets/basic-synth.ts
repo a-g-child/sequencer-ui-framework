@@ -49,10 +49,23 @@ export const BASIC_SYNTH_AUDIO_GRAPH: AudioGraphDocument = {
       position: { x: 880, y: 0 }
     },
     {
+      id: 'pan',
+      descriptorId: 'sequencer.processor.pan',
+      name: 'Pan',
+      parameters: { pan: 0 },
+      position: { x: 1100, y: 0 }
+    },
+    {
+      id: 'mixer',
+      descriptorId: 'sequencer.processor.mixer',
+      name: 'Mixer',
+      position: { x: 1320, y: 0 }
+    },
+    {
       id: 'audio-out',
       descriptorId: 'sequencer.output.audio-out',
       name: 'Audio Out',
-      position: { x: 1100, y: 0 }
+      position: { x: 1540, y: 0 }
     },
     {
       id: 'lfo',
@@ -89,8 +102,18 @@ export const BASIC_SYNTH_AUDIO_GRAPH: AudioGraphDocument = {
       target: { nodeId: 'track-gain', portId: 'audio-in' }
     },
     {
-      id: 'track-gain-to-output',
+      id: 'track-gain-to-pan',
       source: { nodeId: 'track-gain', portId: 'audio-out' },
+      target: { nodeId: 'pan', portId: 'audio-in' }
+    },
+    {
+      id: 'pan-to-mixer',
+      source: { nodeId: 'pan', portId: 'audio-out' },
+      target: { nodeId: 'mixer', portId: 'audio-in-a' }
+    },
+    {
+      id: 'mixer-to-output',
+      source: { nodeId: 'mixer', portId: 'audio-out' },
       target: { nodeId: 'audio-out', portId: 'audio-in' }
     },
     {

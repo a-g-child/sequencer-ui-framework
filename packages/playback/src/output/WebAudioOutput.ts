@@ -54,6 +54,7 @@ type ActiveVoice = {
   readonly oscillator: OscillatorNode
   readonly filter: BiquadFilterNode
   readonly gain: GainNode
+  readonly trackGain: GainNode
   readonly mixerGain: GainNode
   readonly panner: StereoPannerNode
   readonly envelope?: VoiceActionEnvelope
@@ -168,10 +169,8 @@ export class WebAudioOutput implements PlaybackOutput {
     for (const voice of this.voices.values()) {
       if (voice.trackId && this.trackSettings.has(voice.trackId)) continue
 
-      voice.gain.gain.setTargetAtTime(
-        voice.amplitude *
-          this.defaultSettings.volume *
-          this.defaultSettings.adsr.sustain,
+      voice.trackGain.gain.setTargetAtTime(
+        this.defaultSettings.volume,
         this.context.currentTime,
         0.01
       )
@@ -355,32 +354,49 @@ export class WebAudioOutput implements PlaybackOutput {
       time: startTime,
       immediate: true
     })
-    const gain = this.context.createGain()
-    const panner = this.context.createStereoPanner()
-    const mixerGain = this.context.createGain()
     const envelope = normalizeVoiceEnvelope(action.envelope)
     const attackTime = startTime + envelope.attack
     const decayTime = attackTime + envelope.decay
     const amplitude = clampUnit(action.amplitude ?? action.velocity)
-    const peakGain = amplitude * settings.volume
+    const peakGain = amplitude
     const sustainGain = peakGain * envelope.sustain
-
-    gain.gain.cancelScheduledValues(startTime)
-    gain.gain.setValueAtTime(0, startTime)
-    gain.gain.linearRampToValueAtTime(peakGain, attackTime)
-    gain.gain.linearRampToValueAtTime(sustainGain, decayTime)
+    const gain = this.executor.createEnvelopeGainNode(this.context, {
+      peakGain,
+      sustainGain,
+      startTime,
+      attackTime,
+      decayTime
+    })
+    const trackGain = this.executor.createGainNode(this.context, {
+      gain: settings.volume,
+      time: startTime,
+      immediate: true
+    })
+    const mixer = this.mixerForTrack(action.trackId)
+    const mixerGainValue = effectiveMixerGain(mixer, this.anySoloedTrack())
+    const panner = this.executor.createPanNode(this.context, {
+      pan: mixer.pan,
+      time: startTime,
+      immediate: true
+    })
+    const mixerGain = this.executor.createMixerNode(this.context, {
+      gain: mixerGainValue,
+      time: startTime,
+      immediate: true
+    })
 
     oscillator.connect(filter)
     filter.connect(gain)
-    gain.connect(panner)
+    gain.connect(trackGain)
+    trackGain.connect(panner)
     panner.connect(mixerGain)
-    mixerGain.connect(this.masterGain)
-    this.applyMixerToNodes(action.trackId, mixerGain, panner, startTime, true)
+    this.executor.connectOutputNode(mixerGain, this.masterGain)
     oscillator.start(startTime)
     this.voices.set(key, {
       oscillator,
       filter,
       gain,
+      trackGain,
       mixerGain,
       panner,
       envelope,
@@ -402,9 +418,10 @@ export class WebAudioOutput implements PlaybackOutput {
     const release = voice.envelope?.release ?? 0.2
     const stopTime = stopStart + release
 
-    voice.gain.gain.cancelScheduledValues(stopStart)
-    voice.gain.gain.setValueAtTime(voice.gain.gain.value, stopStart)
-    voice.gain.gain.linearRampToValueAtTime(0, stopTime)
+    this.executor.releaseEnvelopeGainNode(voice.gain, {
+      startTime: stopStart,
+      stopTime
+    })
     voice.oscillator.onended = () => {
       if (this.voices.get(voiceKey) === voice) {
         this.voices.delete(voiceKey)
@@ -507,8 +524,7 @@ export class WebAudioOutput implements PlaybackOutput {
   ): void {
     const safeStopTime = Math.max(stopTime, voice.startTime) + 0.001
 
-    voice.gain.gain.cancelScheduledValues(stopTime)
-    voice.gain.gain.setValueAtTime(0, stopTime)
+    this.executor.clearEnvelopeGainNode(voice.gain, stopTime)
     try {
       voice.gain.disconnect()
     } catch {
@@ -670,8 +686,8 @@ export class WebAudioOutput implements PlaybackOutput {
       }
 
       if (volumeChanged) {
-        voice.gain.gain.setTargetAtTime(
-          voice.amplitude * settings.volume * settings.adsr.sustain,
+        voice.trackGain.gain.setTargetAtTime(
+          settings.volume,
           this.context.currentTime,
           0.01
         )

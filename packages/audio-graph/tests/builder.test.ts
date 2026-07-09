@@ -15,8 +15,8 @@ test('builds the Basic Synth graph preset', () => {
   );
 
   assert.deepEqual(graph.diagnostics, []);
-  assert.equal(graph.nodes.length, 7);
-  assert.equal(graph.connections.length, 7);
+  assert.equal(graph.nodes.length, 9);
+  assert.equal(graph.connections.length, 9);
   assert.deepEqual(graph.executionOrder, [
     'clip-notes',
     'lfo',
@@ -24,6 +24,8 @@ test('builds the Basic Synth graph preset', () => {
     'filter',
     'amp-envelope',
     'track-gain',
+    'pan',
+    'mixer',
     'audio-out'
   ]);
   assert.deepEqual(
@@ -59,9 +61,19 @@ test('builds the Basic Synth graph preset', () => {
         executionIndex: 5
       },
       {
+        id: 'pan',
+        descriptorId: 'sequencer.processor.pan',
+        executionIndex: 6
+      },
+      {
+        id: 'mixer',
+        descriptorId: 'sequencer.processor.mixer',
+        executionIndex: 7
+      },
+      {
         id: 'audio-out',
         descriptorId: 'sequencer.output.audio-out',
-        executionIndex: 6
+        executionIndex: 8
       },
       {
         id: 'lfo',
@@ -144,9 +156,27 @@ test('builds the Basic Synth graph preset', () => {
         peakProcessMs: undefined
       },
       {
+        nodeId: 'pan',
+        descriptorId: 'sequencer.processor.pan',
+        executionIndex: 6,
+        latencySamples: 0,
+        lastProcessMs: undefined,
+        averageProcessMs: undefined,
+        peakProcessMs: undefined
+      },
+      {
+        nodeId: 'mixer',
+        descriptorId: 'sequencer.processor.mixer',
+        executionIndex: 7,
+        latencySamples: 0,
+        lastProcessMs: undefined,
+        averageProcessMs: undefined,
+        peakProcessMs: undefined
+      },
+      {
         nodeId: 'audio-out',
         descriptorId: 'sequencer.output.audio-out',
-        executionIndex: 6,
+        executionIndex: 8,
         latencySamples: 0,
         lastProcessMs: undefined,
         averageProcessMs: undefined,
