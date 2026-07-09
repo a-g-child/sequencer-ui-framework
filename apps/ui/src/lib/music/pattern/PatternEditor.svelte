@@ -203,6 +203,11 @@
     }
   }
 
+  function handlePitchScrollChange(scrollY: number) {
+    session.setViewport({ scrollY }, pianoRoll);
+    invalidateSession();
+  }
+
   function handlePianoRollPointerEnter(event: PointerEvent) {
     applyPointerResult(session.handlePointerEnter(event, pianoRoll));
   }
@@ -411,6 +416,7 @@
         onAutomationPointsCommit={commitAutomationPoints}
         onViewportWidthChange={handleViewportWidthChange}
         onViewportHeightChange={handleViewportHeightChange}
+        onPitchScrollChange={handlePitchScrollChange}
         onWheel={handlePatternWheel}
         onPointerEnter={handlePianoRollPointerEnter}
         onPointerDown={handlePianoRollPointerDown}

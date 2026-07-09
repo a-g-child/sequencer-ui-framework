@@ -96,6 +96,7 @@
   --piano-roll-scroll-max-height: 420px;
   --editor-panel-min-height: 240px;
   --ruler-label-width: 64px;
+  --piano-roll-y-scrollbar-width: 16px;
   --ruler-track-min-height: 16px;
   --pitch-ruler-label-width: 60px;
   --pitch-ruler-label-height: 14px;

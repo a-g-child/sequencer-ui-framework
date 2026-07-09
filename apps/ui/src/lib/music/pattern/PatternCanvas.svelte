@@ -12,8 +12,7 @@
   import {
     beatToScreenX,
     patternLengthToScreenWidth,
-    pitchRangeToScreenHeight,
-    pitchToScreenY
+    pitchRangeToScreenHeight
   } from './pattern-viewport';
   import type { PianoRollNoteView } from '../../editors/piano-roll/piano-roll-model';
   import type {
@@ -36,6 +35,7 @@
   export let onAutomationPointsCommit: (points: AutomationCurvePoint[]) => void;
   export let onViewportWidthChange: (width: number) => void;
   export let onViewportHeightChange: (height: number) => void;
+  export let onPitchScrollChange: (scrollY: number) => void;
   export let onWheel: (event: WheelEvent) => void;
   export let onPointerEnter: (event: PointerEvent) => void;
   export let onPointerDown: (event: PointerEvent) => void;
@@ -68,8 +68,10 @@
 
   let scrollElement: HTMLDivElement | undefined;
   let bodyScrollElement: HTMLDivElement | undefined;
+  let pitchScrollElement: HTMLDivElement | undefined;
   let activeScrollRendererId: string | undefined;
   let measuredViewportHeight: number | undefined;
+  let syncingPitchScrollbar = false;
   $: viewportHeight = toCssSize(measuredViewportHeight ?? height);
   $: editorWidth = patternLengthToScreenWidth(
     renderModel.visibleLength,
@@ -102,6 +104,9 @@
     playheadX !== undefined &&
     playheadX >= 0 &&
     playheadX <= editorWidth;
+  $: if (pitchScrollElement) {
+    syncPitchScrollbar();
+  }
   $: if (
     scrollElement &&
     bodyScrollElement &&
@@ -115,15 +120,18 @@
   export function centerOnMiddleC() {
     if (!bodyScrollElement) return;
     if (renderModel.rendererId !== 'piano-roll') {
-      bodyScrollElement.scrollTop = 0;
+      onPitchScrollChange(0);
       return;
     }
 
     const middleCOffset =
-      pitchToScreenY(middleCPitch, renderModel.viewport, 127) -
+      (renderModel.highestPitch - middleCPitch) *
+        renderModel.viewport.pixelsPerSemitone -
       bodyScrollElement.clientHeight / 2;
 
-    bodyScrollElement.scrollTop = Math.max(0, middleCOffset);
+    onPitchScrollChange(
+      Math.max(0, middleCOffset) / renderModel.viewport.pixelsPerSemitone
+    );
   }
 
   function centerOnMount(node: HTMLDivElement) {
@@ -149,7 +157,30 @@
       return;
     }
 
-    bodyScrollElement.scrollTop = 0;
+    onPitchScrollChange(0);
+  }
+
+  function syncPitchScrollbar() {
+    if (!pitchScrollElement) return;
+
+    const nextScrollTop =
+      renderModel.viewport.scrollY * renderModel.viewport.pixelsPerSemitone;
+
+    if (Math.abs(pitchScrollElement.scrollTop - nextScrollTop) < 1) return;
+
+    syncingPitchScrollbar = true;
+    pitchScrollElement.scrollTop = nextScrollTop;
+    requestAnimationFrame(() => {
+      syncingPitchScrollbar = false;
+    });
+  }
+
+  function handlePitchScrollbarScroll() {
+    if (!pitchScrollElement || syncingPitchScrollbar) return;
+
+    onPitchScrollChange(
+      pitchScrollElement.scrollTop / renderModel.viewport.pixelsPerSemitone
+    );
   }
 
   function toCssSize(value: string | number | undefined): string | undefined {
@@ -278,6 +309,19 @@
         bind:this={bodyScrollElement}
         style={viewportHeight ? `--pattern-viewport-height: ${viewportHeight};` : undefined}
       >
+        <div
+          class="piano-roll-y-scrollbar"
+          bind:this={pitchScrollElement}
+          aria-label={renderModel.rendererId === 'sample-grid' ? 'Lane navigation' : 'Pitch navigation'}
+          on:scroll={handlePitchScrollbarScroll}
+          on:wheel|stopPropagation
+        >
+          <div
+            class="piano-roll-y-scrollbar-content"
+            style={`height: ${editorHeight}px;`}
+          ></div>
+        </div>
+
         <PatternGrid {renderModel} layer="pitch-ruler" />
 
         <div

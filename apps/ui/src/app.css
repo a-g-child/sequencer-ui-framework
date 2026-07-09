@@ -180,7 +180,10 @@ h2 {
 
 .piano-roll-ruler {
   display: grid;
-  grid-template-columns: var(--ruler-label-width) minmax(0, 1fr);
+  grid-template-columns:
+    var(--piano-roll-y-scrollbar-width)
+    var(--ruler-label-width)
+    minmax(0, 1fr);
   gap: var(--spacing-sm);
   position: sticky;
   top: 0;
@@ -199,12 +202,16 @@ h2 {
   position: sticky;
   left: 0;
   z-index: 6;
+  grid-column: 1 / span 2;
   justify-self: end;
-  width: var(--ruler-label-width);
+  width: calc(
+    var(--piano-roll-y-scrollbar-width) + var(--ruler-label-width)
+  );
   background: var(--bg);
 }
 
 .piano-roll-ruler-track {
+  grid-column: 3;
   position: relative;
   min-height: var(--ruler-track-min-height);
 }
@@ -233,10 +240,13 @@ h2 {
 
 .piano-roll-body {
   display: grid;
-  grid-template-columns: var(--ruler-label-width) minmax(0, 1fr);
+  grid-template-columns:
+    var(--piano-roll-y-scrollbar-width)
+    var(--ruler-label-width)
+    minmax(0, 1fr);
   gap: var(--spacing-sm);
   height: var(--pattern-viewport-height, var(--editor-panel-min-height));
-  overflow-y: auto;
+  overflow: hidden;
   width: max-content;
 }
 
@@ -370,9 +380,39 @@ h2 {
   padding-right: var(--spacing-xs);
 }
 
+.piano-roll-y-scrollbar {
+  width: var(--piano-roll-y-scrollbar-width);
+  height: var(--pattern-viewport-height, var(--editor-panel-min-height));
+  overflow-x: hidden;
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--accent) var(--surface-2);
+  scrollbar-width: thin;
+  background: var(--bg);
+}
+
+.piano-roll-y-scrollbar-content {
+  width: 1px;
+}
+
+.piano-roll-y-scrollbar::-webkit-scrollbar {
+  width: 10px;
+}
+
+.piano-roll-y-scrollbar::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.piano-roll-y-scrollbar::-webkit-scrollbar-thumb {
+  border: 2px solid var(--surface-2);
+  border-radius: 999px;
+  background: var(--accent);
+}
+
 .pitch-ruler {
   position: sticky;
-  left: 0;
+  left: calc(var(--piano-roll-y-scrollbar-width) + var(--spacing-sm));
   z-index: 4;
   min-height: var(--pattern-viewport-height, var(--editor-panel-min-height));
   background: var(--bg);
