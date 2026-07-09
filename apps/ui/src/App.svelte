@@ -963,9 +963,12 @@
       track.clips.filter((clip) => clip.slotIndex === slotIndex)
     )
 
-    for (const clip of clips) {
-      playback.requestClipLaunch(clip.trackId, clip.id)
-    }
+    playback.requestClipLaunches(
+      clips.map((clip) => ({
+        trackId: clip.trackId,
+        clipId: clip.id
+      }))
+    )
 
     playbackStatus = playback.status
     refreshSelectedTrackClips()

@@ -269,6 +269,46 @@ export class PlaybackService implements Service, DocumentObserver {
     this.emitStatus()
   }
 
+  requestClipLaunches(
+    launches: ReadonlyArray<{ trackId: string; clipId: string }>,
+    launchQuantize: ClipLaunchQuantize | number = this.liveClips.state.launchQuantizeBeats
+  ): void {
+    if (launches.length === 0) return
+
+    const clockState = this.latestClockState ?? this.createStoppedClockState()
+    const previousClipIdByTrackId = Object.fromEntries(
+      launches.map(({ trackId }) => [
+        trackId,
+        this.liveClips.state.activeClipByTrackId[trackId]?.clipId
+      ])
+    )
+
+    for (const { trackId, clipId } of launches) {
+      this.liveClips.requestLaunch(
+        trackId,
+        clipId,
+        clockState,
+        launchQuantize
+      )
+    }
+
+    for (const { trackId, clipId } of launches) {
+      const activeClipId =
+        this.liveClips.state.activeClipByTrackId[trackId]?.clipId
+
+      if (activeClipId === clipId) {
+        this.clearTrackVoicesAfterClipSwitch(
+          trackId,
+          previousClipIdByTrackId[trackId],
+          clipId
+        )
+      }
+    }
+
+    this.rebuildModel()
+    this.emitStatus()
+  }
+
   cancelClipLaunch(trackId: string): void {
     this.liveClips.cancelLaunch(trackId)
     this.emitStatus()
