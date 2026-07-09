@@ -201,12 +201,15 @@ test('builds the Sampler graph preset', () => {
   );
 
   assert.deepEqual(graph.diagnostics, []);
-  assert.equal(graph.nodes.length, 4);
-  assert.equal(graph.connections.length, 3);
+  assert.equal(graph.nodes.length, 7);
+  assert.equal(graph.connections.length, 7);
   assert.deepEqual(graph.executionOrder, [
     'clip-notes',
     'sample-player',
+    'amp-envelope',
     'track-gain',
+    'pan',
+    'mixer',
     'audio-out'
   ]);
 });

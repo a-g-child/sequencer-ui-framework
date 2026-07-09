@@ -3,7 +3,8 @@ import type { SampleVoiceAction, VoiceAction } from '@sequencer/audio'
 import {
   AudioGraphBuilder,
   BASIC_SYNTH_AUDIO_GRAPH,
-  DEFAULT_AUDIO_NODE_DESCRIPTORS
+  DEFAULT_AUDIO_NODE_DESCRIPTORS,
+  SAMPLER_AUDIO_GRAPH
 } from '@sequencer/audio-graph'
 import type { TrackMixerState } from '@sequencer/core'
 import type { PlaybackEvent } from '../events'
@@ -69,6 +70,7 @@ type ActiveVoice = {
 type ActiveSample = {
   readonly source: AudioBufferSourceNode
   readonly gain: GainNode
+  readonly trackGain: GainNode
   readonly mixerGain: GainNode
   readonly panner: StereoPannerNode
   readonly trackId?: string
@@ -95,9 +97,13 @@ export class WebAudioOutput implements PlaybackOutput {
   private readonly samples = new Map<string, ActiveSample>()
   private readonly sampleBuffers = new Map<string, AudioBuffer>()
   private readonly executor = new WebAudioExecutor()
+  private readonly samplerExecutor = new WebAudioExecutor()
   private readonly basicSynthRuntimeGraph = new AudioGraphBuilder(
     DEFAULT_AUDIO_NODE_DESCRIPTORS
   ).build(BASIC_SYNTH_AUDIO_GRAPH)
+  private readonly samplerRuntimeGraph = new AudioGraphBuilder(
+    DEFAULT_AUDIO_NODE_DESCRIPTORS
+  ).build(SAMPLER_AUDIO_GRAPH)
 
   constructor(options: WebAudioOutputOptions = {}) {
     this.defaultSettings = {
@@ -131,6 +137,13 @@ export class WebAudioOutput implements PlaybackOutput {
     if (this.executor.status === 'idle' || this.executor.status === 'shutdown') {
       await this.executor.initialise(this.basicSynthRuntimeGraph)
     }
+
+    if (
+      this.samplerExecutor.status === 'idle' ||
+      this.samplerExecutor.status === 'shutdown'
+    ) {
+      await this.samplerExecutor.initialise(this.samplerRuntimeGraph)
+    }
   }
 
   async disconnect(): Promise<void> {
@@ -143,6 +156,7 @@ export class WebAudioOutput implements PlaybackOutput {
     this.context = undefined
     this.masterGain = undefined
     this.executor.shutdown()
+    this.samplerExecutor.shutdown()
   }
 
   setWaveform(waveform: WebAudioWaveform): void {
@@ -446,49 +460,64 @@ export class WebAudioOutput implements PlaybackOutput {
       this.forceStopSample(key, existingSample, this.context.currentTime)
     }
 
-    const source = this.context.createBufferSource()
-    const gain = this.context.createGain()
-    const panner = this.context.createStereoPanner()
-    const mixerGain = this.context.createGain()
     const buffer = this.bufferForSampleAction(action)
     const startTime = this.outputTime(action.timeMs)
     const offset = sampleOffsetSeconds(buffer, action)
     const duration = sampleDurationSeconds(buffer, action)
-
-    source.buffer = buffer
-    source.playbackRate.setValueAtTime(
-      Math.max(0.001, action.playbackRate),
+    const source = this.samplerExecutor.createSamplePlayerNode(this.context, {
+      buffer,
+      playbackRate: action.playbackRate,
+      loopEnabled: action.loopEnabled,
+      loopStartSeconds: action.loopStartSeconds,
+      loopEndSeconds: action.loopEndSeconds,
       startTime
-    )
-    source.loop = action.loopEnabled
-    if (action.loopStartSeconds !== undefined) {
-      source.loopStart = Math.max(0, action.loopStartSeconds)
-    }
-    if (action.loopEndSeconds !== undefined) {
-      source.loopEnd = Math.max(0, action.loopEndSeconds)
-    }
-    gain.gain.setValueAtTime(Math.max(0, action.gain), startTime)
+    })
+    const gain = this.samplerExecutor.createEnvelopeGainNode(this.context, {
+      peakGain: Math.max(0, action.gain),
+      sustainGain: Math.max(0, action.gain),
+      startTime,
+      attackTime: startTime,
+      decayTime: startTime
+    })
+    const trackGain = this.samplerExecutor.createGainNode(this.context, {
+      gain: 1,
+      time: startTime,
+      immediate: true
+    })
+    const mixer = this.mixerForTrack(action.trackId)
+    const mixerGainValue = effectiveMixerGain(mixer, this.anySoloedTrack())
+    const panner = this.samplerExecutor.createPanNode(this.context, {
+      pan: mixer.pan,
+      time: startTime,
+      immediate: true
+    })
+    const mixerGain = this.samplerExecutor.createMixerNode(this.context, {
+      gain: mixerGainValue,
+      time: startTime,
+      immediate: true
+    })
 
     source.connect(gain)
-    gain.connect(panner)
+    gain.connect(trackGain)
+    trackGain.connect(panner)
     panner.connect(mixerGain)
-    mixerGain.connect(this.masterGain)
-    this.applyMixerToNodes(action.trackId, mixerGain, panner, startTime, true)
+    this.samplerExecutor.connectOutputNode(mixerGain, this.masterGain)
     source.onended = () => {
       if (this.samples.get(key)?.source === source) {
         this.samples.delete(key)
       }
     }
 
-    if (duration === undefined) {
-      source.start(startTime, offset)
-    } else {
-      source.start(startTime, offset, duration)
-    }
+    this.samplerExecutor.startSamplePlayerNode(source, {
+      startTime,
+      offset,
+      duration
+    })
 
     this.samples.set(key, {
       source,
       gain,
+      trackGain,
       mixerGain,
       panner,
       trackId: action.trackId,
@@ -505,16 +534,19 @@ export class WebAudioOutput implements PlaybackOutput {
     const stopStart = this.outputTime(timeMs)
     const stopTime = stopStart + 0.02
 
-    sample.gain.gain.cancelScheduledValues(stopStart)
-    sample.gain.gain.setValueAtTime(sample.gain.gain.value, stopStart)
-    sample.gain.gain.linearRampToValueAtTime(0, stopTime)
+    this.samplerExecutor.releaseEnvelopeGainNode(sample.gain, {
+      startTime: stopStart,
+      stopTime
+    })
     sample.source.onended = () => {
       if (this.samples.get(sampleKey) === sample) {
         this.samples.delete(sampleKey)
       }
     }
     sample.stopScheduled = true
-    sample.source.stop(stopTime + 0.01)
+    this.samplerExecutor.stopSamplePlayerNode(sample.source, {
+      stopTime: stopTime + 0.01
+    })
   }
 
   private forceStopVoice(
@@ -552,8 +584,7 @@ export class WebAudioOutput implements PlaybackOutput {
   ): void {
     const safeStopTime = Math.max(stopTime, sample.startTime) + 0.001
 
-    sample.gain.gain.cancelScheduledValues(stopTime)
-    sample.gain.gain.setValueAtTime(0, stopTime)
+    this.samplerExecutor.clearEnvelopeGainNode(sample.gain, stopTime)
     try {
       sample.gain.disconnect()
     } catch {
@@ -562,10 +593,14 @@ export class WebAudioOutput implements PlaybackOutput {
     if (!sample.stopScheduled) {
       sample.stopScheduled = true
       try {
-        sample.source.stop(safeStopTime)
+        this.samplerExecutor.stopSamplePlayerNode(sample.source, {
+          stopTime: safeStopTime
+        })
       } catch {
         try {
-          sample.source.stop()
+          this.samplerExecutor.stopSamplePlayerNode(sample.source, {
+            stopTime: this.context?.currentTime ?? 0
+          })
         } catch {
           // Already stopped samples are safe to ignore during panic cleanup.
         }

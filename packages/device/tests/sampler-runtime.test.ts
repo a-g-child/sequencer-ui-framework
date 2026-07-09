@@ -123,10 +123,18 @@ describe('SamplerRuntimeDevice', () => {
       lastTriggeredSlot: undefined,
       graph: {
         presetId: 'preset.sampler',
-        nodeCount: 4,
-        connectionCount: 3,
+        nodeCount: 7,
+        connectionCount: 7,
         latencySamples: 0,
-        executionOrder: ['clip-notes', 'sample-player', 'track-gain', 'audio-out'],
+        executionOrder: [
+          'clip-notes',
+          'sample-player',
+          'amp-envelope',
+          'track-gain',
+          'pan',
+          'mixer',
+          'audio-out'
+        ],
         diagnostics: [],
         nodeDiagnostics: [
           {
@@ -142,15 +150,33 @@ describe('SamplerRuntimeDevice', () => {
             latencySamples: 0
           },
           {
+            nodeId: 'amp-envelope',
+            descriptorId: 'sequencer.processor.adsr-gain',
+            executionIndex: 2,
+            latencySamples: 0
+          },
+          {
             nodeId: 'track-gain',
             descriptorId: 'sequencer.processor.gain',
-            executionIndex: 2,
+            executionIndex: 3,
+            latencySamples: 0
+          },
+          {
+            nodeId: 'pan',
+            descriptorId: 'sequencer.processor.pan',
+            executionIndex: 4,
+            latencySamples: 0
+          },
+          {
+            nodeId: 'mixer',
+            descriptorId: 'sequencer.processor.mixer',
+            executionIndex: 5,
             latencySamples: 0
           },
           {
             nodeId: 'audio-out',
             descriptorId: 'sequencer.output.audio-out',
-            executionIndex: 3,
+            executionIndex: 6,
             latencySamples: 0
           }
         ]

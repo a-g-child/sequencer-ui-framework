@@ -24,6 +24,25 @@ export interface WebAudioFilterNodeOptions {
   readonly immediate?: boolean
 }
 
+export interface WebAudioSamplePlayerNodeOptions {
+  readonly buffer: AudioBuffer
+  readonly playbackRate: number
+  readonly loopEnabled: boolean
+  readonly loopStartSeconds?: number
+  readonly loopEndSeconds?: number
+  readonly startTime: number
+}
+
+export interface WebAudioSampleStartOptions {
+  readonly startTime: number
+  readonly offset: number
+  readonly duration?: number
+}
+
+export interface WebAudioSampleStopOptions {
+  readonly stopTime: number
+}
+
 export interface WebAudioEnvelopeGainNodeOptions {
   readonly peakGain: number
   readonly sustainGain: number
@@ -51,6 +70,7 @@ export interface WebAudioPanNodeOptions {
 
 export class WebAudioExecutor extends BaseExecutionExecutor {
   private oscillatorNodeId?: string
+  private samplePlayerNodeId?: string
   private filterNodeId?: string
   private envelopeGainNodeId?: string
   private gainNodeId?: string
@@ -66,6 +86,9 @@ export class WebAudioExecutor extends BaseExecutionExecutor {
     await super.initialise(graph)
     this.oscillatorNodeId = graph.nodes.find(
       (node) => node.descriptorId === 'sequencer.source.oscillator'
+    )?.id
+    this.samplePlayerNodeId = graph.nodes.find(
+      (node) => node.descriptorId === 'sequencer.source.sample-player'
     )?.id
     this.filterNodeId = graph.nodes.find(
       (node) => node.descriptorId === 'sequencer.processor.filter'
@@ -116,6 +139,59 @@ export class WebAudioExecutor extends BaseExecutionExecutor {
     configureFilter(filter, options)
 
     return filter
+  }
+
+  createSamplePlayerNode(
+    context: AudioContext,
+    options: WebAudioSamplePlayerNodeOptions
+  ): AudioBufferSourceNode {
+    if (!this.samplePlayerNodeId) {
+      throw new Error('WebAudioExecutor has no sample-player node in its graph')
+    }
+
+    const source = context.createBufferSource()
+
+    source.buffer = options.buffer
+    source.playbackRate.setValueAtTime(
+      Math.max(0.001, options.playbackRate),
+      options.startTime
+    )
+    source.loop = options.loopEnabled
+    if (options.loopStartSeconds !== undefined) {
+      source.loopStart = Math.max(0, options.loopStartSeconds)
+    }
+    if (options.loopEndSeconds !== undefined) {
+      source.loopEnd = options.loopEndSeconds
+    }
+
+    return source
+  }
+
+  startSamplePlayerNode(
+    source: AudioBufferSourceNode,
+    options: WebAudioSampleStartOptions
+  ): void {
+    if (!this.samplePlayerNodeId) {
+      throw new Error('WebAudioExecutor has no sample-player node in its graph')
+    }
+
+    if (options.duration === undefined) {
+      source.start(options.startTime, options.offset)
+      return
+    }
+
+    source.start(options.startTime, options.offset, options.duration)
+  }
+
+  stopSamplePlayerNode(
+    source: AudioBufferSourceNode,
+    options: WebAudioSampleStopOptions
+  ): void {
+    if (!this.samplePlayerNodeId) {
+      throw new Error('WebAudioExecutor has no sample-player node in its graph')
+    }
+
+    source.stop(options.stopTime)
   }
 
   createEnvelopeGainNode(

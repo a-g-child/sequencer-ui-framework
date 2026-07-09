@@ -37,15 +37,18 @@ describe('Sampler graph preset', () => {
     const device = new SamplerFactory().create(samplerInstance);
 
     assert.equal(device.runtimeGraph?.document.id, SAMPLER_AUDIO_GRAPH.id);
-    assert.equal(device.runtimeGraph?.nodes.length, 4);
-    assert.equal(device.runtimeGraph?.connections.length, 3);
+    assert.equal(device.runtimeGraph?.nodes.length, 7);
+    assert.equal(device.runtimeGraph?.connections.length, 7);
     assert.deepEqual(device.runtimeGraph?.diagnostics, []);
     assert.deepEqual(
       device.runtimeGraph?.nodes.map((node) => node.descriptor.id),
       [
         'sequencer.source.clip-notes',
         'sequencer.source.sample-player',
+        'sequencer.processor.adsr-gain',
         'sequencer.processor.gain',
+        'sequencer.processor.pan',
+        'sequencer.processor.mixer',
         'sequencer.output.audio-out'
       ]
     );
@@ -89,10 +92,18 @@ describe('Sampler graph preset', () => {
 
     assert.deepEqual(device.getDiagnostics().graph, {
       presetId: SAMPLER_AUDIO_GRAPH.id,
-      nodeCount: 4,
-      connectionCount: 3,
+      nodeCount: 7,
+      connectionCount: 7,
       latencySamples: 0,
-      executionOrder: ['clip-notes', 'sample-player', 'track-gain', 'audio-out'],
+      executionOrder: [
+        'clip-notes',
+        'sample-player',
+        'amp-envelope',
+        'track-gain',
+        'pan',
+        'mixer',
+        'audio-out'
+      ],
       diagnostics: [],
       nodeDiagnostics: [
         {
@@ -108,15 +119,33 @@ describe('Sampler graph preset', () => {
           latencySamples: 0
         },
         {
+          nodeId: 'amp-envelope',
+          descriptorId: 'sequencer.processor.adsr-gain',
+          executionIndex: 2,
+          latencySamples: 0
+        },
+        {
           nodeId: 'track-gain',
           descriptorId: 'sequencer.processor.gain',
-          executionIndex: 2,
+          executionIndex: 3,
+          latencySamples: 0
+        },
+        {
+          nodeId: 'pan',
+          descriptorId: 'sequencer.processor.pan',
+          executionIndex: 4,
+          latencySamples: 0
+        },
+        {
+          nodeId: 'mixer',
+          descriptorId: 'sequencer.processor.mixer',
+          executionIndex: 5,
           latencySamples: 0
         },
         {
           nodeId: 'audio-out',
           descriptorId: 'sequencer.output.audio-out',
-          executionIndex: 3,
+          executionIndex: 6,
           latencySamples: 0
         }
       ]

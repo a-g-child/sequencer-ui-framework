@@ -3,7 +3,8 @@ import test from 'node:test'
 import {
   AudioGraphBuilder,
   BASIC_SYNTH_AUDIO_GRAPH,
-  DEFAULT_AUDIO_NODE_DESCRIPTORS
+  DEFAULT_AUDIO_NODE_DESCRIPTORS,
+  SAMPLER_AUDIO_GRAPH
 } from '@sequencer/audio-graph'
 import { WebAudioExecutor } from '../src/output/WebAudioExecutor.ts'
 
@@ -104,6 +105,50 @@ test('creates filter nodes from the runtime graph filter node', async () => {
   assert.deepEqual(filter.Q.events, [
     { type: 'set', value: 0.75, time: 3 }
   ])
+})
+
+test('creates sample-player nodes from the runtime graph sample-player node', async () => {
+  const graph = new AudioGraphBuilder(DEFAULT_AUDIO_NODE_DESCRIPTORS).build(
+    SAMPLER_AUDIO_GRAPH
+  )
+  const executor = new WebAudioExecutor()
+  const context = new FakeAudioContext()
+  const buffer = {} as AudioBuffer
+
+  await executor.initialise(graph)
+
+  const source = executor.createSamplePlayerNode(
+    context as unknown as AudioContext,
+    {
+      buffer,
+      playbackRate: 0.5,
+      loopEnabled: true,
+      loopStartSeconds: 0.1,
+      loopEndSeconds: 0.8,
+      startTime: 1
+    }
+  ) as unknown as FakeAudioBufferSourceNode
+
+  executor.startSamplePlayerNode(source as unknown as AudioBufferSourceNode, {
+    startTime: 1,
+    offset: 0.2,
+    duration: 0.4
+  })
+  executor.stopSamplePlayerNode(source as unknown as AudioBufferSourceNode, {
+    stopTime: 1.5
+  })
+
+  assert.equal(source.buffer, buffer)
+  assert.equal(source.loop, true)
+  assert.equal(source.loopStart, 0.1)
+  assert.equal(source.loopEnd, 0.8)
+  assert.deepEqual(source.playbackRate.events, [
+    { type: 'set', value: 0.5, time: 1 }
+  ])
+  assert.deepEqual(source.starts, [
+    { time: 1, offset: 0.2, duration: 0.4 }
+  ])
+  assert.deepEqual(source.stops, [{ time: 1.5 }])
 })
 
 test('smooths filter updates when immediate is false', async () => {
@@ -235,6 +280,10 @@ class FakeAudioContext {
   createStereoPanner(): FakeStereoPannerNode {
     return new FakeStereoPannerNode()
   }
+
+  createBufferSource(): FakeAudioBufferSourceNode {
+    return new FakeAudioBufferSourceNode()
+  }
 }
 
 class FakeConnectableNode {
@@ -262,6 +311,28 @@ class FakeGainNode extends FakeConnectableNode {
 
 class FakeStereoPannerNode extends FakeConnectableNode {
   readonly pan = new FakeAudioParam()
+}
+
+class FakeAudioBufferSourceNode extends FakeConnectableNode {
+  buffer: AudioBuffer | null = null
+  loop = false
+  loopStart = 0
+  loopEnd = 0
+  readonly playbackRate = new FakeAudioParam()
+  readonly starts: Array<{
+    readonly time: number
+    readonly offset: number
+    readonly duration?: number
+  }> = []
+  readonly stops: Array<{ readonly time: number }> = []
+
+  start(time: number, offset: number, duration?: number): void {
+    this.starts.push({ time, offset, duration })
+  }
+
+  stop(time: number): void {
+    this.stops.push({ time })
+  }
 }
 
 class FakeAudioParam {
