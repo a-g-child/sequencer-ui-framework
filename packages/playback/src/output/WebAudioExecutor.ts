@@ -110,7 +110,7 @@ export class WebAudioExecutor extends BaseExecutionExecutor {
     )?.id
   }
 
-  createOscillatorNode(
+  materialiseOscillatorNode(
     context: AudioContext,
     options: WebAudioOscillatorStartOptions
   ): OscillatorNode {
@@ -126,7 +126,7 @@ export class WebAudioExecutor extends BaseExecutionExecutor {
     return oscillator
   }
 
-  createFilterNode(
+  materialiseFilterNode(
     context: AudioContext,
     options: WebAudioFilterNodeOptions
   ): BiquadFilterNode {
@@ -141,7 +141,7 @@ export class WebAudioExecutor extends BaseExecutionExecutor {
     return filter
   }
 
-  createSamplePlayerNode(
+  materialiseSamplePlayerNode(
     context: AudioContext,
     options: WebAudioSamplePlayerNodeOptions
   ): AudioBufferSourceNode {
@@ -167,7 +167,7 @@ export class WebAudioExecutor extends BaseExecutionExecutor {
     return source
   }
 
-  startSamplePlayerNode(
+  triggerSamplePlayerNode(
     source: AudioBufferSourceNode,
     options: WebAudioSampleStartOptions
   ): void {
@@ -194,7 +194,7 @@ export class WebAudioExecutor extends BaseExecutionExecutor {
     source.stop(options.stopTime)
   }
 
-  createEnvelopeGainNode(
+  materialiseAdsrGainNode(
     context: AudioContext,
     options: WebAudioEnvelopeGainNodeOptions
   ): GainNode {
@@ -212,7 +212,7 @@ export class WebAudioExecutor extends BaseExecutionExecutor {
     return gain
   }
 
-  releaseEnvelopeGainNode(
+  releaseAdsrGainNode(
     gain: GainNode,
     options: WebAudioEnvelopeReleaseOptions
   ): void {
@@ -223,14 +223,14 @@ export class WebAudioExecutor extends BaseExecutionExecutor {
     gain.gain.linearRampToValueAtTime(0, options.stopTime)
   }
 
-  clearEnvelopeGainNode(gain: GainNode, time: number): void {
+  clearAdsrGainNode(gain: GainNode, time: number): void {
     this.requireEnvelopeGainNode()
 
     gain.gain.cancelScheduledValues(time)
     gain.gain.setValueAtTime(0, time)
   }
 
-  createGainNode(
+  materialiseGainNode(
     context: AudioContext,
     options: WebAudioGainNodeOptions
   ): GainNode {
@@ -245,7 +245,7 @@ export class WebAudioExecutor extends BaseExecutionExecutor {
     return gain
   }
 
-  createPanNode(
+  materialisePanNode(
     context: AudioContext,
     options: WebAudioPanNodeOptions
   ): StereoPannerNode {
@@ -260,7 +260,7 @@ export class WebAudioExecutor extends BaseExecutionExecutor {
     return panner
   }
 
-  createMixerNode(
+  materialiseMixerNode(
     context: AudioContext,
     options: WebAudioGainNodeOptions
   ): GainNode {
@@ -275,7 +275,7 @@ export class WebAudioExecutor extends BaseExecutionExecutor {
     return mixer
   }
 
-  connectOutputNode(source: AudioNode, destination: AudioNode): void {
+  connectAudioOutputNode(source: AudioNode, destination: AudioNode): void {
     if (!this.outputNodeId) {
       throw new Error('WebAudioExecutor has no output node in its graph')
     }

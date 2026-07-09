@@ -331,6 +331,45 @@ Example implementations:
 `WebAudioExecutor`. Runtime devices should talk to runtime graphs and executors,
 not directly to WebAudio or native APIs.
 
+## Current Graph-Executed Instruments
+
+The first WebAudio executor migrations now run both core instruments through
+compiled runtime graphs while preserving their existing musical behavior.
+
+Basic Synth is graph-executed as:
+
+```text
+oscillator
+  -> filter
+  -> ADSR gain
+  -> track gain
+  -> pan
+  -> mixer
+  -> output
+```
+
+Sampler is graph-executed as:
+
+```text
+sample-player
+  -> ADSR gain
+  -> track gain
+  -> pan
+  -> mixer
+  -> output
+```
+
+`BasicSynthRuntimeDevice` and `SamplerRuntimeDevice` remain coordinators. Basic
+Synth still owns voice and parameter coordination. Sampler still owns slot
+resolution and emits `SampleVoiceAction`. `WebAudioExecutor` materialises the
+runtime graph nodes and owns the WebAudio source, processor, routing, and output
+objects for both signal chains.
+
+The playback smoke tests cover both graph-backed chains:
+
+- Basic Synth: source, filter, ADSR, gain, pan, mixer, and output wiring
+- Sampler: sample-player, ADSR, gain, pan, mixer, output wiring, and trigger
+
 Reserved optimisation responsibilities:
 
 - dead node elimination

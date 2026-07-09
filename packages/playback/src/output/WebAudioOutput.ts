@@ -356,13 +356,13 @@ export class WebAudioOutput implements PlaybackOutput {
     }
 
     const startTime = this.outputTime(action.timeMs)
-    const oscillator = this.executor.createOscillatorNode(this.context, {
+    const oscillator = this.executor.materialiseOscillatorNode(this.context, {
       waveform: settings.waveform,
       pitch: action.pitch,
       glide: action.glide,
       startTime
     })
-    const filter = this.executor.createFilterNode(this.context, {
+    const filter = this.executor.materialiseFilterNode(this.context, {
       ...settings.filter,
       pitch: action.pitch,
       time: startTime,
@@ -374,26 +374,26 @@ export class WebAudioOutput implements PlaybackOutput {
     const amplitude = clampUnit(action.amplitude ?? action.velocity)
     const peakGain = amplitude
     const sustainGain = peakGain * envelope.sustain
-    const gain = this.executor.createEnvelopeGainNode(this.context, {
+    const gain = this.executor.materialiseAdsrGainNode(this.context, {
       peakGain,
       sustainGain,
       startTime,
       attackTime,
       decayTime
     })
-    const trackGain = this.executor.createGainNode(this.context, {
+    const trackGain = this.executor.materialiseGainNode(this.context, {
       gain: settings.volume,
       time: startTime,
       immediate: true
     })
     const mixer = this.mixerForTrack(action.trackId)
     const mixerGainValue = effectiveMixerGain(mixer, this.anySoloedTrack())
-    const panner = this.executor.createPanNode(this.context, {
+    const panner = this.executor.materialisePanNode(this.context, {
       pan: mixer.pan,
       time: startTime,
       immediate: true
     })
-    const mixerGain = this.executor.createMixerNode(this.context, {
+    const mixerGain = this.executor.materialiseMixerNode(this.context, {
       gain: mixerGainValue,
       time: startTime,
       immediate: true
@@ -404,7 +404,7 @@ export class WebAudioOutput implements PlaybackOutput {
     gain.connect(trackGain)
     trackGain.connect(panner)
     panner.connect(mixerGain)
-    this.executor.connectOutputNode(mixerGain, this.masterGain)
+    this.executor.connectAudioOutputNode(mixerGain, this.masterGain)
     oscillator.start(startTime)
     this.voices.set(key, {
       oscillator,
@@ -432,7 +432,7 @@ export class WebAudioOutput implements PlaybackOutput {
     const release = voice.envelope?.release ?? 0.2
     const stopTime = stopStart + release
 
-    this.executor.releaseEnvelopeGainNode(voice.gain, {
+    this.executor.releaseAdsrGainNode(voice.gain, {
       startTime: stopStart,
       stopTime
     })
@@ -464,7 +464,7 @@ export class WebAudioOutput implements PlaybackOutput {
     const startTime = this.outputTime(action.timeMs)
     const offset = sampleOffsetSeconds(buffer, action)
     const duration = sampleDurationSeconds(buffer, action)
-    const source = this.samplerExecutor.createSamplePlayerNode(this.context, {
+    const source = this.samplerExecutor.materialiseSamplePlayerNode(this.context, {
       buffer,
       playbackRate: action.playbackRate,
       loopEnabled: action.loopEnabled,
@@ -472,26 +472,26 @@ export class WebAudioOutput implements PlaybackOutput {
       loopEndSeconds: action.loopEndSeconds,
       startTime
     })
-    const gain = this.samplerExecutor.createEnvelopeGainNode(this.context, {
+    const gain = this.samplerExecutor.materialiseAdsrGainNode(this.context, {
       peakGain: Math.max(0, action.gain),
       sustainGain: Math.max(0, action.gain),
       startTime,
       attackTime: startTime,
       decayTime: startTime
     })
-    const trackGain = this.samplerExecutor.createGainNode(this.context, {
+    const trackGain = this.samplerExecutor.materialiseGainNode(this.context, {
       gain: 1,
       time: startTime,
       immediate: true
     })
     const mixer = this.mixerForTrack(action.trackId)
     const mixerGainValue = effectiveMixerGain(mixer, this.anySoloedTrack())
-    const panner = this.samplerExecutor.createPanNode(this.context, {
+    const panner = this.samplerExecutor.materialisePanNode(this.context, {
       pan: mixer.pan,
       time: startTime,
       immediate: true
     })
-    const mixerGain = this.samplerExecutor.createMixerNode(this.context, {
+    const mixerGain = this.samplerExecutor.materialiseMixerNode(this.context, {
       gain: mixerGainValue,
       time: startTime,
       immediate: true
@@ -501,14 +501,14 @@ export class WebAudioOutput implements PlaybackOutput {
     gain.connect(trackGain)
     trackGain.connect(panner)
     panner.connect(mixerGain)
-    this.samplerExecutor.connectOutputNode(mixerGain, this.masterGain)
+    this.samplerExecutor.connectAudioOutputNode(mixerGain, this.masterGain)
     source.onended = () => {
       if (this.samples.get(key)?.source === source) {
         this.samples.delete(key)
       }
     }
 
-    this.samplerExecutor.startSamplePlayerNode(source, {
+    this.samplerExecutor.triggerSamplePlayerNode(source, {
       startTime,
       offset,
       duration
@@ -534,7 +534,7 @@ export class WebAudioOutput implements PlaybackOutput {
     const stopStart = this.outputTime(timeMs)
     const stopTime = stopStart + 0.02
 
-    this.samplerExecutor.releaseEnvelopeGainNode(sample.gain, {
+    this.samplerExecutor.releaseAdsrGainNode(sample.gain, {
       startTime: stopStart,
       stopTime
     })
@@ -556,7 +556,7 @@ export class WebAudioOutput implements PlaybackOutput {
   ): void {
     const safeStopTime = Math.max(stopTime, voice.startTime) + 0.001
 
-    this.executor.clearEnvelopeGainNode(voice.gain, stopTime)
+    this.executor.clearAdsrGainNode(voice.gain, stopTime)
     try {
       voice.gain.disconnect()
     } catch {
@@ -584,7 +584,7 @@ export class WebAudioOutput implements PlaybackOutput {
   ): void {
     const safeStopTime = Math.max(stopTime, sample.startTime) + 0.001
 
-    this.samplerExecutor.clearEnvelopeGainNode(sample.gain, stopTime)
+    this.samplerExecutor.clearAdsrGainNode(sample.gain, stopTime)
     try {
       sample.gain.disconnect()
     } catch {
