@@ -349,7 +349,12 @@ export class WebAudioOutput implements PlaybackOutput {
       glide: action.glide,
       startTime
     })
-    const filter = this.context.createBiquadFilter()
+    const filter = this.executor.createFilterNode(this.context, {
+      ...settings.filter,
+      pitch: action.pitch,
+      time: startTime,
+      immediate: true
+    })
     const gain = this.context.createGain()
     const panner = this.context.createStereoPanner()
     const mixerGain = this.context.createGain()
@@ -360,7 +365,6 @@ export class WebAudioOutput implements PlaybackOutput {
     const peakGain = amplitude * settings.volume
     const sustainGain = peakGain * envelope.sustain
 
-    configureFilter(filter, settings.filter, action.pitch, startTime, true)
     gain.gain.cancelScheduledValues(startTime)
     gain.gain.setValueAtTime(0, startTime)
     gain.gain.linearRampToValueAtTime(peakGain, attackTime)
