@@ -9,14 +9,14 @@
   import type { ClipLoopRegion } from '../../app-controller';
 
   export let onAddNote: (() => void) | undefined = undefined;
-  export let onZoomIn: () => void;
-  export let onZoomOut: () => void;
+  export let onZoomIn: (() => void) | undefined = undefined;
+  export let onZoomOut: (() => void) | undefined = undefined;
   export let onZoomPitchIn: (() => void) | undefined = undefined;
   export let onZoomPitchOut: (() => void) | undefined = undefined;
-  export let onPanLeft: () => void;
-  export let onPanRight: () => void;
-  export let onPitchUp: () => void;
-  export let onPitchDown: () => void;
+  export let onPanLeft: (() => void) | undefined = undefined;
+  export let onPanRight: (() => void) | undefined = undefined;
+  export let onPitchUp: (() => void) | undefined = undefined;
+  export let onPitchDown: (() => void) | undefined = undefined;
   export let onResetView: () => void;
   export let showVelocityLane = false;
   export let onToggleVelocityLane: (() => void) | undefined = undefined;
@@ -253,67 +253,85 @@
     </span>
   {/if}
 
-  <span class="control-cluster" aria-label="Horizontal zoom and pan">
-    <button
-      type="button"
-      class:highlighted={highlightedControl === 'zoom-out-x'}
-      title="Zoom out horizontally"
-      aria-label="Zoom out horizontally"
-      on:click={() => runViewAction('zoom-out-x', onZoomOut)}
-    >−</button>
-    <button
-      type="button"
-      class:highlighted={highlightedControl === 'zoom-in-x'}
-      title="Zoom in horizontally"
-      aria-label="Zoom in horizontally"
-      on:click={() => runViewAction('zoom-in-x', onZoomIn)}
-    >＋</button>
-    <button
-      type="button"
-      class:highlighted={highlightedControl === 'pan-left'}
-      title="Pan left"
-      aria-label="Pan left"
-      on:click={() => runViewAction('pan-left', onPanLeft)}
-    >←</button>
-    <button
-      type="button"
-      class:highlighted={highlightedControl === 'pan-right'}
-      title="Pan right"
-      aria-label="Pan right"
-      on:click={() => runViewAction('pan-right', onPanRight)}
-    >→</button>
-  </span>
+  {#if onZoomOut || onZoomIn || onPanLeft || onPanRight}
+    <span class="control-cluster" aria-label="Horizontal zoom and pan">
+      {#if onZoomOut}
+        <button
+          type="button"
+          class:highlighted={highlightedControl === 'zoom-out-x'}
+          title="Zoom out horizontally"
+          aria-label="Zoom out horizontally"
+          on:click={() => runViewAction('zoom-out-x', onZoomOut)}
+        >−</button>
+      {/if}
+      {#if onZoomIn}
+        <button
+          type="button"
+          class:highlighted={highlightedControl === 'zoom-in-x'}
+          title="Zoom in horizontally"
+          aria-label="Zoom in horizontally"
+          on:click={() => runViewAction('zoom-in-x', onZoomIn)}
+        >＋</button>
+      {/if}
+      {#if onPanLeft}
+        <button
+          type="button"
+          class:highlighted={highlightedControl === 'pan-left'}
+          title="Pan left"
+          aria-label="Pan left"
+          on:click={() => runViewAction('pan-left', onPanLeft)}
+        >←</button>
+      {/if}
+      {#if onPanRight}
+        <button
+          type="button"
+          class:highlighted={highlightedControl === 'pan-right'}
+          title="Pan right"
+          aria-label="Pan right"
+          on:click={() => runViewAction('pan-right', onPanRight)}
+        >→</button>
+      {/if}
+    </span>
+  {/if}
 
-  {#if onZoomPitchOut && onZoomPitchIn}
+  {#if onZoomPitchOut || onZoomPitchIn || onPitchUp || onPitchDown}
     <span class="control-cluster" aria-label="Pitch zoom and pan">
-      <button
-        type="button"
-        class:highlighted={highlightedControl === 'zoom-out-y'}
-        title="Zoom pitches out"
-        aria-label="Zoom pitches out"
-        on:click={() => runViewAction('zoom-out-y', onZoomPitchOut)}
-      >↕−</button>
-      <button
-        type="button"
-        class:highlighted={highlightedControl === 'zoom-in-y'}
-        title="Zoom pitches in"
-        aria-label="Zoom pitches in"
-        on:click={() => runViewAction('zoom-in-y', onZoomPitchIn)}
-      >↕＋</button>
-      <button
-        type="button"
-        class:highlighted={highlightedControl === 'pitch-up'}
-        title="Pitch up"
-        aria-label="Pitch up"
-        on:click={() => runViewAction('pitch-up', onPitchUp)}
-      >↑</button>
-      <button
-        type="button"
-        class:highlighted={highlightedControl === 'pitch-down'}
-        title="Pitch down"
-        aria-label="Pitch down"
-        on:click={() => runViewAction('pitch-down', onPitchDown)}
-      >↓</button>
+      {#if onZoomPitchOut}
+        <button
+          type="button"
+          class:highlighted={highlightedControl === 'zoom-out-y'}
+          title="Zoom pitches out"
+          aria-label="Zoom pitches out"
+          on:click={() => runViewAction('zoom-out-y', onZoomPitchOut)}
+        >↕−</button>
+      {/if}
+      {#if onZoomPitchIn}
+        <button
+          type="button"
+          class:highlighted={highlightedControl === 'zoom-in-y'}
+          title="Zoom pitches in"
+          aria-label="Zoom pitches in"
+          on:click={() => runViewAction('zoom-in-y', onZoomPitchIn)}
+        >↕＋</button>
+      {/if}
+      {#if onPitchUp}
+        <button
+          type="button"
+          class:highlighted={highlightedControl === 'pitch-up'}
+          title="Pitch up"
+          aria-label="Pitch up"
+          on:click={() => runViewAction('pitch-up', onPitchUp)}
+        >↑</button>
+      {/if}
+      {#if onPitchDown}
+        <button
+          type="button"
+          class:highlighted={highlightedControl === 'pitch-down'}
+          title="Pitch down"
+          aria-label="Pitch down"
+          on:click={() => runViewAction('pitch-down', onPitchDown)}
+        >↓</button>
+      {/if}
     </span>
   {/if}
 

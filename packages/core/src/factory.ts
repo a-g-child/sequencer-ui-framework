@@ -9,6 +9,7 @@ import { createDefaultTrackMixerState } from "./project.ts";
 import type { AssetReference } from "@sequencer/assets";
 import type { SequencerDocument } from "./document.ts";
 import type { BeatTime } from "./events.ts";
+import { createDefaultGrooveSettings } from "./groove.ts";
 import type { Timeline } from "./timeline.ts";
 import { createId } from "./entity.ts";
 import { Registry } from "./registry.ts";
@@ -153,6 +154,7 @@ export function createDocument(name = "Sequencer"): SequencerDocument {
     id: createId("document"),
     name,
     bpm: 120,
+    groove: createDefaultGrooveSettings(),
     timeline,
     assets,
     tracks,

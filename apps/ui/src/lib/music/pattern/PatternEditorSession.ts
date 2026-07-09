@@ -1,4 +1,4 @@
-import type { EntityId } from '@sequencer/core';
+import type { EntityId, GrooveSettings } from '@sequencer/core';
 import type { AppController } from '../../app-controller';
 import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model';
 import {
@@ -62,6 +62,7 @@ export type PatternEditorSessionOptions = {
   beatsPerBar?: number;
   beatDivisions?: number;
   visibleLength?: number;
+  groove?: GrooveSettings;
 };
 
 export type PatternEditorTimelineOptions = {
@@ -133,6 +134,7 @@ export class PatternEditorSession implements EditorSession {
   private viewportWidth = 0;
   private viewportHeight = 0;
   private sampleGridLaneCount = SAMPLE_GRID_LANE_COUNT;
+  private groove: GrooveSettings | undefined;
 
   constructor(options: PatternEditorSessionOptions) {
     const resizeNoteTool = new ResizeNoteTool();
@@ -147,6 +149,7 @@ export class PatternEditorSession implements EditorSession {
       beatDivisions: options.beatDivisions,
       visibleLength: options.visibleLength
     });
+    this.setGroove(options.groove);
     this.rendererRegistry.register(new PianoRollRenderer());
     this.rendererRegistry.register(new SampleGridRenderer());
     this.rendererRegistry.register(renderer);
@@ -259,6 +262,15 @@ export class PatternEditorSession implements EditorSession {
     this.activeClipId = clipId;
   }
 
+  setGroove(groove: GrooveSettings | undefined): void {
+    this.groove = groove;
+    this.viewport = {
+      ...this.viewport,
+      groove
+    };
+    this.refreshOverlay();
+  }
+
   setScaleRoot(root: number): void {
     this.scale = {
       ...this.scale,
@@ -296,14 +308,15 @@ export class PatternEditorSession implements EditorSession {
         zoomX: next.zoomX ?? this.viewport.zoomX,
         zoomY: next.zoomY ?? this.viewport.zoomY,
         scrollX: next.scrollX ?? this.viewport.scrollX,
-        scrollY: next.scrollY ?? this.viewport.scrollY
+        scrollY: next.scrollY ?? this.viewport.scrollY,
+        groove: this.groove
       }),
       pianoRoll
     );
   }
 
   resetViewport(pianoRoll: PianoRollView | undefined): void {
-    this.applyViewport(resetViewport(), pianoRoll);
+    this.applyViewport({ ...resetViewport(), groove: this.groove }, pianoRoll);
   }
 
   zoomViewportX(

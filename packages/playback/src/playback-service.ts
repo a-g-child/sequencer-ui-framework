@@ -719,6 +719,7 @@ function isPlaybackModelOperation(operation: Operation): boolean {
     'Set Pattern Placement Loop',
     'Set Pattern Placement Loop Count',
     'Set Pattern Placement Loop Region',
+    'Set Groove',
     'Set Parameter Value',
     'Set Pattern Automation',
     'Create Note',

@@ -21,14 +21,6 @@
   $: formattedValue = formatValue(displayValue, step)
   $: dialStyle = `--dial-angle: ${angle}deg; --dial-fill: ${normalizedValue * 100}%`
 
-  function commit(event: Event) {
-    const nextValue = Number((event.currentTarget as HTMLInputElement).value)
-
-    if (Number.isFinite(nextValue)) {
-      setValue(nextValue)
-    }
-  }
-
   function beginDialDrag(event: PointerEvent) {
     if (disabled) return
 
@@ -180,18 +172,9 @@
         <span class="dial-pointer"></span>
       </span>
     </button>
-    <input
-      class="number-field"
-      type="number"
-      min={minimum}
-      max={maximum}
-      step={step}
-      value={formattedValue}
-      on:change={commit}
-      disabled={disabled}
-    />
+    <strong>{formattedValue}</strong>
     {#if descriptor.unit}
-      <strong>{descriptor.unit}</strong>
+      <small>{descriptor.unit}</small>
     {/if}
   </div>
 </label>
@@ -228,7 +211,7 @@
   .number-control {
     min-width: 0;
     display: grid;
-    grid-template-columns: auto minmax(54px, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--spacing-xs);
   }
@@ -284,18 +267,15 @@
     transform: translate(-50%, -88%) rotate(var(--dial-angle));
   }
 
-  .number-field {
+  .number-control strong {
     min-width: 0;
-    width: 100%;
-    min-height: var(--control-height-sm);
-    padding: 0 var(--spacing-xs);
-    border: var(--border-width) solid var(--border);
-    background: var(--surface-elevated);
     color: var(--text);
-    font: inherit;
+    font-size: var(--font-size-xs);
+    text-align: right;
+    text-transform: none;
   }
 
-  .number-control strong {
+  .number-control small {
     color: var(--text);
     font-size: var(--font-size-xs);
     text-transform: none;

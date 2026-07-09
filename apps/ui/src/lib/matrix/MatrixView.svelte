@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Track } from '@sequencer/core'
+  import type { Track, TrackMixerState } from '@sequencer/core'
   import type { ClipLaunchQuantize } from '@sequencer/playback'
   import type {
     MatrixClipView,
@@ -27,12 +27,37 @@
   export let onTrackStop: (trackId: string) => void
   export let onStopAll: () => void
   export let onAddClipToTrack: (trackId: string, slotIndex?: number) => void
+  export let onSetTrackMixerValue: <K extends keyof TrackMixerState>(
+    trackId: string,
+    key: K,
+    value: TrackMixerState[K]
+  ) => void
+  export let clipCopyMode: 'idle' | 'select-source' | 'select-target' = 'idle'
+  export let clipCopySourceId: string | undefined = undefined
+  export let onToggleClipCopyMode: () => void
+  export let onPasteClipToSlot: (trackId: string, slotIndex: number) => void
 
   function clipForSlot(
     matrixTrack: MatrixTrackView,
     slotIndex: number
   ): MatrixClipView | undefined {
     return matrixTrack.clips.find((clip) => clip.slotIndex === slotIndex)
+  }
+
+  function readNumber(event: Event): number {
+    return Number((event.currentTarget as HTMLInputElement).value)
+  }
+
+  function dialPercent(value: number, min: number, max: number): number {
+    if (!Number.isFinite(value) || max <= min) return 0
+
+    return Math.min(1, Math.max(0, (value - min) / (max - min)))
+  }
+
+  function panLabel(value: number): string {
+    if (Math.abs(value) < 0.005) return 'C'
+
+    return `${value < 0 ? 'L' : 'R'}${Math.round(Math.abs(value) * 100)}`
   }
 </script>
 
@@ -45,16 +70,28 @@
       </span>
     </div>
 
-    <div class="clip-launch-controls" aria-label="Clip launch quantize">
-      {#each launchQuantizeOptions as option (option.id)}
-        <button
-          type="button"
-          class:active={launchQuantize === option.id}
-          on:click={() => onSetLaunchQuantize(option.id)}
-        >
-          {option.label}
-        </button>
-      {/each}
+    <div class="matrix-actions">
+      <button
+        type="button"
+        class="matrix-copy-button"
+        class:active={clipCopyMode !== 'idle'}
+        aria-pressed={clipCopyMode !== 'idle'}
+        on:click={onToggleClipCopyMode}
+      >
+        {clipCopyMode === 'idle' ? 'Copy' : 'Cancel'}
+      </button>
+
+      <div class="clip-launch-controls" aria-label="Clip launch quantize">
+        {#each launchQuantizeOptions as option (option.id)}
+          <button
+            type="button"
+            class:active={launchQuantize === option.id}
+            on:click={() => onSetLaunchQuantize(option.id)}
+          >
+            {option.label}
+          </button>
+        {/each}
+      </div>
     </div>
   </div>
 
@@ -124,13 +161,97 @@
             <span>{matrixTrack.track.name}</span>
             <small>{matrixTrack.queuedLaunch}</small>
           </button>
-          <button
-            type="button"
-            class="matrix-track-stop"
-            on:click={() => onTrackStop(matrixTrack.track.id)}
-          >
-            Stop
-          </button>
+          <div class="matrix-track-mixer" aria-label={`${matrixTrack.track.name} mixer`}>
+            <label
+              class="matrix-dial"
+              style={`--dial-value: ${dialPercent(matrixTrack.track.mixer.volume, 0, 1)};`}
+              title={`Volume ${Math.round(matrixTrack.track.mixer.volume * 100)}%`}
+            >
+              <span class="matrix-dial-face" aria-hidden="true">
+                <span></span>
+              </span>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={matrixTrack.track.mixer.volume}
+                aria-label={`${matrixTrack.track.name} volume`}
+                on:input={(event) =>
+                  onSetTrackMixerValue(
+                    matrixTrack.track.id,
+                    'volume',
+                    readNumber(event)
+                  )}
+              />
+              <small>Vol</small>
+            </label>
+
+            <label
+              class="matrix-dial"
+              style={`--dial-value: ${dialPercent(matrixTrack.track.mixer.pan, -1, 1)};`}
+              title={`Pan ${panLabel(matrixTrack.track.mixer.pan)}`}
+            >
+              <span class="matrix-dial-face" aria-hidden="true">
+                <span></span>
+              </span>
+              <input
+                type="range"
+                min="-1"
+                max="1"
+                step="0.01"
+                value={matrixTrack.track.mixer.pan}
+                aria-label={`${matrixTrack.track.name} pan`}
+                on:input={(event) =>
+                  onSetTrackMixerValue(
+                    matrixTrack.track.id,
+                    'pan',
+                    readNumber(event)
+                  )}
+              />
+              <small>Pan</small>
+            </label>
+
+            <div class="matrix-track-switches">
+              <button
+                type="button"
+                class:active={matrixTrack.track.mixer.mute}
+                aria-pressed={matrixTrack.track.mixer.mute}
+                title="Mute"
+                on:click={() =>
+                  onSetTrackMixerValue(
+                    matrixTrack.track.id,
+                    'mute',
+                    !matrixTrack.track.mixer.mute
+                  )}
+              >
+                M
+              </button>
+              <button
+                type="button"
+                class:active={matrixTrack.track.mixer.solo}
+                aria-pressed={matrixTrack.track.mixer.solo}
+                title="Solo"
+                on:click={() =>
+                  onSetTrackMixerValue(
+                    matrixTrack.track.id,
+                    'solo',
+                    !matrixTrack.track.mixer.solo
+                  )}
+              >
+                S
+              </button>
+              <button
+                type="button"
+                class="matrix-track-stop"
+                title="Stop track"
+                aria-label={`Stop ${matrixTrack.track.name}`}
+                on:click={() => onTrackStop(matrixTrack.track.id)}
+              >
+                ■
+              </button>
+            </div>
+          </div>
         </div>
 
         <div class="matrix-clip-stack">
@@ -144,9 +265,16 @@
                 class:playing={clip.playbackActive}
                 class:queued={clip.pendingLaunch}
                 class:stopped={!clip.playbackActive && !clip.pendingLaunch}
+                class:copy-selectable={clipCopyMode === 'select-source'}
+                class:copy-source={clip.id === clipCopySourceId}
+                class:copy-target={clipCopyMode === 'select-target'}
                 aria-pressed={clip.playbackActive || clip.pendingLaunch}
                 style={`--clip-play-progress: ${clip.playbackProgress ?? 0}; --clip-queue-progress: ${clip.queuedProgress ?? 0};`}
-                title="Click to launch, long press to edit"
+                title={clipCopyMode === 'select-source'
+                  ? 'Copy this clip'
+                  : clipCopyMode === 'select-target'
+                    ? 'Paste here and replace this clip'
+                    : 'Click to launch, long press to edit'}
                 on:pointerdown={() => onClipPointerDown(clip)}
                 on:pointerup={onClipPointerEnd}
                 on:pointerleave={onClipPointerEnd}
@@ -170,9 +298,16 @@
               <button
                 type="button"
                 class="matrix-clip matrix-empty-clip"
-                on:click={() => onAddClipToTrack(matrixTrack.track.id, scene.slotIndex)}
+                class:copy-target={clipCopyMode === 'select-target'}
+                title={clipCopyMode === 'select-target'
+                  ? 'Paste clip here'
+                  : 'Add clip'}
+                on:click={() =>
+                  clipCopyMode === 'select-target'
+                    ? onPasteClipToSlot(matrixTrack.track.id, scene.slotIndex)
+                    : onAddClipToTrack(matrixTrack.track.id, scene.slotIndex)}
               >
-                <span>Empty</span>
+                <span>{clipCopyMode === 'select-target' ? 'Paste' : 'Empty'}</span>
                 <small>slot {scene.slotIndex + 1}</small>
               </button>
             {/if}
@@ -218,6 +353,26 @@
     text-transform: uppercase;
   }
 
+  .matrix-actions {
+    display: flex;
+    align-items: center;
+    justify-content: end;
+    gap: var(--spacing-sm);
+    min-width: 0;
+  }
+
+  .matrix-copy-button {
+    min-height: 26px;
+    padding: 0 var(--spacing-sm);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+  }
+
+  .matrix-copy-button.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
   .matrix-grid {
     min-width: 0;
     overflow-x: auto;
@@ -232,7 +387,7 @@
   .matrix-track {
     min-width: 0;
     width: 176px;
-    min-height: calc(58px + (var(--matrix-scene-count) * 74px));
+    min-height: calc(92px + (var(--matrix-scene-count) * 74px));
     border-left: var(--border-width) solid var(--border);
     display: grid;
     grid-template-rows: auto 1fr;
@@ -242,7 +397,7 @@
   .matrix-scenes {
     min-width: 0;
     width: 132px;
-    min-height: calc(58px + (var(--matrix-scene-count) * 74px));
+    min-height: calc(92px + (var(--matrix-scene-count) * 74px));
     display: grid;
     grid-template-rows: auto 1fr;
     background: var(--surface-2);
@@ -256,7 +411,7 @@
   .matrix-track-header,
   .matrix-scene-header {
     min-width: 0;
-    min-height: 58px;
+    min-height: 92px;
     padding: var(--spacing-sm);
     border: 0;
     border-bottom: var(--border-width) solid var(--border);
@@ -267,8 +422,8 @@
   }
 
   .matrix-track-header {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
   }
 
   .matrix-scene-header {
@@ -289,7 +444,69 @@
     text-align: left;
   }
 
-  .matrix-track-stop,
+  .matrix-track-mixer {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(2, 32px) minmax(0, 1fr);
+    align-items: end;
+    gap: var(--spacing-xs);
+  }
+
+  .matrix-dial {
+    position: relative;
+    min-width: 0;
+    display: grid;
+    justify-items: center;
+    gap: 2px;
+    color: var(--muted);
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .matrix-dial-face {
+    position: relative;
+    width: 28px;
+    height: 28px;
+    border: var(--border-width) solid var(--border-strong);
+    border-radius: 50%;
+    background:
+      radial-gradient(circle at center, var(--surface-2) 0 44%, transparent 46%),
+      conic-gradient(
+        var(--accent) calc(var(--dial-value) * 100%),
+        color-mix(in srgb, var(--border) 76%, transparent) 0
+      );
+  }
+
+  .matrix-dial-face span {
+    position: absolute;
+    top: 4px;
+    left: 50%;
+    width: 2px;
+    height: 8px;
+    border-radius: 2px;
+    background: var(--text);
+    transform-origin: 50% 10px;
+    transform: translateX(-50%) rotate(calc((var(--dial-value) * 270deg) - 135deg));
+  }
+
+  .matrix-dial input {
+    position: absolute;
+    inset: 0;
+    width: 32px;
+    height: 32px;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .matrix-track-switches {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 3px;
+  }
+
   .matrix-scene-header button,
   .matrix-scene-stop {
     min-height: 24px;
@@ -301,11 +518,36 @@
     text-transform: uppercase;
   }
 
-  .matrix-track-stop:hover,
   .matrix-scene-header button:hover,
   .matrix-scene-stop:hover {
     border-color: var(--accent);
     color: var(--accent);
+  }
+
+  .matrix-track-switches button {
+    min-width: 0;
+    min-height: 24px;
+    padding: 0;
+    border-radius: var(--radius-control);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  .matrix-track-switches button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .matrix-track-switches button.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .matrix-track-stop {
+    font-size: 9px;
   }
 
   .matrix-scene-header span,
@@ -427,6 +669,17 @@
     border-color: var(--accent);
   }
 
+  .matrix-clip.copy-selectable,
+  .matrix-clip.copy-target {
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 38%, transparent);
+  }
+
+  .matrix-clip.copy-source {
+    border-color: var(--note-fill);
+    background: color-mix(in srgb, var(--note-fill) 14%, var(--surface-2));
+  }
+
   .matrix-clip.playing {
     border-color: var(--accent);
     background: var(--accent);
@@ -509,5 +762,17 @@
   .clip-launch-controls button.active {
     border-color: var(--accent);
     background: var(--accent-soft);
+  }
+
+  @media (max-width: 760px) {
+    .matrix-toolbar,
+    .matrix-actions {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .matrix-actions {
+      justify-content: stretch;
+    }
   }
 </style>

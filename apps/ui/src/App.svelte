@@ -11,7 +11,8 @@
     type ParameterValue,
     type Pattern,
     type Track,
-    type TrackMixerState
+    type TrackMixerState,
+    type GrooveSettings
   } from '@sequencer/core'
   import {
     ClockService,
@@ -71,6 +72,8 @@
   import { LocalProjectStore } from './lib/persistence/LocalProjectStore';
 
   type MainViewMode = 'matrix' | 'editor'
+  type ClipCopyMode = 'idle' | 'select-source' | 'select-target'
+  type SelectableDeviceKind = 'basic-synth' | 'sampler'
 
   type DeviceParameterView = {
     device: DeviceInstance
@@ -85,8 +88,13 @@
     label: string
   }
 
-  const SAMPLER_SLOT_COUNT = 8
-  const DEFAULT_SAMPLER_ROOT_NOTES = [36, 38, 42, 46, 49, 51, 45, 48]
+  const SAMPLER_SLOT_COUNT = 16
+  const DEFAULT_SAMPLER_ROOT_NOTES = [
+    36, 37, 38, 39,
+    40, 41, 42, 43,
+    44, 45, 46, 47,
+    48, 49, 50, 51
+  ]
   const MATRIX_SCENE_ROW_COUNT = 8
 
   const DEVICE_DESCRIPTORS: DeviceDescriptor[] = [
@@ -169,19 +177,12 @@
   let transportPlaying = app.editorTransport.playing
   let transportBpm = app.editorTransport.bpm
   let transportBeat = app.editorTransport.currentBeat
+  let groove: GrooveSettings = store.document.groove
   let audioEngineStatus = 'idle'
   let midiStatus = 'idle'
   let preferencesStatus = 'not loaded'
   let clockStatus: ClockServiceStatus = clock.status
   let playbackStatus: PlaybackServiceStatus = playback.status
-  let selectedTrackWebAudioSettings =
-    playback.webAudioTrackSettings(selectedTrackId)
-  let webAudioEnabled = selectedTrackWebAudioSettings.enabled
-  let webMidiEnabled =
-    playbackStatus.webMidi.connected &&
-    playbackStatus.outputManager.activeOutputIds.includes('web-midi')
-  let webMidiLabel = 'MIDI'
-  let webMidiStatus = ''
   let samplerSampleStatus = ''
   let projectPersistenceStatus = 'Unsaved'
   let lastProjectSavedAt: Date | undefined
@@ -203,6 +204,8 @@
   let matrixSceneRows: MatrixSceneRow[] = buildMatrixSceneRows(matrixTracks)
   let activeEditor: EditorKind = 'piano-roll';
   let viewMode: MainViewMode = 'matrix'
+  let clipCopyMode: ClipCopyMode = 'idle'
+  let clipCopySource: TrackClipView | undefined
   let clipPressTimer: ReturnType<typeof setTimeout> | undefined
   let clipPressOpenedEditor = false
   $: activePatternPlayheadBeat = localPlayheadBeat(
@@ -258,6 +261,7 @@
     activePatternClipLoopRegion = activeClipId
       ? controller.midiClipLoopRegion(activeClipId)
       : controller.patternClipLoopRegion(activePattern?.id)
+    groove = store.document.groove
     selectedTrackClips = controller.trackClips(
       selectedTrackId,
       activeClipId,
@@ -265,8 +269,6 @@
       playbackStatus.liveClips.pendingLaunchByTrackId[selectedTrackId]
     )
     refreshMatrixTracks()
-    refreshSelectedTrackWebAudioSettings()
-    refreshWebMidiStatus()
     issues = validateDocument(store.document)
     canUndo = store.history.canUndo()
     canRedo = store.history.canRedo()
@@ -332,8 +334,6 @@
         (event.payload as PlaybackServiceStatus | undefined) ?? playbackStatus
       refreshSelectedTrackClips()
       refreshMatrixTracks()
-      refreshSelectedTrackWebAudioSettings()
-      refreshWebMidiStatus()
     }
 
     if (event.type === 'playback:runtime-parameters') {
@@ -408,23 +408,6 @@
         queued: clips.some((clip) => clip.pendingLaunch)
       }
     })
-  }
-
-  function refreshSelectedTrackWebAudioSettings() {
-    selectedTrackWebAudioSettings = playback.webAudioTrackSettings(selectedTrackId)
-    webAudioEnabled =
-      selectedTrackWebAudioSettings.enabled &&
-      playbackStatus.outputManager.activeOutputIds.includes('web-audio')
-  }
-
-  function refreshWebMidiStatus() {
-    webMidiEnabled =
-      playbackStatus.webMidi.connected &&
-      playbackStatus.outputManager.activeOutputIds.includes('web-midi')
-    webMidiLabel = playbackStatus.webMidi.outputName ?? 'MIDI'
-    webMidiStatus = webMidiEnabled
-      ? `Connected to ${webMidiLabel}`
-      : playbackStatus.webMidi.lastError ?? 'Web MIDI output is off'
   }
 
   function applyRuntimeParameterValues(
@@ -588,6 +571,17 @@
       : undefined
   }
 
+  function selectedTrackDeviceKind(
+    track: Track | undefined
+  ): SelectableDeviceKind | undefined {
+    const device = findTrackDeviceInstance(track)
+
+    if (device?.descriptorKey === BASIC_SYNTH_DESCRIPTOR.key) return 'basic-synth'
+    if (device?.descriptorKey === SAMPLER_DESCRIPTOR.key) return 'sampler'
+
+    return undefined
+  }
+
   function buildSelectedSamplerSampleName(track: Track | undefined): string {
     const slot = selectedSamplerSlot(track)
 
@@ -657,6 +651,7 @@
 
   function playTransport() {
     ensureSelectedClipActiveWhenStopped()
+    void playback.setWebAudioEnabled(true)
     controller.playTransport()
   }
 
@@ -670,31 +665,12 @@
     controller.setRuntimeBpm(bpm)
   }
 
-  async function setSelectedTrackWebAudioEnabled(enabled: boolean) {
-    webAudioEnabled = enabled
+  function setSwingAmount(event: Event) {
+    const amount = Number((event.currentTarget as HTMLInputElement).value) / 100
 
-    if (selectedTrackId) {
-      playback.setWebAudioTrackSettings(selectedTrackId, { enabled })
+    if (!controller.setGrooveAmount(amount)) return
 
-      if (enabled) {
-        await playback.setWebAudioEnabled(true)
-      }
-    } else {
-      await playback.setWebAudioEnabled(enabled)
-    }
-
-    playbackStatus = playback.status
-    refreshSelectedTrackWebAudioSettings()
-  }
-
-  async function toggleWebAudioOutput() {
-    await setSelectedTrackWebAudioEnabled(!webAudioEnabled)
-  }
-
-  async function toggleWebMidiOutput() {
-    await playback.setWebMidiEnabled(!webMidiEnabled)
-    playbackStatus = playback.status
-    refreshWebMidiStatus()
+    syncView()
   }
 
   async function loadSamplerSampleFile(file: File) {
@@ -725,9 +701,12 @@
         sampleRate: buffer.sampleRate,
         channels: buffer.numberOfChannels
       }
-      const sampler = ensureSelectedTrackSamplerDevice()
+      const sampler = selectedSamplerDevice(selectedTrack)
 
-      if (!sampler) return
+      if (!sampler) {
+        samplerSampleStatus = 'Attach a sampler first'
+        return
+      }
 
       const slot: SampleSlot = {
         ...selectedSlot,
@@ -741,7 +720,6 @@
       samplerSampleStatus = `${file.name} loaded`
       syncView()
       playbackStatus = playback.status
-      refreshSelectedTrackWebAudioSettings()
     } catch (error) {
       samplerSampleStatus =
         error instanceof Error ? error.message : 'Could not load sample'
@@ -750,22 +728,33 @@
     }
   }
 
-  function ensureSelectedTrackSamplerDevice(): SamplerDeviceInstance | undefined {
+  function attachTrackDevice(kind: SelectableDeviceKind) {
     if (!selectedTrack) return undefined
 
-    const currentSampler = selectedSamplerDevice(selectedTrack)
+    const descriptor =
+      kind === 'sampler' ? SAMPLER_DESCRIPTOR : BASIC_SYNTH_DESCRIPTOR
+    const device = createDeviceInstance(
+      descriptor,
+      descriptor.name
+    ) as DeviceInstance
 
-    if (currentSampler) return currentSampler
+    if (kind === 'sampler') {
+      device.parameterValues.mode = 'multi'
+    }
 
-    const sampler = createDeviceInstance(
-      SAMPLER_DESCRIPTOR,
-      'Sampler'
-    ) as SamplerDeviceInstance
-    sampler.parameterValues.mode = 'multi'
+    controller.addDeviceInstance(device)
+    controller.setTrackDevice(selectedTrack.id, device.id)
+    selectedSamplerSlotId = 'slot-1'
+    samplerSampleStatus = ''
+    syncView()
+  }
 
-    controller.addDeviceInstance(sampler)
-    controller.setTrackDevice(selectedTrack.id, sampler.id)
-    return sampler
+  function removeSelectedTrackDevice() {
+    if (!selectedTrack?.deviceId) return
+
+    controller.setTrackDevice(selectedTrack.id, undefined)
+    samplerSampleStatus = ''
+    syncView()
   }
 
   function setDeviceParameterValue(
@@ -778,17 +767,18 @@
   }
 
   function setTrackMixerValue<K extends keyof TrackMixerState>(
+    trackId: string,
     key: K,
     value: TrackMixerState[K]
   ) {
-    if (!selectedTrackId) return
+    if (!trackId) return
 
-    controller.setTrackMixerValue(selectedTrackId, key, value)
+    controller.setTrackMixerValue(trackId, key, value)
     syncView()
   }
 
   function setSamplerSampleSlot(slot: SampleSlot) {
-    const sampler = ensureSelectedTrackSamplerDevice()
+    const sampler = selectedSamplerDevice(selectedTrack)
 
     if (!sampler) return
 
@@ -807,6 +797,19 @@
   function showMatrixView() {
     viewMode = 'matrix'
     endClipPress()
+  }
+
+  function toggleClipCopyMode() {
+    endClipPress()
+
+    if (clipCopyMode === 'idle') {
+      clipCopyMode = 'select-source'
+      clipCopySource = undefined
+      return
+    }
+
+    clipCopyMode = 'idle'
+    clipCopySource = undefined
   }
 
   function toggleActivePatternClipLoop(loop: boolean) {
@@ -918,6 +921,8 @@
   }
 
   function startClipPress(clip: TrackClipView) {
+    if (clipCopyMode !== 'idle') return
+
     endClipPress()
     clipPressOpenedEditor = false
     clipPressTimer = setTimeout(() => {
@@ -934,6 +939,19 @@
   }
 
   function launchMatrixClip(clip: TrackClipView) {
+    if (clipCopyMode === 'select-source') {
+      endClipPress()
+      clipCopySource = clip
+      clipCopyMode = 'select-target'
+      return
+    }
+
+    if (clipCopyMode === 'select-target') {
+      endClipPress()
+      pasteCopiedClipToSlot(clip.trackId, clip.slotIndex)
+      return
+    }
+
     if (clipPressOpenedEditor) {
       clipPressOpenedEditor = false
       return
@@ -1091,6 +1109,45 @@
     return clipId
   }
 
+  function pasteCopiedClipToSlot(trackId: string, slotIndex: number) {
+    if (!clipCopySource) return
+
+    const track = tracks.find((item) => item.id === trackId)
+    const existingClip = matrixTrackClips(trackId).find(
+      (clip) => clip.slotIndex === slotIndex
+    )
+
+    if (track) {
+      controller.selectTrack(track)
+    }
+
+    if (existingClip) {
+      if (playbackStatus.liveClips.pendingLaunchByTrackId[trackId]?.clipId === existingClip.id) {
+        playback.cancelClipLaunch(trackId)
+      }
+
+      if (playbackStatus.liveClips.activeClipByTrackId[trackId]?.clipId === existingClip.id) {
+        playback.clearActiveClipForTrack(trackId)
+      }
+    }
+
+    const clipId = controller.copyClipToTrackSlot(
+      clipCopySource.id,
+      trackId,
+      slotIndex
+    )
+
+    if (clipId) {
+      activeClipId = clipId
+      ensureClipActiveWhenStopped(trackId, clipId)
+    }
+
+    clipCopyMode = 'idle'
+    clipCopySource = undefined
+    playbackStatus = playback.status
+    syncView()
+  }
+
   function removeClip(clip: TrackClipView) {
     if (!controller.deleteClip(clip.id)) return
 
@@ -1146,6 +1203,8 @@
       activePattern = store.document.patterns.values()[0]
       activeEditor = 'piano-roll'
       viewMode = 'matrix'
+      clipCopyMode = 'idle'
+      clipCopySource = undefined
       runtimeParameterValues = {}
       automatedRuntimeParameterIds = new Set<string>()
       const restoredAssets = await restoreStoredSampleAssets()
@@ -1154,8 +1213,6 @@
       projectPersistenceStatus = `Loaded ${lastProjectSavedAt.toLocaleTimeString()}`
       syncView()
       playbackStatus = playback.status
-      refreshSelectedTrackWebAudioSettings()
-      refreshWebMidiStatus()
     } catch (error) {
       projectPersistenceStatus =
         error instanceof Error ? `Load failed: ${error.message}` : 'Load failed'
@@ -1451,9 +1508,11 @@
       playing={transportPlaying}
       bpm={transportBpm}
       beat={transportBeat}
+      swingAmount={groove.amount}
       onPlay={playTransport}
       onStop={stopTransport}
       onBpmChange={setRuntimeBpm}
+      onSwingChange={setSwingAmount}
       {diagnosticsOpen}
       onToggleDiagnostics={toggleDiagnosticsOverlay}
     />
@@ -1512,6 +1571,11 @@
         onTrackStop={stopMatrixTrackAndRefresh}
         onStopAll={stopMatrixAll}
         onAddClipToTrack={addClipToTrack}
+        onSetTrackMixerValue={setTrackMixerValue}
+        {clipCopyMode}
+        clipCopySourceId={clipCopySource?.id}
+        onToggleClipCopyMode={toggleClipCopyMode}
+        onPasteClipToSlot={pasteCopiedClipToSlot}
       />
     {:else}
       <div class="editor-stack">
@@ -1527,6 +1591,7 @@
           playheadBeat={activePatternPlayheadBeat}
           loopClip={activePatternClipLoop}
           loopRegion={activePatternClipLoopRegion}
+          {groove}
           clipLength={activePatternClipLoopRegion.clipLength}
           onLoopClipChange={toggleActivePatternClipLoop}
           onLoopRegionChange={setActivePatternClipLoopRegion}
@@ -1551,23 +1616,19 @@
       {selectedTrack}
       {selectedTrackId}
       {selectedTrackDeviceName}
+      selectedTrackDeviceKind={selectedTrackDeviceKind(selectedTrack)}
       {selectedTrackDeviceParameterViews}
-      {webAudioEnabled}
-      {webMidiEnabled}
-      {webMidiLabel}
-      {webMidiStatus}
       samplerSampleName={buildSelectedSamplerSampleName(selectedTrack)}
       samplerSlot={selectedSamplerSlot(selectedTrack)}
       samplerSlots={selectedSamplerSlots(selectedTrack)}
       {selectedSamplerSlotId}
       {samplerSampleStatus}
-      onToggleWebAudioOutput={toggleWebAudioOutput}
-      onToggleWebMidiOutput={toggleWebMidiOutput}
       onLoadSamplerSampleFile={loadSamplerSampleFile}
       onSetSamplerSampleSlot={setSamplerSampleSlot}
       onSelectSamplerSlot={selectSamplerSlot}
       onSetDeviceParameterValue={setDeviceParameterValue}
-      onSetTrackMixerValue={setTrackMixerValue}
+      onAttachDevice={attachTrackDevice}
+      onRemoveDevice={removeSelectedTrackDevice}
     />
 
     <footer class="statusbar">

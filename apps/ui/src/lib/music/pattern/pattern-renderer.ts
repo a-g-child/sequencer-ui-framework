@@ -376,18 +376,19 @@ function buildRenderItems(options: {
   return options.notes.flatMap((note) => {
     const laneId = options.laneByPitch.get(note.pitch);
     const visualPitch = options.visualPitchByPitch?.get(note.pitch) ?? note.pitch;
+    const noteStart = Math.max(0, note.time + note.humanizeOffset);
+    const noteEnd = Math.max(noteStart, noteStart + note.duration);
+    const x = beatToScreenX(noteStart, options.viewport);
+    const endX = beatToScreenX(noteEnd, options.viewport);
 
     if (!laneId) return [];
 
     return {
       id: note.id,
       laneId,
-      x: beatToScreenX(
-        Math.max(0, note.time + note.humanizeOffset),
-        options.viewport
-      ),
+      x,
       y: pitchToScreenY(visualPitch, options.viewport, options.highestPitch) + 1,
-      width: durationToScreenWidth(note.duration, options.viewport),
+      width: Math.max(1, endX - x),
       height: options.noteHeight,
       visualPitch,
       selected: options.selectedIds.has(note.id),

@@ -2,9 +2,11 @@
   export let playing = false;
   export let bpm = 120;
   export let beat = 0;
+  export let swingAmount = 0;
   export let onPlay: () => void;
   export let onStop: () => void;
   export let onBpmChange: (event: Event) => void;
+  export let onSwingChange: (event: Event) => void;
   export let diagnosticsOpen = false;
   export let onToggleDiagnostics: () => void = () => {};
 </script>
@@ -35,6 +37,20 @@
     <span>Beat</span>
     <strong>{beat.toFixed(2)}</strong>
   </div>
+
+  <label class="swing-control" for="global-swing">
+    <span>Swing</span>
+    <input
+      id="global-swing"
+      type="range"
+      min="0"
+      max="100"
+      step="1"
+      value={Math.round(swingAmount * 100)}
+      on:input={onSwingChange}
+    />
+    <strong>{Math.round(swingAmount * 100)}%</strong>
+  </label>
 
   <button
     type="button"
@@ -80,6 +96,7 @@
   }
 
   .bpm-control,
+  .swing-control,
   .beat-readout {
     min-height: var(--control-height-md);
     display: grid;
@@ -88,6 +105,7 @@
   }
 
   .bpm-control span,
+  .swing-control span,
   .beat-readout span {
     color: var(--muted);
     font-size: var(--font-size-xs);
@@ -100,6 +118,26 @@
     width: var(--bpm-control-width);
     min-height: var(--control-height-sm);
     padding: 0 var(--spacing-sm);
+  }
+
+  .swing-control {
+    grid-template-columns: auto minmax(92px, 1fr) 34px;
+    column-gap: var(--spacing-xs);
+  }
+
+  .swing-control span {
+    grid-column: 1 / -1;
+  }
+
+  .swing-control input {
+    min-width: 92px;
+    accent-color: var(--accent);
+  }
+
+  .swing-control strong {
+    color: var(--text);
+    font-size: var(--font-size-xs);
+    text-align: right;
   }
 
   .beat-readout strong {

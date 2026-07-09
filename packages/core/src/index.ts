@@ -30,4 +30,5 @@ export * from "./default-parameters";
 export * from "./command";
 export * from "./operation";
 export * from "./history";
+export * from "./groove";
 export * from "./commands";

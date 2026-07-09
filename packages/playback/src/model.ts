@@ -1,4 +1,4 @@
-import type { BeatTime, TrackMixerState } from '@sequencer/core'
+import type { BeatTime, GrooveSettings, TrackMixerState } from '@sequencer/core'
 
 export interface TempoMap {
   readonly defaultBpm: number
@@ -14,6 +14,7 @@ export interface PlaybackModel {
   readonly id: string
   readonly createdAt: number
   readonly length: BeatTime
+  readonly groove?: GrooveSettings
   readonly tempoMap: TempoMap
   readonly tracks: readonly PlaybackTrack[]
   readonly clips: readonly PlaybackClip[]
@@ -75,6 +76,7 @@ export function createEmptyPlaybackModel(bpm = 120): PlaybackModel {
     id: 'playback-empty',
     createdAt: Date.now(),
     length: 0,
+    groove: undefined,
     tempoMap: {
       defaultBpm: bpm,
       changes: [{ beat: 0, bpm }]
@@ -92,6 +94,7 @@ export function freezePlaybackModel(model: PlaybackModel): PlaybackModel {
   model.notes.forEach(Object.freeze)
   model.automations.forEach(Object.freeze)
   Object.freeze(model.tempoMap.changes)
+  if (model.groove) Object.freeze(model.groove)
   Object.freeze(model.tempoMap)
   Object.freeze(model.tracks)
   Object.freeze(model.clips)

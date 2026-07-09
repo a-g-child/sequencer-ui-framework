@@ -90,7 +90,7 @@ export class WebAudioOutput implements PlaybackOutput {
 
   constructor(options: WebAudioOutputOptions = {}) {
     this.defaultSettings = {
-      enabled: options.enabled ?? false,
+      enabled: options.enabled ?? true,
       waveform: options.waveform ?? 'sine',
       volume: clampUnit(options.volume ?? 0.2),
       adsr: normalizeAdsr(options.adsr),

@@ -1,4 +1,9 @@
-import type { BeatTime } from '@sequencer/core';
+import {
+  grooveBeat,
+  ungrooveBeat,
+  type BeatTime,
+  type GrooveSettings
+} from '@sequencer/core';
 
 export type PatternViewport = {
   zoomX: number;
@@ -7,6 +12,7 @@ export type PatternViewport = {
   scrollY: number;
   pixelsPerBeat: number;
   pixelsPerSemitone: number;
+  groove?: GrooveSettings;
 };
 
 export type PatternViewportOptions = {
@@ -16,6 +22,7 @@ export type PatternViewportOptions = {
   scrollY?: number;
   basePixelsPerBeat?: number;
   basePixelsPerSemitone?: number;
+  groove?: GrooveSettings;
 };
 
 const DEFAULT_PIXELS_PER_BEAT = 96;
@@ -34,7 +41,8 @@ export function createPatternViewport(
     scrollY: options.scrollY ?? 0,
     pixelsPerBeat: (options.basePixelsPerBeat ?? DEFAULT_PIXELS_PER_BEAT) * zoomX,
     pixelsPerSemitone:
-      (options.basePixelsPerSemitone ?? DEFAULT_PIXELS_PER_SEMITONE) * zoomY
+      (options.basePixelsPerSemitone ?? DEFAULT_PIXELS_PER_SEMITONE) * zoomY,
+    groove: options.groove
   };
 }
 
@@ -42,14 +50,20 @@ export function beatToScreenX(
   beat: BeatTime,
   viewport: PatternViewport
 ): number {
-  return (beat - viewport.scrollX) * viewport.pixelsPerBeat;
+  return (
+    grooveBeat(beat, viewport.groove) -
+    grooveBeat(viewport.scrollX, viewport.groove)
+  ) * viewport.pixelsPerBeat;
 }
 
 export function screenXToBeat(
   x: number,
   viewport: PatternViewport
 ): BeatTime {
-  return x / viewport.pixelsPerBeat + viewport.scrollX;
+  const visualBeat =
+    x / viewport.pixelsPerBeat + grooveBeat(viewport.scrollX, viewport.groove);
+
+  return ungrooveBeat(visualBeat, viewport.groove);
 }
 
 export function durationToScreenWidth(

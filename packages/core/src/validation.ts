@@ -1,5 +1,6 @@
 import type { SequencerDocument } from "./document";
 import type { SampleSlot } from "@sequencer/device";
+import { normalizeGrooveSettings } from "./groove";
 
 export interface ValidationIssue {
   level: "error" | "warning";
@@ -17,6 +18,8 @@ export function validateDocument(document: SequencerDocument): ValidationIssue[]
       entityId: document.id
     });
   }
+
+  document.groove = normalizeGrooveSettings(document.groove);
 
   for (const marker of document.timeline.markers) {
     if (marker.time < 0) {

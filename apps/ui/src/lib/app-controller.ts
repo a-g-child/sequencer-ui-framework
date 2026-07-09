@@ -1,6 +1,7 @@
 import {
   AddTrackOperation,
   CompositeOperation,
+  CopyClipToTrackSlotOperation,
   CreateClipForTrackOperation,
   AddAssetOperation,
   AddDeviceInstanceOperation,
@@ -13,6 +14,7 @@ import {
   SetMidiClipLoopOperation,
   SetMidiClipLoopRegionOperation,
   SetDeviceParameterValueOperation,
+  SetGrooveOperation,
   SetParameterValueOperation,
   SetSamplerSampleSlotOperation,
   SetTrackDeviceOperation,
@@ -102,6 +104,25 @@ export class AppController {
     if (!Number.isFinite(bpm) || bpm <= 0) return false
 
     this.app.editorTransport.setBpm(bpm)
+    return true
+  }
+
+  setGrooveAmount(amount: number): boolean {
+    if (!Number.isFinite(amount)) return false
+
+    const nextAmount = Math.min(1, Math.max(0, amount))
+    const current = this.app.documentStore.document.groove
+
+    if (current.amount === nextAmount && current.enabled === nextAmount > 0) {
+      return false
+    }
+
+    this.app.documentStore.execute(
+      new SetGrooveOperation({
+        amount: nextAmount,
+        enabled: nextAmount > 0
+      })
+    )
     return true
   }
 
@@ -677,6 +698,35 @@ export class AppController {
       clipName,
       4,
       slotIndex
+    )
+
+    this.app.documentStore.execute(operation)
+    return operation.clip.id
+  }
+
+  copyClipToTrackSlot(
+    sourceClipId: string | undefined,
+    targetTrackId: string | undefined,
+    targetSlotIndex: number | undefined
+  ): string | undefined {
+    if (!sourceClipId || !targetTrackId || targetSlotIndex === undefined) {
+      return undefined
+    }
+
+    const document = this.app.documentStore.document
+    const sourceClip = document.midiClips.find(sourceClipId)
+    const sourcePattern = sourceClip
+      ? document.patterns.find(sourceClip.pattern)
+      : undefined
+    const targetTrack = document.tracks.find(targetTrackId)
+
+    if (!sourceClip || !sourcePattern || !targetTrack) return undefined
+
+    const operation = new CopyClipToTrackSlotOperation(
+      sourceClip,
+      sourcePattern,
+      targetTrackId,
+      targetSlotIndex
     )
 
     this.app.documentStore.execute(operation)

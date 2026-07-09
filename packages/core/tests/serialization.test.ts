@@ -8,6 +8,7 @@ import type { Parameter, ParameterDefinition } from '../src/parameter.ts';
 import type { MidiClip, Pattern, Track } from '../src/project.ts';
 import { Registry } from '../src/registry.ts';
 import { deserializeDocument, serializeDocument } from '../src/serialization.ts';
+import { createDefaultGrooveSettings } from '../src/groove.ts';
 
 type SamplerDeviceInstance = DeviceInstance & {
   descriptorKey: 'sampler';
@@ -101,6 +102,11 @@ describe('document serialization', () => {
       id: 'document-1',
       name: 'Saved Groovebox',
       bpm: 120,
+      groove: {
+        enabled: true,
+        amount: 0.36,
+        division: 0.25
+      },
       timeline: {
         length: 16,
         markers: []
@@ -121,6 +127,7 @@ describe('document serialization', () => {
     ) as SamplerDeviceInstance;
 
     assert.deepEqual(restored.assets.get(asset.id), asset);
+    assert.deepEqual(restored.groove, document.groove);
     assert.equal(restoredTrack.deviceId, sampler.id);
     assert.deepEqual(restoredTrack.mixer, track.mixer);
     assert.equal(restoredTrack.clips[0].slotIndex, 3);
@@ -150,6 +157,7 @@ describe('document serialization', () => {
 
     const restored = deserializeDocument(serialized);
 
+    assert.deepEqual(restored.groove, createDefaultGrooveSettings());
     assert.deepEqual(restored.tracks.get('track-legacy').mixer, {
       volume: 0.8,
       pan: 0,

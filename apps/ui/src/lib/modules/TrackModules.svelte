@@ -7,7 +7,7 @@
     SampleSlot
   } from '@sequencer/device'
   import ParameterEditor from '../framework/parameter/ParameterEditor.svelte'
-  import MixerPanel from './MixerPanel.svelte'
+  import NumberParameter from '../framework/parameter/NumberParameter.svelte'
 
   type DeviceParameterView = {
     device: DeviceInstance
@@ -22,21 +22,18 @@
     label: string
   }
 
+  type DeviceModuleKind = 'basic-synth' | 'sampler'
+
   export let selectedTrack: Track | undefined = undefined
   export let selectedTrackId = ''
   export let selectedTrackDeviceName = 'No device'
+  export let selectedTrackDeviceKind: DeviceModuleKind | undefined = undefined
   export let selectedTrackDeviceParameterViews: DeviceParameterView[] = []
-  export let webAudioEnabled = false
-  export let webMidiEnabled = false
-  export let webMidiLabel = 'MIDI'
-  export let webMidiStatus = ''
   export let samplerSampleName = 'No sample'
   export let samplerSlot: SampleSlot | undefined = undefined
   export let samplerSlots: SamplerSlotView[] = []
   export let selectedSamplerSlotId = 'slot-1'
   export let samplerSampleStatus = ''
-  export let onToggleWebAudioOutput: () => void
-  export let onToggleWebMidiOutput: () => void
   export let onLoadSamplerSampleFile: (file: File) => void
   export let onSetSamplerSampleSlot: (slot: SampleSlot) => void
   export let onSelectSamplerSlot: (slotId: string) => void
@@ -45,13 +42,74 @@
     parameterKey: string,
     value: DeviceParameterValue
   ) => void
-  export let onSetTrackMixerValue: <K extends keyof Track['mixer']>(
-    key: K,
-    value: Track['mixer'][K]
-  ) => void
-
-  function readNumberValue(event: Event): number {
-    return Number((event.currentTarget as HTMLInputElement).value)
+  export let onAttachDevice: (kind: DeviceModuleKind) => void
+  export let onRemoveDevice: () => void
+  let deviceChooserOpen = false
+  const samplerNumberDescriptors: Record<string, DeviceParameterDescriptor> = {
+    rootNote: {
+      id: 'sampler-slot-root-note',
+      key: 'rootNote',
+      name: 'Root',
+      kind: 'number',
+      defaultValue: 36,
+      min: 0,
+      max: 127,
+      step: 1
+    },
+    gain: {
+      id: 'sampler-slot-gain',
+      key: 'gain',
+      name: 'Gain',
+      kind: 'number',
+      defaultValue: 1,
+      min: 0,
+      max: 4,
+      step: 0.01
+    },
+    start: {
+      id: 'sampler-slot-start',
+      key: 'start',
+      name: 'Start',
+      kind: 'number',
+      defaultValue: 0,
+      min: 0,
+      max: 30,
+      step: 0.001,
+      unit: 's'
+    },
+    end: {
+      id: 'sampler-slot-end',
+      key: 'end',
+      name: 'End',
+      kind: 'number',
+      defaultValue: 0,
+      min: 0,
+      max: 30,
+      step: 0.001,
+      unit: 's'
+    },
+    loopStart: {
+      id: 'sampler-slot-loop-start',
+      key: 'loopStart',
+      name: 'Loop Start',
+      kind: 'number',
+      defaultValue: 0,
+      min: 0,
+      max: 30,
+      step: 0.001,
+      unit: 's'
+    },
+    loopEnd: {
+      id: 'sampler-slot-loop-end',
+      key: 'loopEnd',
+      name: 'Loop End',
+      kind: 'number',
+      defaultValue: 0,
+      min: 0,
+      max: 30,
+      step: 0.001,
+      unit: 's'
+    }
   }
 
   function loadSamplerFile(event: Event): void {
@@ -71,10 +129,18 @@
     })
   }
 
-  function readOptionalNumberValue(event: Event): number | undefined {
-    const value = (event.currentTarget as HTMLInputElement).value
+  function updateSamplerNumber(
+    key: keyof SampleSlot,
+    value: DeviceParameterValue
+  ): void {
+    if (typeof value !== 'number') return
 
-    return value === '' ? undefined : Number(value)
+    updateSamplerSlot({ [key]: value })
+  }
+
+  function attachDevice(kind: DeviceModuleKind): void {
+    onAttachDevice(kind)
+    deviceChooserOpen = false
   }
 </script>
 
@@ -84,196 +150,160 @@
     <strong>{selectedTrack?.name ?? 'None'}</strong>
   </div>
 
-  <section class="track-module" aria-label="Track parameters">
-    <div class="module-heading">
-      <h2>Mixer</h2>
-      <span>Volume / Pan / Mute / Solo</span>
-    </div>
-
-    <MixerPanel
-      track={selectedTrack}
-      disabled={!selectedTrackId}
-      onChange={onSetTrackMixerValue}
-    />
-  </section>
-
-  <section class="track-module" aria-label="Track device">
-    <div class="module-heading">
-      <h2>Device</h2>
-      <span>{selectedTrackDeviceName}</span>
-    </div>
-
-    <div class="audio-output-panel" aria-label="Audio output">
-      <div class="audio-toggle">
-        <span>Audio</span>
+  <section class="track-module track-device-module" aria-label="Track device">
+    {#if !selectedTrackId}
+      <div class="empty-device-slot">
+        <span>No track selected</span>
+      </div>
+    {:else if !selectedTrackDeviceKind}
+      <div class="empty-device-slot">
         <button
           type="button"
-          class="audio-enable-button"
-          class:active={webAudioEnabled}
-          aria-pressed={webAudioEnabled}
-          on:click={onToggleWebAudioOutput}
-          disabled={!selectedTrackId}
+          class="add-device-button"
+          aria-expanded={deviceChooserOpen}
+          on:click={() => (deviceChooserOpen = !deviceChooserOpen)}
         >
-          {webAudioEnabled ? 'On' : 'Off'}
+          +
         </button>
-      </div>
-      <div class="audio-toggle">
-        <span>{webMidiLabel}</span>
-        <button
-          type="button"
-          class="audio-enable-button"
-          class:active={webMidiEnabled}
-          aria-pressed={webMidiEnabled}
-          title={webMidiStatus}
-          on:click={onToggleWebMidiOutput}
-        >
-          {webMidiEnabled ? 'On' : 'Off'}
-        </button>
-      </div>
-      {#if webMidiStatus && !webMidiEnabled}
-        <p class="output-status">{webMidiStatus}</p>
-      {/if}
-    </div>
-
-    {#if selectedTrackId}
-      <div class="sample-slot-selector" aria-label="Sampler slots">
-        {#each samplerSlots as slot, index (slot.id)}
-          <button
-            type="button"
-            class:active={slot.id === selectedSamplerSlotId}
-            class:loaded={slot.loaded}
-            aria-pressed={slot.id === selectedSamplerSlotId}
-            title={slot.label}
-            on:click={() => onSelectSamplerSlot(slot.id)}
-          >
-            <strong>{index + 1}</strong>
-            <span>{slot.loaded ? slot.label : slot.rootNote}</span>
-          </button>
-        {/each}
-      </div>
-
-      <div class="sample-loader">
-        <span>{samplerSampleName}</span>
-        <label class="sample-load-button">
-          Load
-          <input
-            type="file"
-            accept="audio/*"
-            on:change={loadSamplerFile}
-            disabled={!selectedTrackId}
-          />
-        </label>
-        {#if samplerSampleStatus}
-          <p class="output-status">{samplerSampleStatus}</p>
+        {#if deviceChooserOpen}
+          <div class="device-chooser" aria-label="Available devices">
+            <button type="button" on:click={() => attachDevice('basic-synth')}>
+              Basic Synth
+            </button>
+            <button type="button" on:click={() => attachDevice('sampler')}>
+              Sampler
+            </button>
+          </div>
         {/if}
       </div>
-
-      {#if samplerSlot}
-        <div class="sample-slot-grid" aria-label="Sample slot settings">
-          <label class="sample-slot-control">
-            <span>Root</span>
-            <input
-              type="number"
-              min="0"
-              max="127"
-              step="1"
-              value={samplerSlot.rootNote}
-              on:change={(event) =>
-                updateSamplerSlot({ rootNote: readNumberValue(event) })}
-            />
-          </label>
-          <label class="sample-slot-control">
-            <span>Gain</span>
-            <input
-              type="number"
-              min="0"
-              max="4"
-              step="0.01"
-              value={samplerSlot.gain}
-              on:change={(event) =>
-                updateSamplerSlot({ gain: readNumberValue(event) })}
-            />
-          </label>
-          <label class="sample-slot-control">
-            <span>Start</span>
-            <input
-              type="number"
-              min="0"
-              step="0.001"
-              value={samplerSlot.start}
-              on:change={(event) =>
-                updateSamplerSlot({ start: readNumberValue(event) })}
-            />
-          </label>
-          <label class="sample-slot-control">
-            <span>End</span>
-            <input
-              type="number"
-              min="0"
-              step="0.001"
-              value={samplerSlot.end ?? ''}
-              on:change={(event) =>
-                updateSamplerSlot({ end: readOptionalNumberValue(event) })}
-            />
-          </label>
-          <label class="sample-slot-toggle">
-            <span>Loop</span>
-            <button
-              type="button"
-              class:active={samplerSlot.loop}
-              aria-pressed={samplerSlot.loop}
-              on:click={() => updateSamplerSlot({ loop: !samplerSlot.loop })}
-            >
-              {samplerSlot.loop ? 'On' : 'Off'}
-            </button>
-          </label>
-          <label class="sample-slot-control">
-            <span>Loop Start</span>
-            <input
-              type="number"
-              min="0"
-              step="0.001"
-              value={samplerSlot.loopStart ?? samplerSlot.start}
-              disabled={!samplerSlot.loop}
-              on:change={(event) =>
-                updateSamplerSlot({ loopStart: readOptionalNumberValue(event) })}
-            />
-          </label>
-          <label class="sample-slot-control">
-            <span>Loop End</span>
-            <input
-              type="number"
-              min="0"
-              step="0.001"
-              value={samplerSlot.loopEnd ?? samplerSlot.end ?? ''}
-              disabled={!samplerSlot.loop}
-              on:change={(event) =>
-                updateSamplerSlot({ loopEnd: readOptionalNumberValue(event) })}
-            />
-          </label>
-        </div>
-      {/if}
-    {/if}
-
-    {#if selectedTrackDeviceParameterViews.length > 0}
-      <div class="parameter-module-grid device-parameter-grid">
-        {#each selectedTrackDeviceParameterViews as parameter (`${parameter.device.id}:${parameter.descriptor.key}`)}
-          <ParameterEditor
-            descriptor={parameter.descriptor}
-            value={parameter.runtimeValue ?? parameter.value}
-            disabled={!selectedTrackId}
-            automated={parameter.automated ?? false}
-            onChange={(value) =>
-              onSetDeviceParameterValue(
-                parameter.device.id,
-                parameter.descriptor.key,
-                value
-              )}
-          />
-        {/each}
-      </div>
     {:else}
-      <p class="empty-module">No device parameters</p>
+      <div class="module-heading device-heading">
+        <div>
+          <h2>{selectedTrackDeviceName}</h2>
+          <span>{selectedTrackDeviceKind === 'sampler' ? 'Sampler' : 'Synth'}</span>
+        </div>
+        <button
+          type="button"
+          class="remove-device-button"
+          aria-label={`Remove ${selectedTrackDeviceName}`}
+          title="Remove device"
+          on:click={onRemoveDevice}
+        >
+          x
+        </button>
+      </div>
+
+      <div
+        class="device-module-layout"
+        class:synth-layout={selectedTrackDeviceKind !== 'sampler'}
+      >
+        {#if selectedTrackDeviceKind === 'sampler'}
+          <section class="sampler-panel" aria-label="Sampler slots">
+            <div class="sample-slot-selector">
+              {#each samplerSlots as slot, index (slot.id)}
+                <button
+                  type="button"
+                  class:active={slot.id === selectedSamplerSlotId}
+                  class:loaded={slot.loaded}
+                  aria-pressed={slot.id === selectedSamplerSlotId}
+                  title={slot.label}
+                  on:click={() => onSelectSamplerSlot(slot.id)}
+                >
+                  <strong>{index + 1}</strong>
+                  <span>{slot.loaded ? slot.label : slot.rootNote}</span>
+                </button>
+              {/each}
+            </div>
+
+          <div class="sample-loader">
+            <span>{samplerSampleName}</span>
+            <label class="sample-load-button">
+              Load
+              <input
+                type="file"
+                accept="audio/*"
+                on:change={loadSamplerFile}
+                disabled={!selectedTrackId}
+              />
+            </label>
+            {#if samplerSampleStatus}
+              <p class="output-status">{samplerSampleStatus}</p>
+            {/if}
+          </div>
+
+          {#if samplerSlot}
+            <div class="sample-slot-grid" aria-label="Sample slot settings">
+              <NumberParameter
+                descriptor={samplerNumberDescriptors.rootNote}
+                value={samplerSlot.rootNote}
+                onChange={(value) => updateSamplerNumber('rootNote', value)}
+              />
+              <NumberParameter
+                descriptor={samplerNumberDescriptors.gain}
+                value={samplerSlot.gain}
+                onChange={(value) => updateSamplerNumber('gain', value)}
+              />
+              <NumberParameter
+                descriptor={samplerNumberDescriptors.start}
+                value={samplerSlot.start}
+                onChange={(value) => updateSamplerNumber('start', value)}
+              />
+              <NumberParameter
+                descriptor={samplerNumberDescriptors.end}
+                value={samplerSlot.end ?? samplerSlot.start}
+                onChange={(value) => updateSamplerNumber('end', value)}
+              />
+              <label class="sample-slot-toggle">
+                <span>Loop</span>
+                <button
+                  type="button"
+                  class:active={samplerSlot.loop}
+                  aria-pressed={samplerSlot.loop}
+                  on:click={() => updateSamplerSlot({ loop: !samplerSlot.loop })}
+                >
+                  {samplerSlot.loop ? 'On' : 'Off'}
+                </button>
+              </label>
+              <NumberParameter
+                descriptor={samplerNumberDescriptors.loopStart}
+                value={samplerSlot.loopStart ?? samplerSlot.start}
+                disabled={!samplerSlot.loop}
+                onChange={(value) => updateSamplerNumber('loopStart', value)}
+              />
+              <NumberParameter
+                descriptor={samplerNumberDescriptors.loopEnd}
+                value={samplerSlot.loopEnd ?? samplerSlot.end ?? samplerSlot.start}
+                disabled={!samplerSlot.loop}
+                onChange={(value) => updateSamplerNumber('loopEnd', value)}
+              />
+            </div>
+          {/if}
+          </section>
+        {/if}
+
+        <section class="device-parameter-panel" aria-label="Device parameters">
+          {#if selectedTrackDeviceParameterViews.length > 0}
+            <div class="parameter-module-grid device-parameter-grid">
+              {#each selectedTrackDeviceParameterViews as parameter (`${parameter.device.id}:${parameter.descriptor.key}`)}
+                <ParameterEditor
+                  descriptor={parameter.descriptor}
+                  value={parameter.runtimeValue ?? parameter.value}
+                  disabled={!selectedTrackId}
+                  automated={parameter.automated ?? false}
+                  onChange={(value) =>
+                    onSetDeviceParameterValue(
+                      parameter.device.id,
+                      parameter.descriptor.key,
+                      value
+                    )}
+                />
+              {/each}
+            </div>
+          {:else}
+            <p class="empty-module">No device parameters</p>
+          {/if}
+        </section>
+      </div>
     {/if}
   </section>
 </section>
@@ -281,7 +311,7 @@
 <style>
   .track-modules {
     display: grid;
-    grid-template-columns: minmax(140px, 0.7fr) minmax(260px, 1fr) minmax(360px, 1.4fr);
+    grid-template-columns: minmax(140px, 0.36fr) minmax(760px, 1.64fr);
     gap: var(--spacing-lg);
   }
 
@@ -292,6 +322,10 @@
     background: var(--surface);
     display: grid;
     gap: var(--spacing-sm);
+  }
+
+  .track-device-module {
+    align-content: start;
   }
 
   .track-module-summary {
@@ -319,29 +353,110 @@
     gap: var(--spacing-sm);
   }
 
+  .device-heading {
+    align-items: start;
+  }
+
+  .device-heading > div {
+    min-width: 0;
+    display: grid;
+    gap: var(--spacing-2xs);
+  }
+
+  .remove-device-button {
+    width: var(--icon-button-size);
+    min-width: var(--icon-button-size);
+    height: var(--icon-button-size);
+    padding: 0;
+    border-radius: var(--radius-control);
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  .remove-device-button:hover {
+    border-color: var(--danger, var(--accent));
+    color: var(--danger, var(--accent));
+  }
+
+  .empty-device-slot {
+    min-height: 124px;
+    display: grid;
+    place-items: center;
+    gap: var(--spacing-sm);
+    border: var(--border-width) dashed var(--border);
+    background: var(--surface-2);
+  }
+
+  .empty-device-slot > span {
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .add-device-button {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border-radius: 50%;
+    color: var(--muted);
+    font-size: var(--font-size-xl);
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  .add-device-button:hover,
+  .add-device-button[aria-expanded='true'] {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .device-chooser {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 120px));
+    gap: var(--spacing-xs);
+  }
+
+  .device-chooser button {
+    min-height: var(--control-height-sm);
+    border-radius: var(--radius-control);
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .device-chooser button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
   .parameter-module-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: var(--spacing-sm);
   }
 
-  .audio-output-panel {
+  .device-module-layout {
+    min-width: 0;
     display: grid;
-    grid-template-columns: auto;
-    align-items: center;
-    gap: var(--spacing-sm);
+    grid-template-columns: minmax(240px, 0.85fr) minmax(360px, 1.15fr);
+    align-items: start;
+    gap: var(--spacing-lg);
   }
 
-  .audio-toggle {
+  .device-module-layout.synth-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sampler-panel,
+  .device-parameter-panel {
+    min-width: 0;
     display: grid;
-    grid-template-columns: auto auto;
-    align-items: center;
-    justify-content: start;
     gap: var(--spacing-sm);
-    color: var(--muted);
-    font-size: var(--font-size-xs);
-    font-weight: 800;
-    text-transform: uppercase;
   }
 
   .output-status {
@@ -351,22 +466,6 @@
     font-size: var(--font-size-xs);
     font-weight: 700;
     text-transform: none;
-  }
-
-  .audio-enable-button {
-    min-height: var(--control-height-sm);
-    min-width: 44px;
-    padding: 0 var(--spacing-sm);
-    border-radius: var(--radius-control);
-    color: var(--muted);
-    font-size: var(--font-size-xs);
-    font-weight: 800;
-  }
-
-  .audio-enable-button.active {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-    color: var(--accent);
   }
 
   .sample-loader {
@@ -382,13 +481,13 @@
 
   .sample-slot-selector {
     display: grid;
-    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: var(--spacing-2xs);
   }
 
   .sample-slot-selector button {
     min-width: 0;
-    min-height: 44px;
+    min-height: 52px;
     display: grid;
     align-content: center;
     gap: 1px;
@@ -455,11 +554,10 @@
 
   .sample-slot-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--spacing-sm);
   }
 
-  .sample-slot-control,
   .sample-slot-toggle {
     min-width: 0;
     display: grid;
@@ -468,21 +566,6 @@
     font-size: var(--font-size-xs);
     font-weight: 800;
     text-transform: uppercase;
-  }
-
-  .sample-slot-control input {
-    min-width: 0;
-    min-height: var(--control-height-sm);
-    padding: 0 var(--spacing-xs);
-    border: var(--border-width) solid var(--border);
-    border-radius: var(--radius-control);
-    background: var(--surface);
-    color: var(--text);
-    font: inherit;
-  }
-
-  .sample-slot-control input:disabled {
-    opacity: 0.45;
   }
 
   .sample-slot-toggle button {
@@ -500,7 +583,7 @@
   }
 
   .device-parameter-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .empty-module {
@@ -516,8 +599,11 @@
       grid-template-columns: 1fr;
     }
 
+    .device-module-layout {
+      grid-template-columns: 1fr;
+    }
+
     .parameter-module-grid,
-    .audio-output-panel,
     .sample-slot-grid,
     .sample-slot-selector {
       grid-template-columns: repeat(2, minmax(0, 1fr));

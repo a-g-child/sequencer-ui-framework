@@ -5,9 +5,11 @@ import type { Parameter, ParameterDefinition } from "./parameter.ts";
 import type { MidiClip, Pattern, Track } from "./project.ts";
 import type { Registry } from "./registry.ts";
 import type { Timeline } from "./timeline.ts";
+import type { GrooveSettings } from "./groove.ts";
 
 export interface SequencerDocument extends Entity {
   bpm: number;
+  groove: GrooveSettings;
   timeline: Timeline;
   assets: Registry<AssetReference>;
   tracks: Registry<Track>;

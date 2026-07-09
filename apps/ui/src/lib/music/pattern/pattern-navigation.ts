@@ -43,7 +43,8 @@ export function zoomViewportX(
       0,
       maxScrollX(bounds, nextPixelsPerBeat)
     ),
-    scrollY: clampNumber(viewport.scrollY, bounds.minScrollY, bounds.maxScrollY)
+    scrollY: clampNumber(viewport.scrollY, bounds.minScrollY, bounds.maxScrollY),
+    groove: viewport.groove
   });
 }
 
@@ -60,7 +61,8 @@ export function panViewportX(
       0,
       maxScrollX(bounds, viewport.pixelsPerBeat)
     ),
-    scrollY: clampNumber(viewport.scrollY, bounds.minScrollY, bounds.maxScrollY)
+    scrollY: clampNumber(viewport.scrollY, bounds.minScrollY, bounds.maxScrollY),
+    groove: viewport.groove
   });
 }
 
@@ -81,7 +83,8 @@ export function panViewportY(
       viewport.scrollY + deltaPitch,
       bounds.minScrollY,
       bounds.maxScrollY
-    )
+    ),
+    groove: viewport.groove
   });
 }
 
@@ -116,7 +119,8 @@ export function clampViewport(
       0,
       maxScrollX(bounds, pixelsPerBeat)
     ),
-    scrollY: clampNumber(viewport.scrollY, bounds.minScrollY, bounds.maxScrollY)
+    scrollY: clampNumber(viewport.scrollY, bounds.minScrollY, bounds.maxScrollY),
+    groove: viewport.groove
   });
 }
 

@@ -7,6 +7,7 @@
   } from '@sequencer/music';
   import { onMount, tick } from 'svelte';
   import type { AppController } from '../../app-controller';
+  import type { GrooveSettings } from '@sequencer/core';
   import type { ClipLoopRegion } from '../../app-controller';
   import type { EditorKind } from '../../editors/editor-types';
   import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model';
@@ -37,6 +38,7 @@
   export let clipLength: number | undefined = undefined;
   export let loopClip = true;
   export let loopRegion: ClipLoopRegion | undefined = undefined;
+  export let groove: GrooveSettings | undefined = undefined;
   export let onLoopClipChange: ((loop: boolean) => void) | undefined = undefined;
   export let onLoopRegionChange: ((loopStart: number, loopLength: number) => void) | undefined = undefined;
   export let onClipBoundsChange: ((clipStart: number, clipLength: number) => void) | undefined = undefined;
@@ -52,9 +54,6 @@
   export let automationTargets: PatternAutomationTarget[] = [];
   export let sampleGridLanes: SampleGridLane[] = [];
 
-  const viewportZoomStep = 1.25;
-  const viewportBeatScrollStep = 1;
-  const viewportPitchScrollStep = 6;
   const randomHumanizeRange = 0.06;
 
   let session: PatternEditorSession;
@@ -67,6 +66,7 @@
   let automationPointsByTarget: Record<string, AutomationCurvePoint[]> = {};
   let automationRevision = '';
   let sampleGridLaneRevision = '';
+  let grooveRevision = '';
 
   $: if (
     automationTargets.length > 0 &&
@@ -82,7 +82,8 @@
       totalBars,
       beatsPerBar,
       beatDivisions,
-      visibleLength: clipLength
+      visibleLength: clipLength,
+      groove
     });
     sampleGridLaneRevision = '';
   }
@@ -110,6 +111,14 @@
 
   $: if (session && session.activeClipId !== activeClipId) {
     session.setActiveClip(activeClipId);
+  }
+
+  $: nextGrooveRevision =
+    `${groove?.enabled ?? false}:${groove?.amount ?? 0}:${groove?.division ?? 0.25}`;
+  $: if (session && nextGrooveRevision !== grooveRevision) {
+    grooveRevision = nextGrooveRevision;
+    session.setGroove(groove);
+    invalidateSession();
   }
 
   $: nextSampleGridLaneRevision = sampleGridLanes
@@ -205,6 +214,21 @@
 
   function handlePitchScrollChange(scrollY: number) {
     session.setViewport({ scrollY }, pianoRoll);
+    invalidateSession();
+  }
+
+  function handleHorizontalScrollChange(scrollX: number) {
+    session.setViewport({ scrollX }, pianoRoll);
+    invalidateSession();
+  }
+
+  function handleViewportZoomXChange(zoomX: number) {
+    session.setViewport({ zoomX }, pianoRoll);
+    invalidateSession();
+  }
+
+  function handleViewportZoomYChange(zoomY: number) {
+    session.setViewport({ zoomY }, pianoRoll);
     invalidateSession();
   }
 
@@ -416,7 +440,10 @@
         onAutomationPointsCommit={commitAutomationPoints}
         onViewportWidthChange={handleViewportWidthChange}
         onViewportHeightChange={handleViewportHeightChange}
+        onHorizontalScrollChange={handleHorizontalScrollChange}
         onPitchScrollChange={handlePitchScrollChange}
+        onViewportZoomXChange={handleViewportZoomXChange}
+        onViewportZoomYChange={handleViewportZoomYChange}
         onWheel={handlePatternWheel}
         onPointerEnter={handlePianoRollPointerEnter}
         onPointerDown={handlePianoRollPointerDown}
@@ -451,38 +478,6 @@
         onScaleRootChange={setScaleRoot}
         onScaleIdChange={setScaleId}
         onScaleModeChange={setScaleMode}
-        onZoomIn={() => {
-          session.zoomViewportX(viewportZoomStep, pianoRoll);
-          invalidateSession();
-        }}
-        onZoomOut={() => {
-          session.zoomViewportX(1 / viewportZoomStep, pianoRoll);
-          invalidateSession();
-        }}
-        onZoomPitchIn={() => {
-          session.zoomViewportY(viewportZoomStep, pianoRoll);
-          invalidateSession();
-        }}
-        onZoomPitchOut={() => {
-          session.zoomViewportY(1 / viewportZoomStep, pianoRoll);
-          invalidateSession();
-        }}
-        onPanLeft={() => {
-          session.scrollViewport(-viewportBeatScrollStep, pianoRoll);
-          invalidateSession();
-        }}
-        onPanRight={() => {
-          session.scrollViewport(viewportBeatScrollStep, pianoRoll);
-          invalidateSession();
-        }}
-        onPitchUp={() => {
-          session.scrollPitch(-viewportPitchScrollStep, pianoRoll);
-          invalidateSession();
-        }}
-        onPitchDown={() => {
-          session.scrollPitch(viewportPitchScrollStep, pianoRoll);
-          invalidateSession();
-        }}
         onResetView={resetPatternViewport}
       />
     {/if}

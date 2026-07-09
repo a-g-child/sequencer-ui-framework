@@ -1,6 +1,7 @@
 export * from "./add-asset";
 export * from "./add-device-instance";
 export * from "./add-track";
+export * from "./copy-clip-to-track-slot";
 export * from "./create-clip-for-track";
 export * from "./delete-clip";
 export * from "./move-pattern-placement";
@@ -11,6 +12,7 @@ export * from "./resize-pattern-placement";
 export * from "./set-midi-clip-loop";
 export * from "./set-midi-clip-loop-region";
 export * from "./set-device-parameter-value";
+export * from "./set-groove";
 export * from "./set-pattern-placement-loop";
 export * from "./set-pattern-placement-loop-count";
 export * from "./set-pattern-placement-loop-region";

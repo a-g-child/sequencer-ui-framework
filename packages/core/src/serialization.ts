@@ -6,11 +6,17 @@ import type { Parameter, ParameterDefinition } from "./parameter.ts";
 import type { Timeline } from "./timeline.ts";
 import type { AssetReference } from "@sequencer/assets";
 import type { DeviceInstance } from "@sequencer/device";
+import {
+  createDefaultGrooveSettings,
+  normalizeGrooveSettings,
+  type GrooveSettings
+} from "./groove.ts";
 
 interface SerializedDocument {
   id: SequencerDocument["id"];
   name: string;
   bpm: number;
+  groove?: GrooveSettings;
   timeline: Timeline;
   assets?: AssetReference[];
   tracks: Track[];
@@ -26,6 +32,7 @@ export function serializeDocument(document: SequencerDocument): string {
     id: document.id,
     name: document.name,
     bpm: document.bpm,
+    groove: document.groove,
     timeline: document.timeline,
     assets: document.assets.values(),
     tracks: document.tracks.values(),
@@ -83,6 +90,9 @@ export function deserializeDocument(json: string): SequencerDocument {
     id: serialized.id,
     name: serialized.name,
     bpm: serialized.bpm,
+    groove: normalizeGrooveSettings(
+      serialized.groove ?? createDefaultGrooveSettings()
+    ),
     timeline: serialized.timeline,
     assets,
     tracks,

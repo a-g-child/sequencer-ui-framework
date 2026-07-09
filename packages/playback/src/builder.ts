@@ -2,7 +2,8 @@ import {
   createDefaultTrackMixerState,
   type Pattern,
   type SequencerDocument,
-  type TimelineEvent
+  type TimelineEvent,
+  grooveBeat
 } from '@sequencer/core'
 import { getEffectiveBeat, getEffectiveVelocity, isNoteEvent } from '@sequencer/music'
 import { freezePlaybackModel, type PlaybackAutomation, type PlaybackClip, type PlaybackModel, type PlaybackNote, type PlaybackTrack } from './model'
@@ -149,6 +150,7 @@ export class PlaybackModelBuilder {
       id: `playback-${document.id}-${Date.now()}`,
       createdAt: Date.now(),
       length: document.timeline.length,
+      groove: document.groove,
       tempoMap: {
         defaultBpm: bpm,
         changes: [{ beat: 0, bpm }]
@@ -195,7 +197,7 @@ function addPatternPlaybackEvents(context: PatternPlaybackEventContext): void {
         continue
       }
 
-      const beat = clip.start + effectiveBeat
+      const beat = grooveBeat(clip.start + effectiveBeat, document.groove)
       const maximumDuration =
         loop && effectiveBeat >= loopStart && effectiveBeat < loopStart + loopLength
           ? loopStart + loopLength - effectiveBeat
