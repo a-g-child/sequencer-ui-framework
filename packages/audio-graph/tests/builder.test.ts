@@ -26,6 +26,67 @@ test('builds the Basic Synth graph preset', () => {
     'track-gain',
     'audio-out'
   ]);
+  assert.deepEqual(
+    graph.nodes.map((node) => ({
+      id: node.id,
+      descriptorId: node.descriptorId,
+      executionIndex: node.executionIndex
+    })),
+    [
+      {
+        id: 'clip-notes',
+        descriptorId: 'sequencer.source.clip-notes',
+        executionIndex: 0
+      },
+      {
+        id: 'oscillator',
+        descriptorId: 'sequencer.source.oscillator',
+        executionIndex: 2
+      },
+      {
+        id: 'filter',
+        descriptorId: 'sequencer.processor.filter',
+        executionIndex: 3
+      },
+      {
+        id: 'amp-envelope',
+        descriptorId: 'sequencer.processor.adsr-gain',
+        executionIndex: 4
+      },
+      {
+        id: 'track-gain',
+        descriptorId: 'sequencer.processor.gain',
+        executionIndex: 5
+      },
+      {
+        id: 'audio-out',
+        descriptorId: 'sequencer.output.audio-out',
+        executionIndex: 6
+      },
+      {
+        id: 'lfo',
+        descriptorId: 'sequencer.control.lfo',
+        executionIndex: 1
+      }
+    ]
+  );
+  assert.deepEqual(
+    graph.nodes.find((node) => node.id === 'filter')?.resolvedPorts,
+    {
+      inputs: [
+        { id: 'audio-in', name: 'Audio In', kind: 'audio', direction: 'input' },
+        { id: 'cutoff-mod', name: 'Cutoff Mod', kind: 'control', direction: 'input' }
+      ],
+      outputs: [
+        { id: 'audio-out', name: 'Audio Out', kind: 'audio', direction: 'output' }
+      ]
+    }
+  );
+  assert.equal(
+    graph.connections.find((connection) => connection.connection.id === 'oscillator-to-filter')
+      ?.sourceNode.executionIndex,
+    2
+  );
 });
 
 test('builds the Sampler graph preset', () => {
@@ -117,6 +178,41 @@ test('rejects mismatched audio, midi, and control port kinds', () => {
       }
     ]
   );
+});
+
+test('allows type conversion through explicit converter nodes', () => {
+  const graph = new AudioGraphBuilder(DEFAULT_AUDIO_NODE_DESCRIPTORS).build({
+    id: 'test.converter',
+    version: 1,
+    nodes: [
+      { id: 'clip-notes', descriptorId: 'sequencer.source.clip-notes' },
+      {
+        id: 'note-to-frequency',
+        descriptorId: 'sequencer.converter.midi-note-to-frequency'
+      },
+      { id: 'filter', descriptorId: 'sequencer.processor.filter' }
+    ],
+    connections: [
+      {
+        id: 'midi-to-converter',
+        source: { nodeId: 'clip-notes', portId: 'midi-out' },
+        target: { nodeId: 'note-to-frequency', portId: 'midi-in' }
+      },
+      {
+        id: 'converter-to-cutoff',
+        source: { nodeId: 'note-to-frequency', portId: 'frequency-out' },
+        target: { nodeId: 'filter', portId: 'cutoff-mod' }
+      }
+    ]
+  });
+
+  assert.deepEqual(graph.diagnostics, []);
+  assert.equal(graph.connections.length, 2);
+  assert.deepEqual(graph.executionOrder, [
+    'clip-notes',
+    'note-to-frequency',
+    'filter'
+  ]);
 });
 
 const PORT_VALIDATION_DESCRIPTORS: readonly AudioNodeDescriptor[] = [

@@ -14,6 +14,8 @@ test('defines a backend-neutral node vocabulary', () => {
   assert.ok(ids.has('sequencer.source.sample-player'));
   assert.ok(ids.has('sequencer.midi.transpose'));
   assert.ok(ids.has('sequencer.control.lfo'));
+  assert.ok(ids.has('sequencer.converter.midi-note-to-frequency'));
+  assert.ok(ids.has('sequencer.converter.mono-to-stereo'));
   assert.ok(ids.has('sequencer.hardware.cv-output'));
 });
 

@@ -21,6 +21,24 @@ export class AudioGraphBuilder {
 
   build(document: AudioGraphDocument): RuntimeAudioGraph {
     const diagnostics: AudioGraphDiagnostic[] = [];
+    const validatedDocument = this.validate(document, diagnostics);
+    const resolvedGraph = this.resolve(validatedDocument, diagnostics);
+    const optimisedGraph = this.optimise(resolvedGraph);
+
+    return this.schedule(validatedDocument, optimisedGraph, diagnostics);
+  }
+
+  private validate(
+    document: AudioGraphDocument,
+    _diagnostics: AudioGraphDiagnostic[]
+  ): AudioGraphDocument {
+    return document;
+  }
+
+  private resolve(
+    document: AudioGraphDocument,
+    diagnostics: AudioGraphDiagnostic[]
+  ): ResolvedAudioGraph {
     const nodes = this.resolveNodes(document, diagnostics);
     const nodeMap = new Map(nodes.map((node) => [node.node.id, node]));
     const connections = this.resolveConnections(
@@ -29,12 +47,31 @@ export class AudioGraphBuilder {
       diagnostics
     );
 
+    return { nodes, connections };
+  }
+
+  private optimise(graph: ResolvedAudioGraph): ResolvedAudioGraph {
+    return graph;
+  }
+
+  private schedule(
+    document: AudioGraphDocument,
+    graph: ResolvedAudioGraph,
+    diagnostics: AudioGraphDiagnostic[]
+  ): RuntimeAudioGraph {
+    const executionOrder = resolveExecutionOrder(
+      graph.nodes,
+      graph.connections,
+      diagnostics
+    );
+    const scheduledGraph = applyExecutionSchedule(graph, executionOrder);
+
     return {
       document,
-      nodes,
-      connections,
-      executionOrder: resolveExecutionOrder(nodes, connections, diagnostics),
-      latencySamples: nodes.reduce(
+      nodes: scheduledGraph.nodes,
+      connections: scheduledGraph.connections,
+      executionOrder,
+      latencySamples: scheduledGraph.nodes.reduce(
         (total, node) => total + (node.descriptor.latencySamples ?? 0),
         0
       ),
@@ -75,11 +112,18 @@ export class AudioGraphBuilder {
       }
 
       nodes.push({
+        id: node.id,
+        descriptorId: descriptor.id,
         node,
         descriptor,
         parameters: resolveParameters(descriptor, node.parameters ?? {}),
+        resolvedPorts: {
+          inputs: descriptor.ports.filter((port) => port.direction === 'input'),
+          outputs: descriptor.ports.filter((port) => port.direction === 'output')
+        },
         inputPorts: descriptor.ports.filter((port) => port.direction === 'input'),
-        outputPorts: descriptor.ports.filter((port) => port.direction === 'output')
+        outputPorts: descriptor.ports.filter((port) => port.direction === 'output'),
+        executionIndex: -1
       });
     }
 
@@ -190,6 +234,32 @@ export class AudioGraphBuilder {
       targetPort
     };
   }
+}
+
+interface ResolvedAudioGraph {
+  readonly nodes: readonly RuntimeAudioGraphNode[];
+  readonly connections: readonly RuntimeAudioGraphConnection[];
+}
+
+function applyExecutionSchedule(
+  graph: ResolvedAudioGraph,
+  executionOrder: readonly string[]
+): ResolvedAudioGraph {
+  const executionIndexByNodeId = new Map(
+    executionOrder.map((nodeId, index) => [nodeId, index])
+  );
+  const nodes = graph.nodes.map((node) => ({
+    ...node,
+    executionIndex: executionIndexByNodeId.get(node.id) ?? -1
+  }));
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const connections = graph.connections.map((connection) => ({
+    ...connection,
+    sourceNode: nodeById.get(connection.sourceNode.id) ?? connection.sourceNode,
+    targetNode: nodeById.get(connection.targetNode.id) ?? connection.targetNode
+  }));
+
+  return { nodes, connections };
 }
 
 function arePortsCompatible(

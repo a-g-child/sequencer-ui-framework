@@ -216,6 +216,99 @@ The graph builder validates port compatibility before execution. A MIDI output
 connected to an audio input should fail as a type mismatch. A control signal can
 modulate cutoff because both sides agree on a control-compatible port.
 
+## Graph Compiler
+
+`AudioGraphBuilder` is becoming a graph compiler. The graph document is source
+material; the runtime graph is the executable model that backends consume.
+
+The compiler pipeline should remain explicit:
+
+```text
+validate()
+  -> resolve()
+  -> optimise()
+  -> schedule()
+  -> RuntimeGraph
+```
+
+Current responsibilities:
+
+- validate node and connection shape
+- resolve node descriptors
+- resolve typed ports
+- resolve parameter defaults and overrides
+- reject invalid direct connections
+- produce execution order
+- assign runtime execution indices
+- report latency and diagnostics
+
+Runtime nodes should carry profiling-friendly identity:
+
+- `id`: the graph node id from the authored graph
+- `descriptorId`: the resolved node descriptor id
+- `resolvedPorts`: resolved input and output ports
+- `executionIndex`: the node's scheduled runtime position
+
+This lets backends and diagnostics report useful runtime information without
+losing the authored graph identity:
+
+```text
+Node 17
+Oscillator
+Execution time
+CPU %
+Latency
+```
+
+Reserved optimisation responsibilities:
+
+- dead node elimination
+- constant folding
+- adjacent gain/pan collapse
+- latency propagation
+- SIMD grouping hints
+- vectorisation hints
+- hardware or FPGA partitioning hints
+
+The optimisation phase can be a no-op until the execution backends need it. The
+important part is reserving the compiler stage before backend-specific execution
+logic starts to accrete.
+
+## Converter Nodes
+
+Typed ports should reject invalid direct connections. Conversions should be
+explicit nodes:
+
+```text
+MIDI
+  -> MIDI Note To Frequency
+  -> Control
+```
+
+```text
+Audio
+  -> Audio Envelope To Control
+  -> Control
+```
+
+```text
+Control
+  -> Control To CV
+  -> Hardware
+```
+
+Examples of converter nodes:
+
+- MIDI to control
+- audio to control
+- control to trigger
+- control to CV
+- mono to stereo
+- stereo to mono
+
+This keeps validation strict while making intentional conversions visible in the
+runtime graph.
+
 ## Migration Strategy
 
 The migration path should remain conservative:

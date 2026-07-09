@@ -77,11 +77,20 @@ export interface RuntimeAudioGraph {
 }
 
 export interface RuntimeAudioGraphNode {
+  readonly id: string;
+  readonly descriptorId: string;
   readonly node: AudioGraphNode;
   readonly descriptor: AudioNodeDescriptor;
   readonly parameters: Readonly<Record<string, AudioGraphParameterValue>>;
+  readonly resolvedPorts: RuntimeAudioGraphNodePorts;
   readonly inputPorts: readonly AudioNodePortDescriptor[];
   readonly outputPorts: readonly AudioNodePortDescriptor[];
+  readonly executionIndex: number;
+}
+
+export interface RuntimeAudioGraphNodePorts {
+  readonly inputs: readonly AudioNodePortDescriptor[];
+  readonly outputs: readonly AudioNodePortDescriptor[];
 }
 
 export interface RuntimeAudioGraphConnection {
