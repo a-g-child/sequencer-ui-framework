@@ -161,6 +161,65 @@
       </div>
     {/each}
   </div>
+
+  {#if inspector.graph}
+    <section class="graph-diagnostics" aria-label="Device graph diagnostics">
+      <div class="graph-heading">
+        <h3>Graph</h3>
+        <span>{inspector.graph.deviceName}</span>
+      </div>
+
+      <div class="graph-summary">
+        <div>
+          <span>Nodes</span>
+          <strong>{inspector.graph.nodeCount}</strong>
+        </div>
+        <div>
+          <span>Connections</span>
+          <strong>{inspector.graph.connectionCount}</strong>
+        </div>
+        <div>
+          <span>Latency</span>
+          <strong>{inspector.graph.latencySamples} samples</strong>
+        </div>
+        <div>
+          <span>Warnings</span>
+          <strong>{inspector.graph.validationMessages.length}</strong>
+        </div>
+      </div>
+
+      <div class="graph-row">
+        <span>Preset</span>
+        <strong>{inspector.graph.presetId}</strong>
+      </div>
+
+      <div class="graph-order">
+        <span>Execution Order</span>
+        <ol>
+          {#each inspector.graph.executionOrder as nodeId}
+            <li>{nodeId}</li>
+          {/each}
+        </ol>
+      </div>
+
+      {#if inspector.graph.validationMessages.length > 0}
+        <div class="graph-messages">
+          <span>Validation</span>
+          {#each inspector.graph.validationMessages as message}
+            <p>
+              <strong>{message.severity}</strong>
+              {message.code}: {message.message}
+            </p>
+          {/each}
+        </div>
+      {:else}
+        <div class="graph-row">
+          <span>Validation</span>
+          <strong>Clean</strong>
+        </div>
+      {/if}
+    </section>
+  {/if}
 {:else if inspector.type === 'placement' && inspector.placement}
   <div class="pane-heading">
     <h2>{inspector.title}</h2>
@@ -343,6 +402,88 @@
     justify-self: end;
   }
 
+  .graph-diagnostics {
+    display: grid;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-md);
+    border: var(--border-width) solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-2);
+  }
+
+  .graph-heading {
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--spacing-sm);
+  }
+
+  .graph-heading h3 {
+    margin: 0;
+    font-size: var(--font-size-lg);
+  }
+
+  .graph-heading span,
+  .graph-summary span,
+  .graph-row span,
+  .graph-order > span,
+  .graph-messages > span {
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .graph-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--spacing-xs);
+  }
+
+  .graph-summary div {
+    min-width: 0;
+    padding: var(--spacing-xs);
+    border: var(--border-width) solid var(--border);
+    border-radius: var(--radius-control);
+    background: var(--surface);
+    display: grid;
+    gap: var(--spacing-2xs);
+  }
+
+  .graph-summary strong,
+  .graph-row strong {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .graph-row,
+  .graph-order,
+  .graph-messages {
+    min-width: 0;
+    display: grid;
+    gap: var(--spacing-xs);
+  }
+
+  .graph-order ol {
+    margin: 0;
+    padding-left: var(--spacing-lg);
+  }
+
+  .graph-order li {
+    padding: var(--spacing-2xs) 0;
+    overflow-wrap: anywhere;
+  }
+
+  .graph-messages p {
+    margin: 0;
+    padding: var(--spacing-xs);
+    border: var(--border-width) solid var(--border);
+    border-radius: var(--radius-control);
+    background: var(--surface);
+    overflow-wrap: anywhere;
+  }
+
   .number-property {
     display: grid;
     grid-template-columns: minmax(0, 1fr) var(--number-input-width);
@@ -410,7 +551,8 @@
     .rename-row,
     .property-row,
     .placement-inspector label,
-    .number-property {
+    .number-property,
+    .graph-summary {
       grid-template-columns: 1fr;
     }
 

@@ -125,6 +125,7 @@ describe('SamplerRuntimeDevice', () => {
         presetId: 'preset.sampler',
         nodeCount: 4,
         connectionCount: 3,
+        latencySamples: 0,
         executionOrder: ['clip-notes', 'sample-player', 'track-gain', 'audio-out'],
         diagnostics: []
       }

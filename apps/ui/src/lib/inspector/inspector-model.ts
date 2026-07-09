@@ -36,10 +36,27 @@ export type NoteInspectorView = {
   humanizeOffset: number
 }
 
+export type GraphDiagnosticMessageView = {
+  severity: string
+  code: string
+  message: string
+}
+
+export type GraphDiagnosticsView = {
+  deviceName: string
+  presetId: string
+  nodeCount: number
+  connectionCount: number
+  latencySamples: number
+  executionOrder: string[]
+  validationMessages: GraphDiagnosticMessageView[]
+}
+
 export type InspectorView = {
   type: InspectorTargetType
   title: string
   properties: InspectorPropertyView[]
+  graph?: GraphDiagnosticsView
   placement?: PlacementInspectorView
   note?: NoteInspectorView
 }

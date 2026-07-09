@@ -91,6 +91,7 @@ describe('Sampler graph preset', () => {
       presetId: SAMPLER_AUDIO_GRAPH.id,
       nodeCount: 4,
       connectionCount: 3,
+      latencySamples: 0,
       executionOrder: ['clip-notes', 'sample-player', 'track-gain', 'audio-out'],
       diagnostics: []
     });

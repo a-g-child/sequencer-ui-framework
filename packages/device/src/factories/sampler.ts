@@ -37,6 +37,7 @@ export type SamplerGraphDiagnostics = {
   readonly presetId: string;
   readonly nodeCount: number;
   readonly connectionCount: number;
+  readonly latencySamples: number;
   readonly executionOrder: readonly string[];
   readonly diagnostics: RuntimeAudioGraph['diagnostics'];
 };
@@ -134,6 +135,7 @@ export class SamplerRuntimeDevice<
             presetId: this.runtimeGraph.document.id,
             nodeCount: this.runtimeGraph.nodes.length,
             connectionCount: this.runtimeGraph.connections.length,
+            latencySamples: this.runtimeGraph.latencySamples,
             executionOrder: this.runtimeGraph.executionOrder,
             diagnostics: this.runtimeGraph.diagnostics
           }

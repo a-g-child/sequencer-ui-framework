@@ -19,6 +19,7 @@
     PlaybackService,
     type ClockServiceStatus,
     type ClipLaunchQuantize,
+    type PlaybackDeviceDiagnostics,
     type PlaybackEvent,
     type PlaybackRuntimeParameterValue,
     type PlaybackServiceStatus
@@ -38,6 +39,7 @@
   import { AppController, type TrackClipView } from './lib/app-controller'
   import {
     buildInspectorView,
+    type GraphDiagnosticsView,
     type InspectorPropertyView,
     type InspectorView
   } from './lib/inspector/inspector-model'
@@ -214,12 +216,14 @@
     activePatternClipLoop,
     activePatternClipLoopRegion
   )
-  $: displayedInspector = applyRuntimeParameterValues(
-    inspector,
-    runtimeParameterValues
-  )
   $: selectedTrack = tracks.find((track) => track.id === selectedTrackId)
   $: selectedTrackDeviceName = buildSelectedTrackDeviceName(selectedTrack)
+  $: selectedTrackGraphDiagnostics =
+    buildSelectedTrackGraphDiagnostics(selectedTrack, playbackStatus)
+  $: displayedInspector = applyGraphDiagnosticsToInspector(
+    applyRuntimeParameterValues(inspector, runtimeParameterValues),
+    selectedTrackGraphDiagnostics
+  )
   $: selectedTrackDeviceParameterViews =
     buildSelectedTrackDeviceParameterViews(
       selectedTrack,
@@ -435,6 +439,18 @@
     }
   }
 
+  function applyGraphDiagnosticsToInspector(
+    view: InspectorView,
+    graph: GraphDiagnosticsView | undefined
+  ): InspectorView {
+    if (view.type !== 'track') return view
+
+    return {
+      ...view,
+      graph
+    }
+  }
+
   function formatPlaybackEvent(event: PlaybackEvent | undefined): string {
     if (!event) return 'none'
 
@@ -527,6 +543,97 @@
     const descriptor = DEVICE_DESCRIPTORS_BY_KEY.get(device.descriptorKey)
 
     return descriptor?.name ?? device.name
+  }
+
+  function buildSelectedTrackGraphDiagnostics(
+    track: Track | undefined,
+    status: PlaybackServiceStatus
+  ): GraphDiagnosticsView | undefined {
+    const device = findTrackDeviceInstance(track)
+
+    if (!device) return undefined
+
+    const diagnostics = status.deviceDiagnostics.find(
+      (entry) => entry.id === device.id
+    )
+    const graph = graphDiagnosticsFromDeviceDiagnostics(diagnostics)
+
+    if (!graph) return undefined
+
+    const descriptor = DEVICE_DESCRIPTORS_BY_KEY.get(device.descriptorKey)
+
+    return {
+      deviceName: descriptor?.name ?? device.name,
+      presetId: graph.presetId,
+      nodeCount: graph.nodeCount,
+      connectionCount: graph.connectionCount,
+      latencySamples: graph.latencySamples,
+      executionOrder: [...graph.executionOrder],
+      validationMessages: graph.diagnostics.map((diagnostic) => ({
+        severity: diagnostic.severity,
+        code: diagnostic.code,
+        message: diagnostic.message
+      }))
+    }
+  }
+
+  function graphDiagnosticsFromDeviceDiagnostics(
+    diagnostics: PlaybackDeviceDiagnostics | undefined
+  ): RuntimeGraphDiagnosticsLike | undefined {
+    const candidate = diagnostics?.diagnostics
+
+    if (!isRecord(candidate)) return undefined
+
+    return isRuntimeGraphDiagnosticsLike(candidate.graph)
+      ? candidate.graph
+      : undefined
+  }
+
+  type RuntimeGraphDiagnosticsLike = {
+    presetId: string
+    nodeCount: number
+    connectionCount: number
+    latencySamples: number
+    executionOrder: string[]
+    diagnostics: Array<{
+      severity: string
+      code: string
+      message: string
+    }>
+  }
+
+  function isRuntimeGraphDiagnosticsLike(
+    value: unknown
+  ): value is RuntimeGraphDiagnosticsLike {
+    if (!isRecord(value)) return false
+
+    return (
+      typeof value.presetId === 'string' &&
+      typeof value.nodeCount === 'number' &&
+      typeof value.connectionCount === 'number' &&
+      typeof value.latencySamples === 'number' &&
+      Array.isArray(value.executionOrder) &&
+      value.executionOrder.every((item) => typeof item === 'string') &&
+      Array.isArray(value.diagnostics) &&
+      value.diagnostics.every(isGraphDiagnosticMessageLike)
+    )
+  }
+
+  function isGraphDiagnosticMessageLike(value: unknown): value is {
+    severity: string
+    code: string
+    message: string
+  } {
+    return (
+      isRecord(value) &&
+      typeof value.severity === 'string' &&
+      typeof value.code === 'string' &&
+      typeof value.message === 'string'
+    )
+  }
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null
   }
 
   function buildSelectedTrackDeviceParameterViews(
