@@ -34,6 +34,7 @@ export interface BasicSynthGraphDiagnostics {
   readonly latencySamples: number;
   readonly executionOrder: readonly string[];
   readonly diagnostics: RuntimeAudioGraph['diagnostics'];
+  readonly nodeDiagnostics: RuntimeAudioGraph['nodeDiagnostics'];
 }
 
 export interface BasicSynthDiagnostics {
@@ -143,7 +144,8 @@ export class BasicSynthRuntimeDevice<
             connectionCount: this.runtimeGraph.connections.length,
             latencySamples: this.runtimeGraph.latencySamples,
             executionOrder: this.runtimeGraph.executionOrder,
-            diagnostics: this.runtimeGraph.diagnostics
+            diagnostics: this.runtimeGraph.diagnostics,
+            nodeDiagnostics: this.runtimeGraph.nodeDiagnostics
           }
         : undefined
     };

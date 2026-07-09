@@ -49,7 +49,18 @@ export type GraphDiagnosticsView = {
   connectionCount: number
   latencySamples: number
   executionOrder: string[]
+  nodeDiagnostics: RuntimeNodeDiagnosticsView[]
   validationMessages: GraphDiagnosticMessageView[]
+}
+
+export type RuntimeNodeDiagnosticsView = {
+  nodeId: string
+  descriptorId: string
+  executionIndex: number
+  lastProcessMs?: number
+  averageProcessMs?: number
+  peakProcessMs?: number
+  latencySamples?: number
 }
 
 export type InspectorView = {

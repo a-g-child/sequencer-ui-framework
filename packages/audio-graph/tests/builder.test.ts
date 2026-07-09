@@ -87,6 +87,82 @@ test('builds the Basic Synth graph preset', () => {
       ?.sourceNode.executionIndex,
     2
   );
+  assert.deepEqual(
+    graph.nodeDiagnostics.map((diagnostic) => ({
+      nodeId: diagnostic.nodeId,
+      descriptorId: diagnostic.descriptorId,
+      executionIndex: diagnostic.executionIndex,
+      latencySamples: diagnostic.latencySamples,
+      lastProcessMs: diagnostic.lastProcessMs,
+      averageProcessMs: diagnostic.averageProcessMs,
+      peakProcessMs: diagnostic.peakProcessMs
+    })),
+    [
+      {
+        nodeId: 'clip-notes',
+        descriptorId: 'sequencer.source.clip-notes',
+        executionIndex: 0,
+        latencySamples: 0,
+        lastProcessMs: undefined,
+        averageProcessMs: undefined,
+        peakProcessMs: undefined
+      },
+      {
+        nodeId: 'oscillator',
+        descriptorId: 'sequencer.source.oscillator',
+        executionIndex: 2,
+        latencySamples: 0,
+        lastProcessMs: undefined,
+        averageProcessMs: undefined,
+        peakProcessMs: undefined
+      },
+      {
+        nodeId: 'filter',
+        descriptorId: 'sequencer.processor.filter',
+        executionIndex: 3,
+        latencySamples: 0,
+        lastProcessMs: undefined,
+        averageProcessMs: undefined,
+        peakProcessMs: undefined
+      },
+      {
+        nodeId: 'amp-envelope',
+        descriptorId: 'sequencer.processor.adsr-gain',
+        executionIndex: 4,
+        latencySamples: 0,
+        lastProcessMs: undefined,
+        averageProcessMs: undefined,
+        peakProcessMs: undefined
+      },
+      {
+        nodeId: 'track-gain',
+        descriptorId: 'sequencer.processor.gain',
+        executionIndex: 5,
+        latencySamples: 0,
+        lastProcessMs: undefined,
+        averageProcessMs: undefined,
+        peakProcessMs: undefined
+      },
+      {
+        nodeId: 'audio-out',
+        descriptorId: 'sequencer.output.audio-out',
+        executionIndex: 6,
+        latencySamples: 0,
+        lastProcessMs: undefined,
+        averageProcessMs: undefined,
+        peakProcessMs: undefined
+      },
+      {
+        nodeId: 'lfo',
+        descriptorId: 'sequencer.control.lfo',
+        executionIndex: 1,
+        latencySamples: 0,
+        lastProcessMs: undefined,
+        averageProcessMs: undefined,
+        peakProcessMs: undefined
+      }
+    ]
+  );
 });
 
 test('builds the Sampler graph preset', () => {

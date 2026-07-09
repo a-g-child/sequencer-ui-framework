@@ -56,6 +56,10 @@
     return String(parameter.value);
   }
 
+  function formatOptionalMetric(value: number | undefined, unit = 'ms'): string {
+    return value === undefined ? '-' : `${value.toFixed(2)}${unit}`;
+  }
+
 </script>
 
 {#if inspector.type === 'track'}
@@ -200,6 +204,30 @@
             <li>{nodeId}</li>
           {/each}
         </ol>
+      </div>
+
+      <div class="graph-node-diagnostics">
+        <span>Node Diagnostics</span>
+        <div class="node-diagnostics-table">
+          <div class="node-diagnostics-header">
+            <span>#</span>
+            <span>Node</span>
+            <span>Last</span>
+            <span>Avg</span>
+            <span>Peak</span>
+            <span>Latency</span>
+          </div>
+          {#each inspector.graph.nodeDiagnostics as diagnostic}
+            <div class="node-diagnostics-row">
+              <strong>{diagnostic.executionIndex}</strong>
+              <span>{diagnostic.nodeId}</span>
+              <span>{formatOptionalMetric(diagnostic.lastProcessMs)}</span>
+              <span>{formatOptionalMetric(diagnostic.averageProcessMs)}</span>
+              <span>{formatOptionalMetric(diagnostic.peakProcessMs)}</span>
+              <span>{diagnostic.latencySamples ?? 0} samples</span>
+            </div>
+          {/each}
+        </div>
       </div>
 
       {#if inspector.graph.validationMessages.length > 0}
@@ -459,10 +487,48 @@
 
   .graph-row,
   .graph-order,
+  .graph-node-diagnostics,
   .graph-messages {
     min-width: 0;
     display: grid;
     gap: var(--spacing-xs);
+  }
+
+  .node-diagnostics-table {
+    min-width: 0;
+    display: grid;
+    border: var(--border-width) solid var(--border);
+    border-radius: var(--radius-control);
+    overflow: hidden;
+    background: var(--surface);
+  }
+
+  .node-diagnostics-header,
+  .node-diagnostics-row {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: 2.5rem minmax(7rem, 1fr) repeat(4, minmax(4.5rem, auto));
+    gap: var(--spacing-xs);
+    align-items: center;
+    padding: var(--spacing-xs);
+    border-bottom: var(--border-width) solid var(--border);
+  }
+
+  .node-diagnostics-header {
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .node-diagnostics-row:last-child {
+    border-bottom: 0;
+  }
+
+  .node-diagnostics-row span,
+  .node-diagnostics-row strong {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   .graph-order ol {
@@ -554,6 +620,16 @@
     .number-property,
     .graph-summary {
       grid-template-columns: 1fr;
+    }
+
+    .node-diagnostics-header,
+    .node-diagnostics-row {
+      grid-template-columns: 2rem minmax(0, 1fr);
+    }
+
+    .node-diagnostics-header span:nth-child(n + 3),
+    .node-diagnostics-row span:nth-child(n + 3) {
+      display: none;
     }
 
     .property-row strong {

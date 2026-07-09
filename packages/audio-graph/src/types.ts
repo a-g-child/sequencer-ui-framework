@@ -74,6 +74,28 @@ export interface RuntimeAudioGraph {
   readonly executionOrder: readonly string[];
   readonly latencySamples: number;
   readonly diagnostics: readonly AudioGraphDiagnostic[];
+  readonly nodeDiagnostics: readonly RuntimeNodeDiagnostics[];
+}
+
+export interface ExecutionPlan {
+  readonly graph: RuntimeAudioGraph;
+  readonly nodes: readonly ExecutionPlanNode[];
+  readonly executionBlocks: readonly ExecutionPlanBlock[];
+  readonly diagnostics: readonly AudioGraphDiagnostic[];
+}
+
+export interface ExecutionPlanNode {
+  readonly nodeId: string;
+  readonly descriptorId: string;
+  readonly executionIndex: number;
+  readonly inputConnectionIds: readonly string[];
+  readonly outputConnectionIds: readonly string[];
+  readonly latencySamples: number;
+}
+
+export interface ExecutionPlanBlock {
+  readonly id: string;
+  readonly nodeIds: readonly string[];
 }
 
 export interface RuntimeAudioGraphNode {
@@ -99,6 +121,50 @@ export interface RuntimeAudioGraphConnection {
   readonly sourcePort: AudioNodePortDescriptor;
   readonly targetNode: RuntimeAudioGraphNode;
   readonly targetPort: AudioNodePortDescriptor;
+}
+
+export type RuntimeNodeDiagnostics = {
+  readonly nodeId: string;
+  readonly descriptorId: string;
+  readonly executionIndex: number;
+  readonly lastProcessMs?: number;
+  readonly averageProcessMs?: number;
+  readonly peakProcessMs?: number;
+  readonly latencySamples?: number;
+};
+
+export type ExecutionExecutorStatus =
+  | 'idle'
+  | 'initialised'
+  | 'running'
+  | 'shutdown';
+
+export interface ExecutionProcessContext {
+  readonly currentTimeMs: number;
+  readonly frameCount?: number;
+  readonly sampleRate?: number;
+}
+
+export interface ExecutionParameterUpdate {
+  readonly nodeId: string;
+  readonly parameterId: string;
+  readonly value: AudioGraphParameterValue;
+  readonly timeMs?: number;
+}
+
+export interface ExecutionProcessResult {
+  readonly nodeDiagnostics?: readonly RuntimeNodeDiagnostics[];
+}
+
+export interface ExecutionExecutor {
+  readonly id: string;
+  readonly name: string;
+  readonly status: ExecutionExecutorStatus;
+
+  initialise(graph: RuntimeAudioGraph): Promise<void>;
+  updateParameters(updates: readonly ExecutionParameterUpdate[]): void;
+  process(context: ExecutionProcessContext): ExecutionProcessResult | void;
+  shutdown(): void;
 }
 
 export interface AudioGraphDiagnostic {

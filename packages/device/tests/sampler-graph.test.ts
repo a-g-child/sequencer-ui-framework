@@ -93,7 +93,33 @@ describe('Sampler graph preset', () => {
       connectionCount: 3,
       latencySamples: 0,
       executionOrder: ['clip-notes', 'sample-player', 'track-gain', 'audio-out'],
-      diagnostics: []
+      diagnostics: [],
+      nodeDiagnostics: [
+        {
+          nodeId: 'clip-notes',
+          descriptorId: 'sequencer.source.clip-notes',
+          executionIndex: 0,
+          latencySamples: 0
+        },
+        {
+          nodeId: 'sample-player',
+          descriptorId: 'sequencer.source.sample-player',
+          executionIndex: 1,
+          latencySamples: 0
+        },
+        {
+          nodeId: 'track-gain',
+          descriptorId: 'sequencer.processor.gain',
+          executionIndex: 2,
+          latencySamples: 0
+        },
+        {
+          nodeId: 'audio-out',
+          descriptorId: 'sequencer.output.audio-out',
+          executionIndex: 3,
+          latencySamples: 0
+        }
+      ]
     });
   });
 });

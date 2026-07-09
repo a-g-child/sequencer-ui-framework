@@ -75,7 +75,8 @@ export class AudioGraphBuilder {
         (total, node) => total + (node.descriptor.latencySamples ?? 0),
         0
       ),
-      diagnostics
+      diagnostics,
+      nodeDiagnostics: createRuntimeNodeDiagnostics(scheduledGraph.nodes)
     };
   }
 
@@ -260,6 +261,17 @@ function applyExecutionSchedule(
   }));
 
   return { nodes, connections };
+}
+
+function createRuntimeNodeDiagnostics(
+  nodes: readonly RuntimeAudioGraphNode[]
+): RuntimeAudioGraph['nodeDiagnostics'] {
+  return nodes.map((node) => ({
+    nodeId: node.id,
+    descriptorId: node.descriptorId,
+    executionIndex: node.executionIndex,
+    latencySamples: node.descriptor.latencySamples ?? 0
+  }));
 }
 
 function arePortsCompatible(

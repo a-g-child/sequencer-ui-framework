@@ -8,12 +8,13 @@ Descriptor
   -> Graph Preset
   -> AudioGraphBuilder / ExecutionGraphBuilder
   -> RuntimeGraph
-  -> Execution Backend
+  -> ExecutionPlan
+  -> ExecutionExecutor
   -> Driver
 ```
 
 This is the Phase 10 contract. The document remains creative intent. Graphs
-describe execution. Backends execute resolved graphs.
+describe execution. Executors execute resolved graphs or execution plans.
 
 The graph layer should be understood as an execution graph, not only an audio
 graph. Audio, MIDI, control, and hardware signals all use the same underlying
@@ -77,7 +78,7 @@ The graph's responsibility is signal-flow description:
 - latency hints
 - validation diagnostics
 
-The backend's responsibility is execution:
+The executor's responsibility is execution:
 
 - WebAudio nodes
 - native DSP
@@ -85,6 +86,9 @@ The backend's responsibility is execution:
 - scheduling queues
 - driver I/O
 - hardware integration
+
+Executor implementations can be WebAudio, Rust, DSP, hardware, or other
+platform-specific runtimes. The contract is the important part.
 
 ## Device Graphs And Project Graphs
 
@@ -248,6 +252,8 @@ Runtime nodes should carry profiling-friendly identity:
 - `descriptorId`: the resolved node descriptor id
 - `resolvedPorts`: resolved input and output ports
 - `executionIndex`: the node's scheduled runtime position
+- `nodeDiagnostics`: per-node execution diagnostics populated by backends over
+  time
 
 This lets backends and diagnostics report useful runtime information without
 losing the authored graph identity:
@@ -259,6 +265,71 @@ Execution time
 CPU %
 Latency
 ```
+
+The initial diagnostics shape is intentionally lightweight:
+
+```text
+RuntimeNodeDiagnostics
+  nodeId
+  descriptorId
+  executionIndex
+  lastProcessMs
+  averageProcessMs
+  peakProcessMs
+  latencySamples
+```
+
+Before real execution exists, the compiler can emit one default diagnostic row
+per runtime node with identity, execution index, and latency. WebAudio, native,
+DSP, and hardware backends can fill process timing metrics later.
+
+## Execution Plan
+
+The runtime graph is rich and inspectable. Some executors will want a lower-level
+plan:
+
+```text
+ExecutionGraph
+  -> RuntimeGraph
+  -> ExecutionPlan
+  -> ExecutionExecutor
+```
+
+An execution plan can later contain:
+
+- flattened node arrays
+- topological execution blocks
+- cache-friendly layouts
+- SIMD groups
+- DSP scheduling groups
+- hardware partitioning hints
+
+The first execution plan can simply mirror runtime graph order. The type exists
+to keep executor-specific layout decisions out of the runtime graph.
+
+## Execution Executor
+
+The final execution contract should be an executor, not an undifferentiated
+backend:
+
+```text
+ExecutionExecutor
+  initialise(graph)
+  updateParameters(updates)
+  process(context)
+  shutdown()
+```
+
+Example implementations:
+
+- `WebAudioExecutor`
+- `RustExecutor`
+- `DSPExecutor`
+- `HardwareExecutor`
+
+`WebAudioOutput` can eventually become an implementation detail behind
+`WebAudioExecutor`. Runtime devices should talk to runtime graphs and executors,
+not directly to WebAudio or native APIs.
 
 Reserved optimisation responsibilities:
 
@@ -326,7 +397,7 @@ Then later:
 Descriptor
   -> Graph Preset
   -> RuntimeGraph
-  -> Native Engine
+  -> ExecutionExecutor
 ```
 
 This lets Sequencer prove the graph vocabulary, builder, diagnostics, and
@@ -342,8 +413,8 @@ Version 1 should prove:
 - the node vocabulary
 - the graph builder
 - runtime graph diagnostics
-- WebAudio reference execution
-- native execution
+- WebAudio executor
+- native executor
 
 Custom graph devices and a visual graph editor can come later, after the
 execution contract is stable. Until then, the user-facing model should remain:

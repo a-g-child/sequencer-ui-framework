@@ -569,6 +569,15 @@
       connectionCount: graph.connectionCount,
       latencySamples: graph.latencySamples,
       executionOrder: [...graph.executionOrder],
+      nodeDiagnostics: graph.nodeDiagnostics.map((diagnostic) => ({
+        nodeId: diagnostic.nodeId,
+        descriptorId: diagnostic.descriptorId,
+        executionIndex: diagnostic.executionIndex,
+        lastProcessMs: diagnostic.lastProcessMs,
+        averageProcessMs: diagnostic.averageProcessMs,
+        peakProcessMs: diagnostic.peakProcessMs,
+        latencySamples: diagnostic.latencySamples
+      })),
       validationMessages: graph.diagnostics.map((diagnostic) => ({
         severity: diagnostic.severity,
         code: diagnostic.code,
@@ -600,6 +609,15 @@
       code: string
       message: string
     }>
+    nodeDiagnostics: Array<{
+      nodeId: string
+      descriptorId: string
+      executionIndex: number
+      lastProcessMs?: number
+      averageProcessMs?: number
+      peakProcessMs?: number
+      latencySamples?: number
+    }>
   }
 
   function isRuntimeGraphDiagnosticsLike(
@@ -615,8 +633,35 @@
       Array.isArray(value.executionOrder) &&
       value.executionOrder.every((item) => typeof item === 'string') &&
       Array.isArray(value.diagnostics) &&
-      value.diagnostics.every(isGraphDiagnosticMessageLike)
+      value.diagnostics.every(isGraphDiagnosticMessageLike) &&
+      Array.isArray(value.nodeDiagnostics) &&
+      value.nodeDiagnostics.every(isRuntimeNodeDiagnosticsLike)
     )
+  }
+
+  function isRuntimeNodeDiagnosticsLike(value: unknown): value is {
+    nodeId: string
+    descriptorId: string
+    executionIndex: number
+    lastProcessMs?: number
+    averageProcessMs?: number
+    peakProcessMs?: number
+    latencySamples?: number
+  } {
+    return (
+      isRecord(value) &&
+      typeof value.nodeId === 'string' &&
+      typeof value.descriptorId === 'string' &&
+      typeof value.executionIndex === 'number' &&
+      optionalNumber(value.lastProcessMs) &&
+      optionalNumber(value.averageProcessMs) &&
+      optionalNumber(value.peakProcessMs) &&
+      optionalNumber(value.latencySamples)
+    )
+  }
+
+  function optionalNumber(value: unknown): boolean {
+    return value === undefined || typeof value === 'number'
   }
 
   function isGraphDiagnosticMessageLike(value: unknown): value is {
