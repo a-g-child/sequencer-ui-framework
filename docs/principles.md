@@ -118,6 +118,8 @@ around it.
 
 The architecture is healthy when new musical ideas require new devices, graph
 presets, nodes, and executor implementations, not new framework abstractions.
+Plan major milestones as architecture proofs before treating them as feature
+work.
 
 Before adding another layer, ask whether the idea can be expressed through the
 existing pipeline:

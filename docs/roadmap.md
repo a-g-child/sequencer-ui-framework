@@ -550,8 +550,8 @@ Sampler
 sample-player -> ADSR gain -> track gain -> pan -> mixer -> output
 ```
 
-The next milestone is not another framework layer. It is proving that different
-musical families fit the same pipeline:
+The next milestones are not features. They are proofs that different signal
+families fit the same pipeline:
 
 ```text
 Descriptor
@@ -561,13 +561,20 @@ Descriptor
   -> ExecutionExecutor
 ```
 
-Acid-test devices:
+Architecture V2 proof milestones:
 
-- Mono Synth: single voice, glide, legato, retrigger behavior
-- Drum Sampler: fixed 16-slot sample triggering with no pitch tracking
-- Delay: audio input to delay/mix/output, with no voices and no MIDI
-- LFO Device: control output only, with no audio
-- MIDI Effect / Arpeggiator: MIDI input to MIDI output, with no audio path
+- Pure MIDI computation: MIDI input to MIDI output, with no audio path
+- Pure audio processing: audio input to audio output, with no voices and no MIDI
+- Pure control generation: control output only, with no audio or MIDI output
+- Instrument variation: new voice behavior without new framework layers
+
+Candidate proof devices:
+
+- MIDI Effect / Arpeggiator: proves pure MIDI computation
+- Delay: proves pure audio processing
+- LFO Device: proves pure control generation
+- Mono Synth: proves single-voice, glide, legato, and retrigger behavior
+- Drum Sampler: proves fixed 16-slot sample triggering with no pitch tracking
 
 If those fit naturally, the graph is no longer merely an audio graph. It is an
 execution graph for musical computation.
@@ -638,9 +645,10 @@ The first sampler does not need stretching, slicing, reverse playback, or
 advanced modulation. Its purpose is to prove that assets, runtime devices,
 voices, graph presets, and Web Audio execution compose cleanly.
 
-### Phase 10.3: MIDI Effect Acid Test
+### Phase 10.3: Pure MIDI Computation Proof
 
-The next architecture proof should be a MIDI effect, preferably an arpeggiator:
+The next architecture proof should be pure MIDI computation. A MIDI effect,
+preferably an arpeggiator, is the smallest useful device for this proof:
 
 ```text
 MIDI In
@@ -656,7 +664,36 @@ pipeline.
 If it fits without changing the framework, the execution graph model has moved
 beyond synthesizers and into general musical computation.
 
-### Phase 10.4: Groovebox Workflow
+### Phase 10.4: Pure Audio Processing Proof
+
+The next audio proof should be an effect, not another instrument. A delay is the
+smallest useful device:
+
+```text
+Audio In
+  -> Delay
+  -> Mix
+  -> Audio Out
+```
+
+This device should have no note handling, no voice manager, and no MIDI
+dependency. It should prove that the same descriptor, graph preset, runtime
+graph, diagnostics, and executor path can describe continuous audio processing.
+
+### Phase 10.5: Pure Control Generation Proof
+
+The next control proof should generate modulation without producing audio or
+MIDI. An LFO device is the smallest useful device:
+
+```text
+LFO
+  -> Control Out
+```
+
+This device should prove that control signals are first-class graph signals,
+not hidden instrument internals or ad hoc parameter callbacks.
+
+### Phase 10.6: Groovebox Workflow
 
 Once synth, sampler, and MIDI all exist as devices, return to the product
 surface:
