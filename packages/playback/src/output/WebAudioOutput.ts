@@ -4,6 +4,7 @@ import {
   AudioGraphBuilder,
   BASIC_SYNTH_AUDIO_GRAPH,
   DEFAULT_AUDIO_NODE_DESCRIPTORS,
+  DELAY_AUDIO_GRAPH,
   SAMPLER_AUDIO_GRAPH
 } from '@sequencer/audio-graph'
 import type { TrackMixerState } from '@sequencer/core'
@@ -11,7 +12,10 @@ import type { PlaybackEvent } from '../events'
 import { noteOnlyCapabilities } from './OutputEvent'
 import type { PlaybackOutput } from './PlaybackOutput'
 import { WebAudioAssetLoader } from './WebAudioAssetLoader'
-import { WebAudioExecutor } from './WebAudioExecutor'
+import {
+  WebAudioExecutor,
+  type WebAudioDelayNodeChain
+} from './WebAudioExecutor'
 
 export type WebAudioWaveform = OscillatorType
 
@@ -51,6 +55,12 @@ export interface WebAudioOutputOptions {
   readonly filter?: Partial<WebAudioFilterSettings>
 }
 
+export interface WebAudioDelaySettings {
+  readonly time: number
+  readonly feedback: number
+  readonly mix: number
+}
+
 type ActiveVoice = {
   readonly oscillator: OscillatorNode
   readonly filter: BiquadFilterNode
@@ -78,6 +88,10 @@ type ActiveSample = {
   stopScheduled?: boolean
 }
 
+type ActiveDelayEffect = {
+  readonly chain: WebAudioDelayNodeChain
+}
+
 type VoiceActionEnvelope = Extract<
   VoiceAction,
   { type: 'voice:start' }
@@ -98,12 +112,17 @@ export class WebAudioOutput implements PlaybackOutput {
   private readonly sampleBuffers = new Map<string, AudioBuffer>()
   private readonly executor = new WebAudioExecutor()
   private readonly samplerExecutor = new WebAudioExecutor()
+  private readonly delayExecutor = new WebAudioExecutor()
+  private readonly delayEffects = new Map<string, ActiveDelayEffect>()
   private readonly basicSynthRuntimeGraph = new AudioGraphBuilder(
     DEFAULT_AUDIO_NODE_DESCRIPTORS
   ).build(BASIC_SYNTH_AUDIO_GRAPH)
   private readonly samplerRuntimeGraph = new AudioGraphBuilder(
     DEFAULT_AUDIO_NODE_DESCRIPTORS
   ).build(SAMPLER_AUDIO_GRAPH)
+  private readonly delayRuntimeGraph = new AudioGraphBuilder(
+    DEFAULT_AUDIO_NODE_DESCRIPTORS
+  ).build(DELAY_AUDIO_GRAPH)
 
   constructor(options: WebAudioOutputOptions = {}) {
     this.defaultSettings = {
@@ -144,6 +163,13 @@ export class WebAudioOutput implements PlaybackOutput {
     ) {
       await this.samplerExecutor.initialise(this.samplerRuntimeGraph)
     }
+
+    if (
+      this.delayExecutor.status === 'idle' ||
+      this.delayExecutor.status === 'shutdown'
+    ) {
+      await this.delayExecutor.initialise(this.delayRuntimeGraph)
+    }
   }
 
   async disconnect(): Promise<void> {
@@ -157,6 +183,8 @@ export class WebAudioOutput implements PlaybackOutput {
     this.masterGain = undefined
     this.executor.shutdown()
     this.samplerExecutor.shutdown()
+    this.delayExecutor.shutdown()
+    this.delayEffects.clear()
   }
 
   setWaveform(waveform: WebAudioWaveform): void {
@@ -227,6 +255,42 @@ export class WebAudioOutput implements PlaybackOutput {
     }
 
     this.updateActiveMixerNodes()
+  }
+
+  setTrackDelaySettings(
+    trackId: string,
+    settings: WebAudioDelaySettings | undefined
+  ): void {
+    if (!this.context || !this.masterGain) return
+
+    if (!settings) {
+      this.removeTrackDelayEffect(trackId)
+      return
+    }
+
+    const existingEffect = this.delayEffects.get(trackId)
+    const time = this.context.currentTime
+
+    if (existingEffect) {
+      this.delayExecutor.updateDelayNode(existingEffect.chain, {
+        delayTime: settings.time,
+        feedback: settings.feedback,
+        mix: settings.mix,
+        time
+      })
+      return
+    }
+
+    const chain = this.delayExecutor.materialiseDelayNode(this.context, {
+      delayTime: settings.time,
+      feedback: settings.feedback,
+      mix: settings.mix,
+      time,
+      immediate: true
+    })
+
+    this.delayExecutor.connectAudioOutputNode(chain.output, this.masterGain)
+    this.delayEffects.set(trackId, { chain })
   }
 
   trackSettingsFor(trackId: string | undefined): WebAudioOscillatorSettings {
@@ -404,7 +468,10 @@ export class WebAudioOutput implements PlaybackOutput {
     gain.connect(trackGain)
     trackGain.connect(panner)
     panner.connect(mixerGain)
-    this.executor.connectAudioOutputNode(mixerGain, this.masterGain)
+    this.executor.connectAudioOutputNode(
+      mixerGain,
+      this.trackOutputNode(action.trackId)
+    )
     oscillator.start(startTime)
     this.voices.set(key, {
       oscillator,
@@ -501,7 +568,10 @@ export class WebAudioOutput implements PlaybackOutput {
     gain.connect(trackGain)
     trackGain.connect(panner)
     panner.connect(mixerGain)
-    this.samplerExecutor.connectAudioOutputNode(mixerGain, this.masterGain)
+    this.samplerExecutor.connectAudioOutputNode(
+      mixerGain,
+      this.trackOutputNode(action.trackId)
+    )
     source.onended = () => {
       if (this.samples.get(key)?.source === source) {
         this.samples.delete(key)
@@ -607,6 +677,34 @@ export class WebAudioOutput implements PlaybackOutput {
       }
     }
     this.samples.delete(sampleKey)
+  }
+
+  private trackOutputNode(trackId: string | undefined): AudioNode {
+    if (trackId) {
+      const effect = this.delayEffects.get(trackId)
+
+      if (effect) return effect.chain.input
+    }
+
+    if (!this.masterGain) {
+      throw new Error('Web Audio master gain is not available')
+    }
+
+    return this.masterGain
+  }
+
+  private removeTrackDelayEffect(trackId: string): void {
+    const effect = this.delayEffects.get(trackId)
+
+    if (!effect) return
+
+    disconnectNode(effect.chain.input)
+    disconnectNode(effect.chain.delay)
+    disconnectNode(effect.chain.feedback)
+    disconnectNode(effect.chain.dry)
+    disconnectNode(effect.chain.wet)
+    disconnectNode(effect.chain.output)
+    this.delayEffects.delete(trackId)
   }
 
   private bufferForSampleAction(
@@ -943,6 +1041,14 @@ function fallbackSampleFrequency(assetId: string): number {
   }
 
   return 110 + (hash % 36) * 10
+}
+
+function disconnectNode(node: AudioNode): void {
+  try {
+    node.disconnect()
+  } catch {
+    // Already disconnected effect nodes are safe to ignore.
+  }
 }
 
 function performanceNow(): number {

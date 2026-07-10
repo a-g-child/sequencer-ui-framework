@@ -4,6 +4,7 @@ import {
   AudioGraphBuilder,
   BASIC_SYNTH_AUDIO_GRAPH,
   DEFAULT_AUDIO_NODE_DESCRIPTORS,
+  DELAY_AUDIO_GRAPH,
   SAMPLER_AUDIO_GRAPH
 } from '@sequencer/audio-graph'
 import { WebAudioExecutor } from '../src/output/WebAudioExecutor.ts'
@@ -406,6 +407,49 @@ test('creates gain, pan, mixer, and output nodes from the runtime graph', async 
   assert.deepEqual(mixer.connections, [output])
 })
 
+test('creates delay effect nodes from the runtime graph delay node', async () => {
+  const graph = new AudioGraphBuilder(DEFAULT_AUDIO_NODE_DESCRIPTORS).build(
+    DELAY_AUDIO_GRAPH
+  )
+  const executor = new WebAudioExecutor()
+  const context = new FakeAudioContext()
+
+  await executor.initialise(graph)
+
+  const chain = executor.materialiseDelayNode(context as unknown as AudioContext, {
+    delayTime: 0.5,
+    feedback: 0.3,
+    mix: 0.25,
+    time: 1,
+    immediate: true
+  }) as unknown as {
+    input: FakeGainNode
+    delay: FakeDelayNode
+    feedback: FakeGainNode
+    dry: FakeGainNode
+    wet: FakeGainNode
+    output: FakeGainNode
+  }
+
+  assert.deepEqual(chain.delay.delayTime.events, [
+    { type: 'set', value: 0.5, time: 1 }
+  ])
+  assert.deepEqual(chain.feedback.gain.events, [
+    { type: 'set', value: 0.3, time: 1 }
+  ])
+  assert.deepEqual(chain.dry.gain.events, [
+    { type: 'set', value: 0.75, time: 1 }
+  ])
+  assert.deepEqual(chain.wet.gain.events, [
+    { type: 'set', value: 0.25, time: 1 }
+  ])
+  assert.deepEqual(chain.input.connections, [chain.dry, chain.delay])
+  assert.deepEqual(chain.delay.connections, [chain.feedback, chain.wet])
+  assert.deepEqual(chain.feedback.connections, [chain.delay])
+  assert.deepEqual(chain.dry.connections, [chain.output])
+  assert.deepEqual(chain.wet.connections, [chain.output])
+})
+
 class FakeAudioContext {
   createOscillator(): FakeOscillatorNode {
     return new FakeOscillatorNode()
@@ -425,6 +469,10 @@ class FakeAudioContext {
 
   createBufferSource(): FakeAudioBufferSourceNode {
     return new FakeAudioBufferSourceNode()
+  }
+
+  createDelay(): FakeDelayNode {
+    return new FakeDelayNode()
   }
 }
 
@@ -454,6 +502,10 @@ class FakeBiquadFilterNode extends FakeConnectableNode {
 
 class FakeGainNode extends FakeConnectableNode {
   readonly gain = new FakeAudioParam()
+}
+
+class FakeDelayNode extends FakeConnectableNode {
+  readonly delayTime = new FakeAudioParam()
 }
 
 class FakeStereoPannerNode extends FakeConnectableNode {

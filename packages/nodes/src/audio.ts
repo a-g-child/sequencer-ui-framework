@@ -1,5 +1,16 @@
 import type { NodeDescriptor } from './types.ts';
 
+export const AUDIO_INPUT_NODE: NodeDescriptor = {
+  id: 'sequencer.source.audio-input',
+  type: 'audio-input',
+  name: 'Audio Input',
+  category: 'source',
+  capabilities: ['routing'],
+  ports: [
+    { id: 'audio-out', name: 'Audio Out', kind: 'audio', direction: 'output' }
+  ]
+};
+
 export const OSCILLATOR_NODE: NodeDescriptor = {
   id: 'sequencer.source.oscillator',
   type: 'oscillator',
@@ -162,6 +173,33 @@ export const DELAY_NODE: NodeDescriptor = {
   ],
   parameters: [
     { id: 'time', name: 'Time', kind: 'number', defaultValue: 0.25, min: 0, max: 2, unit: 's' },
+    {
+      id: 'time-mode',
+      name: 'Mode',
+      kind: 'choice',
+      defaultValue: 'free',
+      options: [
+        { label: 'Free', value: 'free' },
+        { label: 'Sync', value: 'sync' }
+      ]
+    },
+    {
+      id: 'sync-division',
+      name: 'Division',
+      kind: 'choice',
+      defaultValue: '1/8',
+      options: [
+        { label: '1/4', value: '1/4' },
+        { label: '1/4.', value: '1/4.' },
+        { label: '1/4T', value: '1/4T' },
+        { label: '1/8', value: '1/8' },
+        { label: '1/8.', value: '1/8.' },
+        { label: '1/8T', value: '1/8T' },
+        { label: '1/16', value: '1/16' },
+        { label: '1/16.', value: '1/16.' },
+        { label: '1/16T', value: '1/16T' }
+      ]
+    },
     { id: 'feedback', name: 'Feedback', kind: 'number', defaultValue: 0.25, min: 0, max: 0.95 },
     { id: 'mix', name: 'Mix', kind: 'number', defaultValue: 0.25, min: 0, max: 1 }
   ]
@@ -205,6 +243,7 @@ export const AUDIO_OUTPUT_NODE: NodeDescriptor = {
 };
 
 export const AUDIO_NODE_DESCRIPTORS: readonly NodeDescriptor[] = [
+  AUDIO_INPUT_NODE,
   AUDIO_FILE_PLAYER_NODE,
   SAMPLE_PLAYER_NODE,
   OSCILLATOR_NODE,

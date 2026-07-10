@@ -3,6 +3,7 @@ import type { DocumentObserver, Operation, Service, ServiceContext, ServiceEvent
 import {
   ArpeggiatorFactory,
   BasicSynthFactory,
+  DelayFactory,
   ExternalMidiFactory,
   SamplerFactory,
   getRuntimeParameterEffectiveValue
@@ -167,7 +168,7 @@ export class PlaybackService implements Service, DocumentObserver {
 
   onCommandExecuted(operation: Operation): void {
     if (this.applyRuntimeDeviceParameterOperation(operation)) {
-      this.syncBasicSynthRuntimeParametersToWebAudio()
+      this.syncRuntimeParametersToWebAudio()
       this.emitStatus()
       return
     }
@@ -188,7 +189,7 @@ export class PlaybackService implements Service, DocumentObserver {
 
   onCommandUndone(operation: Operation): void {
     if (this.applyRuntimeDeviceParameterOperation(operation)) {
-      this.syncBasicSynthRuntimeParametersToWebAudio()
+      this.syncRuntimeParametersToWebAudio()
       this.emitStatus()
       return
     }
@@ -209,7 +210,7 @@ export class PlaybackService implements Service, DocumentObserver {
 
   onCommandRedone(operation: Operation): void {
     if (this.applyRuntimeDeviceParameterOperation(operation)) {
-      this.syncBasicSynthRuntimeParametersToWebAudio()
+      this.syncRuntimeParametersToWebAudio()
       this.emitStatus()
       return
     }
@@ -358,6 +359,7 @@ export class PlaybackService implements Service, DocumentObserver {
   async setWebAudioEnabled(enabled: boolean): Promise<void> {
     if (enabled) {
       await this.outputManager.connect(this.webAudioOutput.id)
+      this.syncRuntimeParametersToWebAudio()
     } else {
       this.panicRuntimeVoices()
       await this.outputManager.disconnect(this.webAudioOutput.id)
@@ -420,6 +422,7 @@ export class PlaybackService implements Service, DocumentObserver {
     this.scheduler.setModel(this.model)
     this.deviceManager.configureTrackDeviceChains(this.model.tracks)
     this.syncTrackMixersToWebAudio()
+    this.syncRuntimeParametersToWebAudio()
     this.statisticsOutput.recordPlaybackModelRebuild(nowMs() - startedAt)
     this.emitStatus()
   }
@@ -519,7 +522,7 @@ export class PlaybackService implements Service, DocumentObserver {
         schedulerStatus: this.status
       })
       const deviceResult = this.deviceManager.processEvents(events)
-      this.syncBasicSynthRuntimeParametersToWebAudio()
+      this.syncRuntimeParametersToWebAudio()
       this.nativeAudioAdapter.handleCommands(deviceResult.deviceCommands)
       this.webAudioOutput.handleVoiceActions(deviceResult.voiceActions)
       this.webAudioOutput.handleSampleActions(deviceResult.sampleActions)
@@ -544,6 +547,7 @@ export class PlaybackService implements Service, DocumentObserver {
   private async initialiseDevices(): Promise<void> {
     this.deviceManager.register(new ArpeggiatorFactory<PlaybackEvent>())
     this.deviceManager.register(new BasicSynthFactory<PlaybackEvent>())
+    this.deviceManager.register(new DelayFactory<PlaybackEvent>())
     this.deviceManager.register(new ExternalMidiFactory<PlaybackEvent>())
     this.deviceManager.register(new SamplerFactory<PlaybackEvent>())
     await this.rebuildRuntimeDevices()
@@ -563,7 +567,7 @@ export class PlaybackService implements Service, DocumentObserver {
       this.deviceManager.configureTrackDeviceChains(this.model.tracks)
     }
     await this.deviceManager.connectAll()
-    this.syncBasicSynthRuntimeParametersToWebAudio()
+    this.syncRuntimeParametersToWebAudio()
     this.emitStatus()
   }
 
@@ -608,6 +612,46 @@ export class PlaybackService implements Service, DocumentObserver {
         }
       })
     }
+  }
+
+  private syncDelayRuntimeParametersToWebAudio(): void {
+    if (!this.context) return
+
+    for (const track of this.context.documentStore.document.tracks.values()) {
+      const deviceId = deviceIdsForTrack(track).find((candidateId) => {
+        const candidate = this.deviceManager.runtimeDevices.find(candidateId)
+
+        return candidate?.descriptorKey === 'delay'
+      })
+      const device = deviceId
+        ? this.deviceManager.runtimeDevices.find(deviceId)
+        : undefined
+
+      if (!device || device.descriptorKey !== 'delay') {
+        this.webAudioOutput.setTrackDelaySettings(track.id, undefined)
+        continue
+      }
+
+      this.webAudioOutput.setTrackDelaySettings(track.id, {
+        time: normalizeRuntimeDelayTime(
+          getRuntimeParameterEffectiveValue(device.parameters, 'time'),
+          getRuntimeParameterEffectiveValue(device.parameters, 'timeMode'),
+          getRuntimeParameterEffectiveValue(device.parameters, 'syncDivision'),
+          this.runtimeBpm ?? this.context.documentStore.document.bpm
+        ),
+        feedback: normalizeRuntimeDelayFeedback(
+          getRuntimeParameterEffectiveValue(device.parameters, 'feedback')
+        ),
+        mix: normalizeRuntimeDelayMix(
+          getRuntimeParameterEffectiveValue(device.parameters, 'mix')
+        )
+      })
+    }
+  }
+
+  private syncRuntimeParametersToWebAudio(): void {
+    this.syncBasicSynthRuntimeParametersToWebAudio()
+    this.syncDelayRuntimeParametersToWebAudio()
   }
 
   private syncTrackMixersToWebAudio(): void {
@@ -703,6 +747,67 @@ function normalizeRuntimeKeyTracking(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 0
 
   return Math.min(1, Math.max(0, value))
+}
+
+function normalizeRuntimeDelayTime(
+  value: unknown,
+  mode: unknown,
+  division: unknown,
+  bpm: number
+): number {
+  if (mode === 'sync') {
+    return delayDivisionSeconds(
+      typeof division === 'string' ? division : '1/8',
+      bpm
+    )
+  }
+
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0.25
+
+  return Math.min(2, Math.max(0, value))
+}
+
+function normalizeRuntimeDelayFeedback(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0.25
+
+  return Math.min(0.95, Math.max(0, value))
+}
+
+function normalizeRuntimeDelayMix(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0.25
+
+  return Math.min(1, Math.max(0, value))
+}
+
+function delayDivisionSeconds(division: string, bpm: number): number {
+  const beatSeconds = 60 / Math.max(1, Number.isFinite(bpm) ? bpm : 120)
+  const beats = delayDivisionBeats(division)
+
+  return Math.min(2, Math.max(0, beatSeconds * beats))
+}
+
+function delayDivisionBeats(division: string): number {
+  switch (division) {
+    case '1/4':
+      return 1
+    case '1/4.':
+      return 1.5
+    case '1/4T':
+      return 2 / 3
+    case '1/8.':
+      return 0.75
+    case '1/8T':
+      return 1 / 3
+    case '1/16':
+      return 0.25
+    case '1/16.':
+      return 0.375
+    case '1/16T':
+      return 1 / 6
+    case '1/8':
+    default:
+      return 0.5
+  }
 }
 
 function deviceIdsForTrack(track: {

@@ -24,6 +24,7 @@
 
   type DeviceModuleKind = 'basic-synth' | 'sampler'
   type MidiDeviceModuleKind = 'arpeggiator'
+  type AudioEffectModuleKind = 'delay'
 
   export let selectedTrack: Track | undefined = undefined
   export let selectedTrackId = ''
@@ -32,6 +33,8 @@
   export let selectedTrackDeviceParameterViews: DeviceParameterView[] = []
   export let selectedTrackMidiDeviceKind: MidiDeviceModuleKind | undefined = undefined
   export let selectedTrackMidiDeviceParameterViews: DeviceParameterView[] = []
+  export let selectedTrackAudioEffectKind: AudioEffectModuleKind | undefined = undefined
+  export let selectedTrackAudioEffectParameterViews: DeviceParameterView[] = []
   export let samplerSampleName = 'No sample'
   export let samplerSlot: SampleSlot | undefined = undefined
   export let samplerSlots: SamplerSlotView[] = []
@@ -48,6 +51,8 @@
   export let onAttachDevice: (kind: DeviceModuleKind) => void
   export let onAttachMidiDevice: (kind: MidiDeviceModuleKind) => void
   export let onRemoveMidiDevice: (kind: MidiDeviceModuleKind) => void
+  export let onAttachAudioEffect: (kind: AudioEffectModuleKind) => void
+  export let onRemoveAudioEffect: (kind: AudioEffectModuleKind) => void
   export let onRemoveDevice: () => void
   let deviceChooserOpen = false
   const samplerNumberDescriptors: Record<string, DeviceParameterDescriptor> = {
@@ -147,6 +152,54 @@
     onAttachDevice(kind)
     deviceChooserOpen = false
   }
+
+  function audioEffectParameterView(
+    key: string
+  ): DeviceParameterView | undefined {
+    return selectedTrackAudioEffectParameterViews.find(
+      (parameter) => parameter.descriptor.key === key
+    )
+  }
+
+  function audioEffectParameterValue(key: string): DeviceParameterValue | undefined {
+    const parameter = audioEffectParameterView(key)
+
+    return parameter?.runtimeValue ?? parameter?.value
+  }
+
+  function setAudioEffectParameter(
+    key: string,
+    value: DeviceParameterValue
+  ): void {
+    const parameter = audioEffectParameterView(key)
+
+    if (!parameter) return
+
+    onSetDeviceParameterValue(parameter.device.id, parameter.descriptor.key, value)
+  }
+
+  $: delayModeParameter = selectedTrackAudioEffectParameterViews.find(
+    (parameter) => parameter.descriptor.key === 'timeMode'
+  )
+  $: delayDivisionParameter = selectedTrackAudioEffectParameterViews.find(
+    (parameter) => parameter.descriptor.key === 'syncDivision'
+  )
+  $: delayTimeParameter = selectedTrackAudioEffectParameterViews.find(
+    (parameter) => parameter.descriptor.key === 'time'
+  )
+  $: delayFeedbackParameter = selectedTrackAudioEffectParameterViews.find(
+    (parameter) => parameter.descriptor.key === 'feedback'
+  )
+  $: delayMixParameter = selectedTrackAudioEffectParameterViews.find(
+    (parameter) => parameter.descriptor.key === 'mix'
+  )
+  $: delayMode = String(
+    (delayModeParameter?.runtimeValue ?? delayModeParameter?.value) ?? 'free'
+  )
+  $: delayContinuousParameters = [
+    delayFeedbackParameter,
+    delayMixParameter
+  ].filter((parameter): parameter is DeviceParameterView => Boolean(parameter))
 </script>
 
 <section class="track-modules" aria-label="Selected track options">
@@ -357,6 +410,104 @@
           {/if}
         </section>
       </div>
+
+      <div class="device-chain-strip" aria-label="Audio effect chain">
+        {#if selectedTrackAudioEffectKind === 'delay'}
+          <section class="audio-effect-card" aria-label="Delay audio effect">
+            <div class="effect-device-heading">
+              <div>
+                <span>Audio Effect</span>
+                <strong>Delay</strong>
+              </div>
+              <button
+                type="button"
+                class="remove-device-button"
+                aria-label="Remove Delay"
+                title="Remove Delay"
+                on:click={() => onRemoveAudioEffect('delay')}
+              >
+                x
+              </button>
+            </div>
+            <div class="delay-effect-grid">
+              {#if delayModeParameter}
+                <div class="segmented-parameter" aria-label="Delay time mode">
+                  <span>{delayModeParameter.descriptor.name}</span>
+                  <div class="segmented-control">
+                    {#each delayModeParameter.descriptor.options ?? [] as option (option.value)}
+                      <button
+                        type="button"
+                        class:active={String(delayModeParameter.runtimeValue ?? delayModeParameter.value) === option.value}
+                        aria-pressed={String(delayModeParameter.runtimeValue ?? delayModeParameter.value) === option.value}
+                        disabled={!selectedTrackId}
+                        on:click={() => setAudioEffectParameter('timeMode', option.value)}
+                      >
+                        {option.label}
+                      </button>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+
+              {#if delayDivisionParameter && delayMode === 'sync'}
+                <div class="division-grid-parameter" aria-label="Delay sync division">
+                  <span>{delayDivisionParameter.descriptor.name}</span>
+                  <div class="division-grid">
+                    {#each delayDivisionParameter.descriptor.options ?? [] as option (option.value)}
+                      <button
+                        type="button"
+                        class:active={String(delayDivisionParameter.runtimeValue ?? delayDivisionParameter.value) === option.value}
+                        aria-pressed={String(delayDivisionParameter.runtimeValue ?? delayDivisionParameter.value) === option.value}
+                        disabled={!selectedTrackId}
+                        on:click={() => setAudioEffectParameter('syncDivision', option.value)}
+                      >
+                        {option.label}
+                      </button>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+
+              {#if delayTimeParameter}
+                <ParameterEditor
+                  descriptor={delayTimeParameter.descriptor}
+                  value={delayTimeParameter.runtimeValue ?? delayTimeParameter.value}
+                  disabled={!selectedTrackId || delayMode === 'sync'}
+                  automated={delayTimeParameter.automated ?? false}
+                  onChange={(value) => setAudioEffectParameter('time', value)}
+                />
+              {/if}
+
+              {#each delayContinuousParameters as parameter (`${parameter.device.id}:${parameter.descriptor.key}`)}
+                <ParameterEditor
+                  descriptor={parameter.descriptor}
+                  value={parameter.runtimeValue ?? parameter.value}
+                  disabled={!selectedTrackId}
+                  automated={parameter.automated ?? false}
+                  onChange={(value) =>
+                    onSetDeviceParameterValue(
+                      parameter.device.id,
+                      parameter.descriptor.key,
+                      value
+                    )}
+                />
+              {/each}
+
+              {#if selectedTrackAudioEffectParameterViews.length === 0}
+                <p class="empty-module">Delay parameters unavailable</p>
+              {/if}
+            </div>
+          </section>
+        {:else}
+          <button
+            type="button"
+            class="insert-effect-device-button"
+            on:click={() => onAttachAudioEffect('delay')}
+          >
+            + Delay
+          </button>
+        {/if}
+      </div>
     {/if}
   </section>
 </section>
@@ -422,7 +573,8 @@
     gap: var(--spacing-xs);
   }
 
-  .midi-device-card {
+  .midi-device-card,
+  .audio-effect-card {
     min-width: 0;
     display: grid;
     gap: var(--spacing-sm);
@@ -431,33 +583,38 @@
     background: var(--surface-2);
   }
 
-  .midi-device-heading {
+  .midi-device-heading,
+  .effect-device-heading {
     display: flex;
     align-items: start;
     justify-content: space-between;
     gap: var(--spacing-sm);
   }
 
-  .midi-device-heading > div {
+  .midi-device-heading > div,
+  .effect-device-heading > div {
     min-width: 0;
     display: grid;
     gap: var(--spacing-2xs);
   }
 
-  .midi-device-heading span {
+  .midi-device-heading span,
+  .effect-device-heading span {
     color: var(--muted);
     font-size: var(--font-size-xs);
     font-weight: 800;
     text-transform: uppercase;
   }
 
-  .midi-device-heading strong {
+  .midi-device-heading strong,
+  .effect-device-heading strong {
     min-width: 0;
     overflow-wrap: anywhere;
     font-size: var(--font-size-sm);
   }
 
-  .insert-midi-device-button {
+  .insert-midi-device-button,
+  .insert-effect-device-button {
     justify-self: start;
     min-height: var(--control-height-sm);
     border-radius: var(--radius-control);
@@ -467,13 +624,65 @@
     text-transform: uppercase;
   }
 
-  .insert-midi-device-button:hover {
+  .insert-midi-device-button:hover,
+  .insert-effect-device-button:hover {
     border-color: var(--accent);
     color: var(--accent);
   }
 
   .midi-parameter-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .delay-effect-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .delay-effect-grid {
+    display: grid;
+    gap: var(--spacing-sm);
+  }
+
+  .segmented-parameter,
+  .division-grid-parameter {
+    min-width: 0;
+    display: grid;
+    gap: var(--spacing-2xs);
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .segmented-control,
+  .division-grid {
+    display: grid;
+    gap: var(--spacing-2xs);
+  }
+
+  .segmented-control {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .division-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .segmented-control button,
+  .division-grid button {
+    min-width: 0;
+    min-height: var(--control-height-sm);
+    border-radius: var(--radius-control);
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+  }
+
+  .segmented-control button.active,
+  .division-grid button.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
   }
 
   .remove-device-button {

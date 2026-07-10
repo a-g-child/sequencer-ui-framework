@@ -68,6 +68,23 @@ export interface WebAudioPanNodeOptions {
   readonly immediate?: boolean
 }
 
+export interface WebAudioDelayNodeOptions {
+  readonly delayTime: number
+  readonly feedback: number
+  readonly mix: number
+  readonly time: number
+  readonly immediate?: boolean
+}
+
+export interface WebAudioDelayNodeChain {
+  readonly input: GainNode
+  readonly delay: DelayNode
+  readonly feedback: GainNode
+  readonly dry: GainNode
+  readonly wet: GainNode
+  readonly output: GainNode
+}
+
 export class WebAudioExecutor extends BaseExecutionExecutor {
   private oscillatorNodeId?: string
   private samplePlayerNodeId?: string
@@ -76,6 +93,7 @@ export class WebAudioExecutor extends BaseExecutionExecutor {
   private gainNodeId?: string
   private panNodeId?: string
   private mixerNodeId?: string
+  private delayNodeId?: string
   private outputNodeId?: string
 
   constructor() {
@@ -104,6 +122,9 @@ export class WebAudioExecutor extends BaseExecutionExecutor {
     )?.id
     this.mixerNodeId = graph.nodes.find(
       (node) => node.descriptorId === 'sequencer.processor.mixer'
+    )?.id
+    this.delayNodeId = graph.nodes.find(
+      (node) => node.descriptorId === 'sequencer.processor.delay'
     )?.id
     this.outputNodeId = graph.nodes.find(
       (node) => node.descriptorId === 'sequencer.output.audio-out'
@@ -275,6 +296,44 @@ export class WebAudioExecutor extends BaseExecutionExecutor {
     return mixer
   }
 
+  materialiseDelayNode(
+    context: AudioContext,
+    options: WebAudioDelayNodeOptions
+  ): WebAudioDelayNodeChain {
+    if (!this.delayNodeId) {
+      throw new Error('WebAudioExecutor has no delay node in its graph')
+    }
+
+    const input = context.createGain()
+    const delay = context.createDelay(2)
+    const feedback = context.createGain()
+    const dry = context.createGain()
+    const wet = context.createGain()
+    const output = context.createGain()
+
+    configureDelayChain({ input, delay, feedback, dry, wet, output }, options)
+    input.connect(dry)
+    input.connect(delay)
+    delay.connect(feedback)
+    feedback.connect(delay)
+    delay.connect(wet)
+    dry.connect(output)
+    wet.connect(output)
+
+    return { input, delay, feedback, dry, wet, output }
+  }
+
+  updateDelayNode(
+    chain: WebAudioDelayNodeChain,
+    options: WebAudioDelayNodeOptions
+  ): void {
+    if (!this.delayNodeId) {
+      throw new Error('WebAudioExecutor has no delay node in its graph')
+    }
+
+    configureDelayChain(chain, options)
+  }
+
   connectAudioOutputNode(source: AudioNode, destination: AudioNode): void {
     if (!this.outputNodeId) {
       throw new Error('WebAudioExecutor has no output node in its graph')
@@ -362,4 +421,33 @@ function configureParam(
   }
 
   param.setTargetAtTime(value, time, 0.01)
+}
+
+function configureDelayChain(
+  chain: WebAudioDelayNodeChain,
+  options: WebAudioDelayNodeOptions
+): void {
+  const mix = clampUnit(options.mix)
+
+  configureParam(
+    chain.delay.delayTime,
+    Math.min(2, Math.max(0, options.delayTime)),
+    options.time,
+    options.immediate
+  )
+  configureParam(
+    chain.feedback.gain,
+    Math.min(0.95, Math.max(0, options.feedback)),
+    options.time,
+    options.immediate
+  )
+  configureParam(chain.dry.gain, 1 - mix, options.time, options.immediate)
+  configureParam(chain.wet.gain, mix, options.time, options.immediate)
+  configureParam(chain.output.gain, 1, options.time, options.immediate)
+}
+
+function clampUnit(value: number): number {
+  if (!Number.isFinite(value)) return 0
+
+  return Math.min(1, Math.max(0, value))
 }

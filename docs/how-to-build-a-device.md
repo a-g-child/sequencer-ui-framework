@@ -108,7 +108,65 @@ The runtime device should coordinate intent-level behavior:
 
 It should not create WebAudio nodes or run DSP.
 
-## 5. Register The Device
+## 5. Support Live UI-Controlled Parameters
+
+If a user-facing UI control changes device parameters while playback is running,
+the runtime device must expose those changes through runtime parameters.
+
+The current live-control path is:
+
+```text
+UI control
+  -> SetDeviceParameterValueOperation
+  -> RuntimeDeviceRegistry.setRuntimeParameterValue
+  -> RuntimeDevice.advance(...)
+  -> playback/output sync
+  -> executor node update
+```
+
+For descriptor parameters:
+
+- string, boolean, and choice values update immediately
+- number values are smoothed by runtime parameters
+- smoothed number values only become effective after `advanceRuntimeParameters`
+
+That means any runtime device with live numeric controls should implement:
+
+```ts
+advance(deltaMs: number): void {
+  advanceRuntimeParameters(this.parameters, deltaMs);
+}
+```
+
+Without this, UI dials can update the document and target value while playback
+continues reading the old effective value.
+
+Playback must also sync the runtime values into the execution backend. For
+WebAudio-backed devices, add a focused sync path in playback service/output
+code that:
+
+- finds the runtime device on the selected track/device chain
+- reads values with `getRuntimeParameterEffectiveValue`
+- normalizes and clamps values before they reach WebAudio
+- calls an output/executor update method for the live node chain
+
+If a parameter has both free and tempo-synced modes, keep both values explicit
+in the descriptor. For example, a delay can expose:
+
+- `time`
+- `timeMode`
+- `syncDivision`
+- `feedback`
+- `mix`
+
+The backend sync layer can then derive seconds from BPM only when `timeMode` is
+`sync`, while the document still preserves the free-time value.
+
+Add a regression test for live numeric controls. The test should set a runtime
+parameter value, assert the effective value has not changed before advance, call
+`device.advance(...)`, and assert the effective value has updated.
+
+## 6. Register The Device
 
 Register the descriptor and factory where device creation is assembled.
 
@@ -121,7 +179,7 @@ Use the current factory and registry modules as the source of truth:
 After registration, a document/device instance should be able to refer to the
 descriptor key and create the runtime device.
 
-## 6. Bind Execution To Nodes
+## 7. Bind Execution To Nodes
 
 If the device uses existing nodes, it can often reuse existing executor support.
 
@@ -142,7 +200,7 @@ connectAudioOutputNode
 Avoid methods such as `createBasicSynthThing` or `runSamplerThing`. The executor
 should know nodes, not instruments.
 
-## 7. Add Tests
+## 8. Add Tests
 
 At minimum, add tests that prove:
 
@@ -153,6 +211,7 @@ At minimum, add tests that prove:
 - runtime parameters still work
 - the runtime device emits the same musical actions as before
 - diagnostics expose graph information
+- live numeric UI controls advance runtime effective values
 
 Useful references:
 
@@ -164,7 +223,7 @@ Useful references:
 If playback execution changes, add a smoke test that materialises the relevant
 graph chain through `WebAudioExecutor`.
 
-## 8. Verify Diagnostics
+## 9. Verify Diagnostics
 
 Runtime diagnostics should include graph visibility:
 
@@ -179,7 +238,7 @@ Runtime diagnostics should include graph visibility:
 This makes the graph layer inspectable before deeper profiling and native
 execution fill in timing metrics.
 
-## 9. Run Verification
+## 10. Run Verification
 
 Run:
 

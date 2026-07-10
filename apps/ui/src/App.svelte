@@ -27,6 +27,7 @@
   import {
     ARPEGGIATOR_DESCRIPTOR,
     BASIC_SYNTH_DESCRIPTOR,
+    DELAY_DESCRIPTOR,
     EXTERNAL_MIDI_DESCRIPTOR,
     SAMPLER_DESCRIPTOR,
     type DeviceDescriptor,
@@ -78,6 +79,7 @@
   type ClipCopyMode = 'idle' | 'select-source' | 'select-target'
   type SelectableDeviceKind = 'basic-synth' | 'sampler'
   type SelectableMidiDeviceKind = 'arpeggiator'
+  type SelectableAudioEffectKind = 'delay'
 
   type DeviceParameterView = {
     device: DeviceInstance
@@ -104,6 +106,7 @@
   const DEVICE_DESCRIPTORS: DeviceDescriptor[] = [
     ARPEGGIATOR_DESCRIPTOR,
     BASIC_SYNTH_DESCRIPTOR,
+    DELAY_DESCRIPTOR,
     EXTERNAL_MIDI_DESCRIPTOR,
     SAMPLER_DESCRIPTOR
   ]
@@ -164,7 +167,7 @@
     : undefined
   let automationTargets = buildPatternAutomationTargets(
     buildTrackParameterViews(activePatternTrack),
-    buildSelectedTrackDeviceParameterViews(
+    buildSelectedTrackAutomationParameterViews(
       activePatternTrack,
       {},
       new Set<string>(),
@@ -241,6 +244,13 @@
       automatedRuntimeParameterIds,
       activePattern?.id
     )
+  $: selectedTrackAudioEffectParameterViews =
+    buildSelectedTrackAudioEffectParameterViews(
+      selectedTrack,
+      runtimeParameterValues,
+      automatedRuntimeParameterIds,
+      activePattern?.id
+    )
   function rebuildInspector() {
     selected = store.selection.current()
     selectedTrackId = selected?.type === 'track' ? selected.id : ''
@@ -262,7 +272,7 @@
     pianoRoll = activePattern ? buildPianoRollView(activePattern) : undefined
     automationTargets = buildPatternAutomationTargets(
       buildTrackParameterViews(activePatternTrack),
-      buildSelectedTrackDeviceParameterViews(
+      buildSelectedTrackAutomationParameterViews(
         activePatternTrack,
         runtimeParameterValues,
         automatedRuntimeParameterIds,
@@ -713,6 +723,45 @@
     return buildDeviceParameterViews(device, values, automatedIds, patternId)
   }
 
+  function buildSelectedTrackAudioEffectParameterViews(
+    track: Track | undefined,
+    values: Record<string, ParameterValue>,
+    automatedIds: Set<string>,
+    patternId: string | undefined
+  ): DeviceParameterView[] {
+    const device = findTrackDelayDevice(track)
+
+    return buildDeviceParameterViews(device, values, automatedIds, patternId)
+  }
+
+  function buildSelectedTrackAutomationParameterViews(
+    track: Track | undefined,
+    values: Record<string, ParameterValue>,
+    automatedIds: Set<string>,
+    patternId: string | undefined
+  ): DeviceParameterView[] {
+    return [
+      ...buildSelectedTrackMidiDeviceParameterViews(
+        track,
+        values,
+        automatedIds,
+        patternId
+      ),
+      ...buildSelectedTrackDeviceParameterViews(
+        track,
+        values,
+        automatedIds,
+        patternId
+      ),
+      ...buildSelectedTrackAudioEffectParameterViews(
+        track,
+        values,
+        automatedIds,
+        patternId
+      )
+    ]
+  }
+
   function buildDeviceParameterViews(
     device: DeviceInstance | undefined,
     values: Record<string, ParameterValue>,
@@ -768,6 +817,12 @@
     track: Track | undefined
   ): SelectableMidiDeviceKind | undefined {
     return findTrackArpeggiatorDevice(track) ? 'arpeggiator' : undefined
+  }
+
+  function selectedTrackAudioEffectKind(
+    track: Track | undefined
+  ): SelectableAudioEffectKind | undefined {
+    return findTrackDelayDevice(track) ? 'delay' : undefined
   }
 
   function buildSelectedSamplerSampleName(track: Track | undefined): string {
@@ -832,7 +887,14 @@
   function findTrackDeviceInstance(
     track: Track | undefined
   ): DeviceInstance | undefined {
-    const deviceId = track?.deviceIds?.at(-1) ?? track?.deviceId
+    const deviceId = deviceChainForTrack(track).find((candidateId) => {
+      const device = store.document.deviceInstances.find(candidateId)
+      const descriptor = device
+        ? DEVICE_DESCRIPTORS_BY_KEY.get(device.descriptorKey)
+        : undefined
+
+      return descriptor?.capabilities.includes('instrument')
+    }) ?? track?.deviceId
 
     if (!deviceId) return undefined
 
@@ -846,6 +908,18 @@
       const device = store.document.deviceInstances.find(deviceId)
 
       if (device?.descriptorKey === ARPEGGIATOR_DESCRIPTOR.key) return device
+    }
+
+    return undefined
+  }
+
+  function findTrackDelayDevice(
+    track: Track | undefined
+  ): DeviceInstance | undefined {
+    for (const deviceId of deviceChainForTrack(track)) {
+      const device = store.document.deviceInstances.find(deviceId)
+
+      if (device?.descriptorKey === DELAY_DESCRIPTOR.key) return device
     }
 
     return undefined
@@ -952,8 +1026,13 @@
       device.parameterValues.mode = 'multi'
     }
 
+    const nextChain = deviceChainWithInstrument(
+      deviceChainForTrack(selectedTrack),
+      device.id
+    )
+
     controller.addDeviceInstance(device)
-    controller.setTrackDevice(selectedTrack.id, device.id)
+    controller.setTrackDeviceChain(selectedTrack.id, nextChain)
     selectedSamplerSlotId = 'slot-1'
     samplerSampleStatus = ''
     syncView()
@@ -991,6 +1070,38 @@
     syncView()
   }
 
+  function attachTrackAudioEffect(kind: SelectableAudioEffectKind) {
+    if (!selectedTrack) return undefined
+    if (kind !== 'delay') return undefined
+    if (findTrackDelayDevice(selectedTrack)) return undefined
+
+    const device = createDeviceInstance(
+      DELAY_DESCRIPTOR,
+      DELAY_DESCRIPTOR.name
+    ) as DeviceInstance
+    const nextChain = [...deviceChainForTrack(selectedTrack), device.id]
+
+    controller.addDeviceInstance(device)
+    controller.setTrackDeviceChain(selectedTrack.id, nextChain)
+    syncView()
+  }
+
+  function removeTrackAudioEffect(kind: SelectableAudioEffectKind) {
+    if (!selectedTrack) return
+    if (kind !== 'delay') return
+
+    const delay = findTrackDelayDevice(selectedTrack)
+
+    if (!delay) return
+
+    const nextChain = deviceChainForTrack(selectedTrack).filter(
+      (deviceId) => deviceId !== delay.id
+    )
+
+    controller.setTrackDeviceChain(selectedTrack.id, nextChain)
+    syncView()
+  }
+
   function removeSelectedTrackDevice() {
     if (!selectedTrack) return
 
@@ -1001,6 +1112,38 @@
     controller.setTrackDeviceChain(selectedTrack.id, [])
     samplerSampleStatus = ''
     syncView()
+  }
+
+  function deviceChainWithInstrument(
+    chain: readonly string[],
+    instrumentId: string
+  ): string[] {
+    const withoutInstrument = chain.filter((deviceId) => {
+      const device = store.document.deviceInstances.find(deviceId)
+      const descriptor = device
+        ? DEVICE_DESCRIPTORS_BY_KEY.get(device.descriptorKey)
+        : undefined
+
+      return !descriptor?.capabilities.includes('instrument')
+    })
+    const firstAudioEffectIndex = withoutInstrument.findIndex((deviceId) => {
+      const device = store.document.deviceInstances.find(deviceId)
+      const descriptor = device
+        ? DEVICE_DESCRIPTORS_BY_KEY.get(device.descriptorKey)
+        : undefined
+
+      return descriptor?.capabilities.includes('audio-effect')
+    })
+
+    if (firstAudioEffectIndex === -1) {
+      return [...withoutInstrument, instrumentId]
+    }
+
+    return [
+      ...withoutInstrument.slice(0, firstAudioEffectIndex),
+      instrumentId,
+      ...withoutInstrument.slice(firstAudioEffectIndex)
+    ]
   }
 
   function setDeviceParameterValue(
@@ -1866,6 +2009,8 @@
       {selectedTrackDeviceParameterViews}
       selectedTrackMidiDeviceKind={selectedTrackMidiDeviceKind(selectedTrack)}
       {selectedTrackMidiDeviceParameterViews}
+      selectedTrackAudioEffectKind={selectedTrackAudioEffectKind(selectedTrack)}
+      {selectedTrackAudioEffectParameterViews}
       samplerSampleName={buildSelectedSamplerSampleName(selectedTrack)}
       samplerSlot={selectedSamplerSlot(selectedTrack)}
       samplerSlots={selectedSamplerSlots(selectedTrack)}
@@ -1878,6 +2023,8 @@
       onAttachDevice={attachTrackDevice}
       onAttachMidiDevice={attachTrackMidiDevice}
       onRemoveMidiDevice={removeTrackMidiDevice}
+      onAttachAudioEffect={attachTrackAudioEffect}
+      onRemoveAudioEffect={removeTrackAudioEffect}
       onRemoveDevice={removeSelectedTrackDevice}
     />
 

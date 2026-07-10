@@ -5,6 +5,7 @@ import {
   ARPEGGIATOR_MIDI_GRAPH,
   BASIC_SYNTH_AUDIO_GRAPH,
   DEFAULT_AUDIO_NODE_DESCRIPTORS,
+  DELAY_AUDIO_GRAPH,
   SAMPLER_AUDIO_GRAPH,
   type AudioGraphDocument,
   type AudioNodeDescriptor
@@ -226,6 +227,21 @@ test('builds the Sampler graph preset', () => {
     'track-gain',
     'pan',
     'mixer',
+    'audio-out'
+  ]);
+});
+
+test('builds the Delay audio effect graph preset', () => {
+  const graph = new AudioGraphBuilder(DEFAULT_AUDIO_NODE_DESCRIPTORS).build(
+    DELAY_AUDIO_GRAPH
+  );
+
+  assert.deepEqual(graph.diagnostics, []);
+  assert.equal(graph.nodes.length, 3);
+  assert.equal(graph.connections.length, 2);
+  assert.deepEqual(graph.executionOrder, [
+    'audio-in',
+    'delay',
     'audio-out'
   ]);
 });
