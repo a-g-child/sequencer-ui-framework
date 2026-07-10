@@ -2,7 +2,8 @@ use engine_core::{AudioEngine, ProcessContext};
 use engine_protocol::AudioTelemetry;
 
 use crate::{
-    ActiveStreamInfo, AudioDeviceInfo, AudioDriver, AudioIoError, AudioProcessor, StreamRequest,
+    ActiveOutputStream, AudioDeviceInfo, AudioDriver, AudioDriverError, AudioDriverErrorCode,
+    AudioDriverEvent, AudioProcessor, AudioSampleFormat, OutputStreamRequest,
 };
 
 pub struct EngineProcessor {
@@ -16,30 +17,18 @@ impl EngineProcessor {
 }
 
 impl AudioProcessor for EngineProcessor {
-    fn process_interleaved(
-        &mut self,
-        output: &mut [f32],
-        frame_count: usize,
-        channels: usize,
-        sample_rate: f64,
-    ) -> AudioTelemetry {
-        self.engine.process(
-            output,
-            ProcessContext {
-                block_start_sample: self.engine.sample_position(),
-                frame_count: frame_count as u32,
-                sample_rate,
-                output_channels: channels as u16,
-            },
-        )
+    fn process(&mut self, output: &mut [f32], context: ProcessContext) -> AudioTelemetry {
+        self.engine.process(output, context)
     }
 }
 
 pub struct NullAudioDriver {
     active: bool,
     processor: Option<Box<dyn AudioProcessor>>,
-    stream: Option<ActiveStreamInfo>,
+    stream: Option<ActiveOutputStream>,
+    buffer_frames: u32,
     last_telemetry: Option<engine_protocol::AudioTelemetry>,
+    events: Vec<AudioDriverEvent>,
 }
 
 impl Default for NullAudioDriver {
@@ -54,26 +43,28 @@ impl NullAudioDriver {
             active: false,
             processor: None,
             stream: None,
+            buffer_frames: 128,
             last_telemetry: None,
+            events: Vec::new(),
         }
     }
 
-    pub fn process_blocks(&mut self, block_count: usize) -> Result<(), AudioIoError> {
+    pub fn process_blocks(&mut self, block_count: usize) -> Result<(), AudioDriverError> {
         for _ in 0..block_count {
-            self.process_next_block()?;
+            self.process_next_block_with_frames(self.buffer_frames)?;
         }
 
         Ok(())
     }
 
-    pub fn process_until_sample(&mut self, sample_position: u64) -> Result<(), AudioIoError> {
+    pub fn process_until_sample(&mut self, sample_position: u64) -> Result<(), AudioDriverError> {
         while self
             .last_telemetry
             .map(|telemetry| telemetry.sample_position)
             .unwrap_or(0)
             < sample_position
         {
-            self.process_next_block()?;
+            self.process_next_block_with_frames(self.buffer_frames)?;
         }
 
         Ok(())
@@ -83,27 +74,45 @@ impl NullAudioDriver {
         self.last_telemetry
     }
 
-    fn process_next_block(&mut self) -> Result<(), AudioIoError> {
+    pub fn process_block_with_frames(&mut self, frame_count: u32) -> Result<(), AudioDriverError> {
+        self.process_next_block_with_frames(frame_count)
+    }
+
+    fn process_next_block_with_frames(&mut self, frame_count: u32) -> Result<(), AudioDriverError> {
         if !self.active {
-            return Err(AudioIoError {
-                message: "null driver stream is not active".to_string(),
-            });
+            return Err(AudioDriverError::new(
+                AudioDriverErrorCode::DeviceUnavailable,
+                "null driver stream is not active",
+            ));
         }
 
-        let stream = self.stream.ok_or_else(|| AudioIoError {
-            message: "null driver stream is missing configuration".to_string(),
+        let stream = self.stream.as_ref().ok_or_else(|| {
+            AudioDriverError::new(
+                AudioDriverErrorCode::DeviceUnavailable,
+                "null driver stream is missing configuration",
+            )
         })?;
-        let processor = self.processor.as_mut().ok_or_else(|| AudioIoError {
-            message: "null driver stream is missing processor".to_string(),
+        let processor = self.processor.as_mut().ok_or_else(|| {
+            AudioDriverError::new(
+                AudioDriverErrorCode::DeviceUnavailable,
+                "null driver stream is missing processor",
+            )
         })?;
-        let channels = stream.output_channels.max(1) as usize;
-        let frames = stream.buffer_frames.max(1) as usize;
+        let channels = stream.channels.max(1) as usize;
+        let frames = frame_count.max(1) as usize;
         let mut output = vec![0.0; frames * channels];
-        let telemetry = processor.process_interleaved(
+        let block_start_sample = self
+            .last_telemetry
+            .map(|telemetry| telemetry.sample_position)
+            .unwrap_or(0);
+        let telemetry = processor.process(
             &mut output,
-            frames,
-            channels,
-            stream.sample_rate.max(1) as f64,
+            ProcessContext {
+                block_start_sample,
+                frame_count: frames as u32,
+                sample_rate: stream.sample_rate.max(1) as f64,
+                output_channels: stream.channels,
+            },
         );
 
         self.last_telemetry = Some(telemetry);
@@ -112,55 +121,87 @@ impl NullAudioDriver {
 }
 
 impl AudioDriver for NullAudioDriver {
-    fn enumerate_devices(&self) -> Result<Vec<AudioDeviceInfo>, AudioIoError> {
+    fn available_output_devices(&self) -> Result<Vec<AudioDeviceInfo>, AudioDriverError> {
         Ok(vec![AudioDeviceInfo {
             id: "null".to_string(),
             name: "Null Output".to_string(),
+            is_default: true,
         }])
     }
 
-    fn start(
+    fn start_output(
         &mut self,
-        requested: StreamRequest,
+        requested: OutputStreamRequest,
         processor: Box<dyn AudioProcessor>,
-    ) -> Result<ActiveStreamInfo, AudioIoError> {
+    ) -> Result<ActiveOutputStream, AudioDriverError> {
         self.active = true;
-        self.stream = Some(ActiveStreamInfo {
-            sample_rate: requested.preferred_sample_rate,
-            buffer_frames: requested.preferred_buffer_frames,
-            output_channels: requested.output_channels,
+        self.buffer_frames = requested.preferred_buffer_frames.unwrap_or(128);
+        self.stream = Some(ActiveOutputStream {
+            device_id: requested
+                .device_id
+                .filter(|device_id| device_id != "default")
+                .unwrap_or_else(|| "null".to_string()),
+            device_name: "Null Output".to_string(),
+            sample_rate: requested.preferred_sample_rate.unwrap_or(48_000),
+            channels: requested.preferred_channels.unwrap_or(2),
+            sample_format: AudioSampleFormat::F32,
+            requested_buffer_frames: requested.preferred_buffer_frames,
         });
         self.processor = Some(processor);
-        self.process_next_block()?;
+        self.events.push(AudioDriverEvent::StreamStarted {
+            sample_rate: self
+                .stream
+                .as_ref()
+                .expect("null driver stream should be configured")
+                .sample_rate,
+            channels: self
+                .stream
+                .as_ref()
+                .expect("null driver stream should be configured")
+                .channels,
+        });
+        self.process_next_block_with_frames(self.buffer_frames)?;
 
         Ok(self
             .stream
+            .clone()
             .expect("null driver stream should be configured"))
     }
 
-    fn stop(&mut self) -> Result<(), AudioIoError> {
+    fn stop(&mut self) -> Result<(), AudioDriverError> {
         self.active = false;
         self.processor = None;
+        self.events.push(AudioDriverEvent::StreamStopped);
         Ok(())
+    }
+
+    fn drain_events(&mut self) -> Vec<AudioDriverEvent> {
+        std::mem::take(&mut self.events)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine_core::AudioEngine;
+    use engine_core::{engine_command_queue, engine_telemetry_queue, AudioEngine};
+    use engine_protocol::{EngineCommand, EngineEvent};
+
+    fn request(buffer_frames: u32) -> OutputStreamRequest {
+        OutputStreamRequest {
+            device_id: None,
+            preferred_sample_rate: Some(48_000),
+            preferred_buffer_frames: Some(buffer_frames),
+            preferred_channels: Some(2),
+        }
+    }
 
     #[test]
     fn processes_multiple_deterministic_blocks() {
         let mut driver = NullAudioDriver::new();
 
         driver
-            .start(
-                StreamRequest {
-                    preferred_sample_rate: 48_000,
-                    preferred_buffer_frames: 128,
-                    output_channels: 2,
-                },
+            .start_output(
+                request(128),
                 Box::new(EngineProcessor::new(AudioEngine::new())),
             )
             .unwrap();
@@ -174,17 +215,64 @@ mod tests {
         let mut driver = NullAudioDriver::new();
 
         driver
-            .start(
-                StreamRequest {
-                    preferred_sample_rate: 48_000,
-                    preferred_buffer_frames: 128,
-                    output_channels: 2,
-                },
+            .start_output(
+                request(128),
                 Box::new(EngineProcessor::new(AudioEngine::new())),
             )
             .unwrap();
         driver.process_until_sample(48_000).unwrap();
 
         assert!(driver.last_telemetry().unwrap().sample_position >= 48_000);
+    }
+
+    #[test]
+    fn handles_variable_callback_lengths() {
+        let (command_sender, command_receiver) = engine_command_queue();
+        let (telemetry_sender, telemetry_receiver) = engine_telemetry_queue();
+        let engine = AudioEngine::new().with_realtime_queues(command_receiver, telemetry_sender);
+        let mut driver = NullAudioDriver::new();
+
+        command_sender
+            .push(EngineCommand::SetParameter {
+                id: 1,
+                parameter_id: 7,
+                value: 0.25,
+                at_sample: 300,
+                ramp_samples: 0,
+            })
+            .unwrap();
+
+        driver
+            .start_output(request(128), Box::new(EngineProcessor::new(engine)))
+            .unwrap();
+        driver.process_block_with_frames(128).unwrap();
+        driver.process_block_with_frames(256).unwrap();
+        driver.process_block_with_frames(64).unwrap();
+
+        assert_eq!(driver.last_telemetry().unwrap().sample_position, 576);
+        assert_eq!(
+            telemetry_receiver.pop(),
+            Some(EngineEvent::CommandApplied {
+                command_id: 1,
+                applied_sample: 300,
+                late_by_samples: 0
+            })
+        );
+    }
+
+    #[test]
+    fn supports_repeated_start_stop_cycles() {
+        let mut driver = NullAudioDriver::new();
+
+        for _ in 0..2 {
+            driver
+                .start_output(
+                    request(128),
+                    Box::new(EngineProcessor::new(AudioEngine::new())),
+                )
+                .unwrap();
+            assert!(driver.last_telemetry().is_some());
+            driver.stop().unwrap();
+        }
     }
 }

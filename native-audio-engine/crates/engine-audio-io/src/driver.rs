@@ -1,48 +1,26 @@
+use engine_core::ProcessContext;
 use engine_protocol::AudioTelemetry;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AudioDeviceInfo {
-    pub id: String,
-    pub name: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StreamRequest {
-    pub preferred_sample_rate: u32,
-    pub preferred_buffer_frames: u32,
-    pub output_channels: u16,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ActiveStreamInfo {
-    pub sample_rate: u32,
-    pub buffer_frames: u32,
-    pub output_channels: u16,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AudioIoError {
-    pub message: String,
-}
+use crate::{
+    ActiveOutputStream, AudioDeviceInfo, AudioDriverError, AudioDriverEvent, OutputStreamRequest,
+};
 
 pub trait AudioProcessor: Send + 'static {
-    fn process_interleaved(
-        &mut self,
-        output: &mut [f32],
-        frame_count: usize,
-        channels: usize,
-        sample_rate: f64,
-    ) -> AudioTelemetry;
+    fn process(&mut self, output: &mut [f32], context: ProcessContext) -> AudioTelemetry;
 }
 
 pub trait AudioDriver {
-    fn enumerate_devices(&self) -> Result<Vec<AudioDeviceInfo>, AudioIoError>;
+    fn available_output_devices(&self) -> Result<Vec<AudioDeviceInfo>, AudioDriverError>;
 
-    fn start(
+    fn start_output(
         &mut self,
-        requested: StreamRequest,
+        request: OutputStreamRequest,
         processor: Box<dyn AudioProcessor>,
-    ) -> Result<ActiveStreamInfo, AudioIoError>;
+    ) -> Result<ActiveOutputStream, AudioDriverError>;
 
-    fn stop(&mut self) -> Result<(), AudioIoError>;
+    fn stop(&mut self) -> Result<(), AudioDriverError>;
+
+    fn drain_events(&mut self) -> Vec<AudioDriverEvent> {
+        Vec::new()
+    }
 }

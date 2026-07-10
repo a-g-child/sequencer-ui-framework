@@ -5,5 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+ctrlc = "3.4"
 engine-audio-io = { path = "../engine-audio-io" }
 engine-core = { path = "../engine-core" }
+engine-protocol = { path = "../engine-protocol" }
