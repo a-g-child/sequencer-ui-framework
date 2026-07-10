@@ -1,7 +1,7 @@
-import type { DeviceDescriptor } from './descriptor';
-import type { DeviceFactory } from './factory';
-import type { DeviceId, DeviceInstance } from './instance';
-import { MissingRuntimeDevice, type RuntimeDevice } from './runtime';
+import type { DeviceDescriptor } from './descriptor.ts';
+import type { DeviceFactory } from './factory.ts';
+import type { DeviceId, DeviceInstance } from './instance.ts';
+import { MissingRuntimeDevice, type RuntimeDevice } from './runtime.ts';
 
 export class DeviceRegistry<TEvent = unknown> {
   private readonly factoriesByDescriptorKey = new Map<

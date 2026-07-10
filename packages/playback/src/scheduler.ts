@@ -230,6 +230,8 @@ export class TypeScriptScheduler implements Scheduler {
         mixer: track?.mixer,
         pitch: note.pitch,
         velocity: note.velocity,
+        duration: note.duration,
+        durationMs: Math.max(0, this.eventTimeMs(noteOffBeat) - this.eventTimeMs(beat)),
         beat,
         timeMs: this.eventTimeMs(beat)
       })

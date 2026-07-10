@@ -27,6 +27,7 @@ export interface PlaybackTrack {
   readonly name: string
   readonly channel: number
   readonly mixer: TrackMixerState
+  readonly deviceInstanceIds?: readonly string[]
   readonly deviceInstanceId?: string
   readonly target?: string
 }

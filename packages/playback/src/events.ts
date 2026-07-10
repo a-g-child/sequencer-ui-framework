@@ -28,6 +28,8 @@ export interface NoteOnEvent extends PlaybackEventBase {
   readonly noteId: string
   readonly pitch: number
   readonly velocity: number
+  readonly duration?: BeatTime
+  readonly durationMs?: number
 }
 
 export interface NoteOffEvent extends PlaybackEventBase {

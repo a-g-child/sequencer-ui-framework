@@ -23,6 +23,7 @@ export interface Track extends Entity, ParameterOwner {
   clips: TrackClipSlot[];
   placements: PatternPlacement[];
   mixer: TrackMixerState;
+  deviceIds?: EntityRef<DeviceInstance>[];
   deviceId?: EntityRef<DeviceInstance>;
   target?: string;
 }

@@ -1,3 +1,4 @@
-export * from './basic-synth';
-export * from './external-midi';
-export * from './sampler';
+export * from './arpeggiator.ts';
+export * from './basic-synth.ts';
+export * from './external-midi.ts';
+export * from './sampler.ts';

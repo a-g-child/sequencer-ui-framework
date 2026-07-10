@@ -1,3 +1,3 @@
-export * from './device';
-export * from './descriptors';
-export * from './factories';
+export * from './device.ts';
+export * from './descriptors/index.ts';
+export * from './factories/index.ts';

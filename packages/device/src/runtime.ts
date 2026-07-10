@@ -1,6 +1,6 @@
 import type { RuntimeAudioGraph } from '@sequencer/audio-graph';
-import type { DeviceId, DeviceInstance } from './instance';
-import type { RuntimeParameter } from './parameter-runtime';
+import type { DeviceId, DeviceInstance } from './instance.ts';
+import type { RuntimeParameter } from './parameter-runtime.ts';
 
 export type RuntimeDeviceStatus = 'idle' | 'connected' | 'missing';
 

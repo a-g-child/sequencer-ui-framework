@@ -56,6 +56,40 @@ export const MIDI_TRANSPOSE_NODE: NodeDescriptor = {
   parameters: [{ id: 'semitones', name: 'Semitones', kind: 'number', defaultValue: 0, min: -48, max: 48, step: 1 }]
 };
 
+export const MIDI_ARPEGGIATOR_NODE: NodeDescriptor = {
+  id: 'sequencer.midi.arpeggiator',
+  type: 'midi-arpeggiator',
+  name: 'Arpeggiator',
+  category: 'midi',
+  capabilities: ['midi-processor', 'timing'],
+  ports: [
+    { id: 'midi-in', name: 'MIDI In', kind: 'midi', direction: 'input' },
+    { id: 'midi-out', name: 'MIDI Out', kind: 'midi', direction: 'output' }
+  ],
+  parameters: [
+    {
+      id: 'octave-range',
+      name: 'Octaves',
+      kind: 'number',
+      defaultValue: 2,
+      min: 1,
+      max: 4,
+      step: 1
+    },
+    {
+      id: 'rate',
+      name: 'Rate',
+      kind: 'choice',
+      defaultValue: '1/16',
+      options: [
+        { label: '1/8', value: '1/8' },
+        { label: '1/16', value: '1/16' },
+        { label: '1/32', value: '1/32' }
+      ]
+    }
+  ]
+};
+
 export const MIDI_SPLIT_NODE: NodeDescriptor = {
   id: 'sequencer.midi.split',
   type: 'midi-split',
@@ -97,6 +131,7 @@ export const MIDI_NODE_DESCRIPTORS: readonly NodeDescriptor[] = [
   MIDI_FILTER_NODE,
   MIDI_CHANNEL_NODE,
   MIDI_TRANSPOSE_NODE,
+  MIDI_ARPEGGIATOR_NODE,
   MIDI_SPLIT_NODE,
   MIDI_MERGE_NODE,
   MIDI_OUTPUT_NODE

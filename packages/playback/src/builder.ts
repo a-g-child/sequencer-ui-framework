@@ -26,12 +26,14 @@ export class PlaybackModelBuilder {
     const automations: PlaybackAutomation[] = []
 
     document.tracks.values().forEach((track, trackIndex) => {
+      const deviceInstanceIds = deviceChainForTrack(track)
       const playbackTrack: PlaybackTrack = {
         id: track.id,
         name: track.name,
         channel: trackIndex % 16,
         mixer: track.mixer ?? createDefaultTrackMixerState(),
-        deviceInstanceId: track.deviceId,
+        deviceInstanceIds,
+        deviceInstanceId: deviceInstanceIds[0],
         target: track.target
       }
       tracks.push(playbackTrack)
@@ -161,6 +163,12 @@ export class PlaybackModelBuilder {
       automations
     })
   }
+}
+
+function deviceChainForTrack(track: { readonly deviceIds?: readonly string[]; readonly deviceId?: string }): readonly string[] {
+  if (track.deviceIds && track.deviceIds.length > 0) return track.deviceIds
+
+  return track.deviceId ? [track.deviceId] : []
 }
 
 type PatternPlaybackEventContext = {

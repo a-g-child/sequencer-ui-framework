@@ -3,6 +3,7 @@ import type { AudioGraphDocument } from '@sequencer/audio-graph';
 export type DeviceCapability =
   | 'instrument'
   | 'sampler'
+  | 'midi-effect'
   | 'audio-effect'
   | 'midi-output'
   | 'audio-output'

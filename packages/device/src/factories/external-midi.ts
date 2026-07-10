@@ -1,8 +1,8 @@
-import { EXTERNAL_MIDI_DESCRIPTOR } from '../descriptors/external-midi';
-import type { DeviceFactory } from '../factory';
-import type { DeviceInstance } from '../instance';
-import { createRuntimeParameters } from '../parameter-runtime';
-import { BaseRuntimeDevice } from '../runtime';
+import { EXTERNAL_MIDI_DESCRIPTOR } from '../descriptors/external-midi.ts';
+import type { DeviceFactory } from '../factory.ts';
+import type { DeviceInstance } from '../instance.ts';
+import { createRuntimeParameters } from '../parameter-runtime.ts';
+import { BaseRuntimeDevice } from '../runtime.ts';
 
 export class ExternalMidiRuntimeDevice<
   TEvent = unknown

@@ -60,6 +60,7 @@ export function createTrack(
     clips: [],
     placements: [],
     mixer: createDefaultTrackMixerState(),
+    deviceIds: deviceId ? [deviceId] : [],
     parameters: [],
     deviceId,
     target

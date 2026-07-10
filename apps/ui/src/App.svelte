@@ -25,6 +25,7 @@
     type PlaybackServiceStatus
   } from '@sequencer/playback'
   import {
+    ARPEGGIATOR_DESCRIPTOR,
     BASIC_SYNTH_DESCRIPTOR,
     EXTERNAL_MIDI_DESCRIPTOR,
     SAMPLER_DESCRIPTOR,
@@ -76,6 +77,7 @@
   type MainViewMode = 'matrix' | 'editor'
   type ClipCopyMode = 'idle' | 'select-source' | 'select-target'
   type SelectableDeviceKind = 'basic-synth' | 'sampler'
+  type SelectableMidiDeviceKind = 'arpeggiator'
 
   type DeviceParameterView = {
     device: DeviceInstance
@@ -100,6 +102,7 @@
   const MATRIX_SCENE_ROW_COUNT = 8
 
   const DEVICE_DESCRIPTORS: DeviceDescriptor[] = [
+    ARPEGGIATOR_DESCRIPTOR,
     BASIC_SYNTH_DESCRIPTOR,
     EXTERNAL_MIDI_DESCRIPTOR,
     SAMPLER_DESCRIPTOR
@@ -226,6 +229,13 @@
   )
   $: selectedTrackDeviceParameterViews =
     buildSelectedTrackDeviceParameterViews(
+      selectedTrack,
+      runtimeParameterValues,
+      automatedRuntimeParameterIds,
+      activePattern?.id
+    )
+  $: selectedTrackMidiDeviceParameterViews =
+    buildSelectedTrackMidiDeviceParameterViews(
       selectedTrack,
       runtimeParameterValues,
       automatedRuntimeParameterIds,
@@ -689,6 +699,26 @@
   ): DeviceParameterView[] {
     const device = findTrackDeviceInstance(track)
 
+    return buildDeviceParameterViews(device, values, automatedIds, patternId)
+  }
+
+  function buildSelectedTrackMidiDeviceParameterViews(
+    track: Track | undefined,
+    values: Record<string, ParameterValue>,
+    automatedIds: Set<string>,
+    patternId: string | undefined
+  ): DeviceParameterView[] {
+    const device = findTrackArpeggiatorDevice(track)
+
+    return buildDeviceParameterViews(device, values, automatedIds, patternId)
+  }
+
+  function buildDeviceParameterViews(
+    device: DeviceInstance | undefined,
+    values: Record<string, ParameterValue>,
+    automatedIds: Set<string>,
+    patternId: string | undefined
+  ): DeviceParameterView[] {
     if (!device) return []
 
     const descriptor = DEVICE_DESCRIPTORS_BY_KEY.get(device.descriptorKey)
@@ -732,6 +762,12 @@
     if (device?.descriptorKey === SAMPLER_DESCRIPTOR.key) return 'sampler'
 
     return undefined
+  }
+
+  function selectedTrackMidiDeviceKind(
+    track: Track | undefined
+  ): SelectableMidiDeviceKind | undefined {
+    return findTrackArpeggiatorDevice(track) ? 'arpeggiator' : undefined
   }
 
   function buildSelectedSamplerSampleName(track: Track | undefined): string {
@@ -796,9 +832,31 @@
   function findTrackDeviceInstance(
     track: Track | undefined
   ): DeviceInstance | undefined {
-    if (!track?.deviceId) return undefined
+    const deviceId = track?.deviceIds?.at(-1) ?? track?.deviceId
 
-    return store.document.deviceInstances.find(track.deviceId)
+    if (!deviceId) return undefined
+
+    return store.document.deviceInstances.find(deviceId)
+  }
+
+  function findTrackArpeggiatorDevice(
+    track: Track | undefined
+  ): DeviceInstance | undefined {
+    for (const deviceId of deviceChainForTrack(track)) {
+      const device = store.document.deviceInstances.find(deviceId)
+
+      if (device?.descriptorKey === ARPEGGIATOR_DESCRIPTOR.key) return device
+    }
+
+    return undefined
+  }
+
+  function deviceChainForTrack(track: Track | undefined): string[] {
+    if (!track) return []
+    if (track.deviceIds && track.deviceIds.length > 0) return [...track.deviceIds]
+    if (track.deviceId) return [track.deviceId]
+
+    return []
   }
 
   function playTransport() {
@@ -901,10 +959,46 @@
     syncView()
   }
 
-  function removeSelectedTrackDevice() {
-    if (!selectedTrack?.deviceId) return
+  function attachTrackMidiDevice(kind: SelectableMidiDeviceKind) {
+    if (!selectedTrack) return undefined
+    if (kind !== 'arpeggiator') return undefined
+    if (findTrackArpeggiatorDevice(selectedTrack)) return undefined
 
-    controller.setTrackDevice(selectedTrack.id, undefined)
+    const device = createDeviceInstance(
+      ARPEGGIATOR_DESCRIPTOR,
+      ARPEGGIATOR_DESCRIPTOR.name
+    ) as DeviceInstance
+    const nextChain = [device.id, ...deviceChainForTrack(selectedTrack)]
+
+    controller.addDeviceInstance(device)
+    controller.setTrackDeviceChain(selectedTrack.id, nextChain)
+    syncView()
+  }
+
+  function removeTrackMidiDevice(kind: SelectableMidiDeviceKind) {
+    if (!selectedTrack) return
+    if (kind !== 'arpeggiator') return
+
+    const arpeggiator = findTrackArpeggiatorDevice(selectedTrack)
+
+    if (!arpeggiator) return
+
+    const nextChain = deviceChainForTrack(selectedTrack).filter(
+      (deviceId) => deviceId !== arpeggiator.id
+    )
+
+    controller.setTrackDeviceChain(selectedTrack.id, nextChain)
+    syncView()
+  }
+
+  function removeSelectedTrackDevice() {
+    if (!selectedTrack) return
+
+    const instrument = findTrackDeviceInstance(selectedTrack)
+
+    if (!instrument) return
+
+    controller.setTrackDeviceChain(selectedTrack.id, [])
     samplerSampleStatus = ''
     syncView()
   }
@@ -1770,6 +1864,8 @@
       {selectedTrackDeviceName}
       selectedTrackDeviceKind={selectedTrackDeviceKind(selectedTrack)}
       {selectedTrackDeviceParameterViews}
+      selectedTrackMidiDeviceKind={selectedTrackMidiDeviceKind(selectedTrack)}
+      {selectedTrackMidiDeviceParameterViews}
       samplerSampleName={buildSelectedSamplerSampleName(selectedTrack)}
       samplerSlot={selectedSamplerSlot(selectedTrack)}
       samplerSlots={selectedSamplerSlots(selectedTrack)}
@@ -1780,6 +1876,8 @@
       onSelectSamplerSlot={selectSamplerSlot}
       onSetDeviceParameterValue={setDeviceParameterValue}
       onAttachDevice={attachTrackDevice}
+      onAttachMidiDevice={attachTrackMidiDevice}
+      onRemoveMidiDevice={removeTrackMidiDevice}
       onRemoveDevice={removeSelectedTrackDevice}
     />
 

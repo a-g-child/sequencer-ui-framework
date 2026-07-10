@@ -17,6 +17,7 @@ import {
   SetGrooveOperation,
   SetParameterValueOperation,
   SetSamplerSampleSlotOperation,
+  SetTrackDeviceChainOperation,
   SetTrackDeviceOperation,
   SetTrackMixerValueOperation,
   SetPatternPlacementLoopOperation,
@@ -274,6 +275,12 @@ export class AppController {
   setTrackDevice(trackId: string, deviceInstanceId: string | undefined): void {
     this.app.documentStore.execute(
       new SetTrackDeviceOperation(trackId, deviceInstanceId)
+    )
+  }
+
+  setTrackDeviceChain(trackId: string, deviceInstanceIds: readonly string[]): void {
+    this.app.documentStore.execute(
+      new SetTrackDeviceChainOperation(trackId, deviceInstanceIds)
     )
   }
 

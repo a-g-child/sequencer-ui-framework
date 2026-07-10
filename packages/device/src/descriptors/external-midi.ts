@@ -1,4 +1,4 @@
-import type { DeviceDescriptor } from '../device';
+import type { DeviceDescriptor } from '../device.ts';
 
 export const EXTERNAL_MIDI_DESCRIPTOR: DeviceDescriptor = {
   id: 'device.external-midi',

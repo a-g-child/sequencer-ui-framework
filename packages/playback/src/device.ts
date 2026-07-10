@@ -10,6 +10,7 @@ import {
 } from '@sequencer/device'
 import type { SampleVoiceAction, VoiceAction } from '@sequencer/audio'
 import type { PlaybackEvent } from './events'
+import type { PlaybackTrack } from './model'
 import type { DeviceCommand } from './native/schemas.ts'
 import { voiceActionsToDeviceCommands } from './native/voice-action-commands.ts'
 
@@ -38,6 +39,7 @@ export interface PlaybackDeviceProcessResult {
 export class PlaybackDeviceManager {
   readonly devices = new DeviceRegistry<PlaybackEvent>()
   readonly runtimeDevices = new RuntimeDeviceRegistry<PlaybackEvent>()
+  private readonly deviceChainsByTrackId = new Map<string, readonly string[]>()
 
   get status(): PlaybackDeviceManagerStatus {
     const runtimeDevices = this.runtimeDevices.values()
@@ -68,6 +70,22 @@ export class PlaybackDeviceManager {
     }
 
     return this.runtimeDevices.values()
+  }
+
+  configureTrackDeviceChains(tracks: readonly PlaybackTrack[]): void {
+    this.deviceChainsByTrackId.clear()
+
+    for (const track of tracks) {
+      const chain = track.deviceInstanceIds && track.deviceInstanceIds.length > 0
+        ? track.deviceInstanceIds
+        : track.deviceInstanceId
+          ? [track.deviceInstanceId]
+          : []
+
+      if (chain.length > 0) {
+        this.deviceChainsByTrackId.set(track.id, chain)
+      }
+    }
   }
 
   async connectAll(): Promise<void> {
@@ -125,24 +143,43 @@ export class PlaybackDeviceManager {
       return { voiceActions, sampleActions, deviceCommands }
     }
 
-    for (const device of this.runtimeDevices.values()) {
-      const deviceEvents = events.filter(
-        (event) => event.destination?.deviceInstanceId === device.instanceId
-      )
+    for (const eventGroup of groupEventsByRoute(
+      events,
+      (event) => this.routeForEvent(event)
+    )) {
+      let currentEvents: readonly PlaybackEvent[] = eventGroup.events
+      const route = eventGroup.route
 
-      if (deviceEvents.length === 0) continue
+      for (const deviceInstanceId of route) {
+        if (currentEvents.length === 0) break
 
-      device.processEvents(deviceEvents)
+        const device = this.runtimeDevices.find(deviceInstanceId)
 
-      if (hasVoiceActions(device)) {
-        const actions = device.consumeVoiceActions()
+        if (!device) {
+          currentEvents = []
+          break
+        }
 
-        voiceActions.push(...actions)
-        deviceCommands.push(...voiceActionsToDeviceCommands(actions, device.instanceId))
-      }
+        const deviceEvents = currentEvents.map((currentEvent) =>
+          routeEventToDevice(currentEvent, deviceInstanceId)
+        )
 
-      if (hasSampleActions(device)) {
-        sampleActions.push(...device.consumeSampleActions())
+        device.processEvents(deviceEvents)
+
+        if (hasVoiceActions(device)) {
+          const actions = device.consumeVoiceActions()
+
+          voiceActions.push(...actions)
+          deviceCommands.push(...voiceActionsToDeviceCommands(actions, device.instanceId))
+        }
+
+        if (hasSampleActions(device)) {
+          sampleActions.push(...device.consumeSampleActions())
+        }
+
+        currentEvents = hasPlaybackEvents(device)
+          ? device.consumePlaybackEvents()
+          : []
       }
     }
 
@@ -155,6 +192,66 @@ export class PlaybackDeviceManager {
       status: device.status,
       diagnostics: hasDiagnostics(device) ? device.getDiagnostics() : undefined
     }))
+  }
+
+  private routeForEvent(event: PlaybackEvent): readonly string[] {
+    const trackId = event.destination?.trackId ?? event.trackId
+    const chain = trackId ? this.deviceChainsByTrackId.get(trackId) : undefined
+
+    if (chain && chain.length > 0) return chain
+
+    return event.destination?.deviceInstanceId
+      ? [event.destination.deviceInstanceId]
+      : []
+  }
+}
+
+function groupEventsByRoute(
+  events: readonly PlaybackEvent[],
+  routeForEvent: (event: PlaybackEvent) => readonly string[]
+): {
+  readonly route: readonly string[]
+  readonly events: PlaybackEvent[]
+}[] {
+  const groups: {
+    route: readonly string[]
+    events: PlaybackEvent[]
+  }[] = []
+  const groupsByRouteKey = new Map<string, (typeof groups)[number]>()
+
+  for (const event of events) {
+    const route = routeForEvent(event)
+    const routeKey = route.join('\0')
+    const existingGroup = groupsByRouteKey.get(routeKey)
+
+    if (existingGroup) {
+      existingGroup.events.push(event)
+      continue
+    }
+
+    const group = {
+      route,
+      events: [event]
+    }
+
+    groupsByRouteKey.set(routeKey, group)
+    groups.push(group)
+  }
+
+  return groups
+}
+
+function routeEventToDevice(
+  event: PlaybackEvent,
+  deviceInstanceId: string
+): PlaybackEvent {
+  return {
+    ...event,
+    destination: {
+      ...event.destination,
+      trackId: event.destination?.trackId ?? event.trackId,
+      deviceInstanceId
+    }
   }
 }
 
@@ -177,6 +274,17 @@ function hasSampleActions(
   return (
     'consumeSampleActions' in device &&
     typeof device.consumeSampleActions === 'function'
+  )
+}
+
+function hasPlaybackEvents(
+  device: PlaybackRuntimeDevice
+): device is PlaybackRuntimeDevice & {
+  consumePlaybackEvents(): PlaybackEvent[]
+} {
+  return (
+    'consumePlaybackEvents' in device &&
+    typeof device.consumePlaybackEvents === 'function'
   )
 }
 

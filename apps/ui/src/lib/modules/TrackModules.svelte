@@ -23,12 +23,15 @@
   }
 
   type DeviceModuleKind = 'basic-synth' | 'sampler'
+  type MidiDeviceModuleKind = 'arpeggiator'
 
   export let selectedTrack: Track | undefined = undefined
   export let selectedTrackId = ''
   export let selectedTrackDeviceName = 'No device'
   export let selectedTrackDeviceKind: DeviceModuleKind | undefined = undefined
   export let selectedTrackDeviceParameterViews: DeviceParameterView[] = []
+  export let selectedTrackMidiDeviceKind: MidiDeviceModuleKind | undefined = undefined
+  export let selectedTrackMidiDeviceParameterViews: DeviceParameterView[] = []
   export let samplerSampleName = 'No sample'
   export let samplerSlot: SampleSlot | undefined = undefined
   export let samplerSlots: SamplerSlotView[] = []
@@ -43,6 +46,8 @@
     value: DeviceParameterValue
   ) => void
   export let onAttachDevice: (kind: DeviceModuleKind) => void
+  export let onAttachMidiDevice: (kind: MidiDeviceModuleKind) => void
+  export let onRemoveMidiDevice: (kind: MidiDeviceModuleKind) => void
   export let onRemoveDevice: () => void
   let deviceChooserOpen = false
   const samplerNumberDescriptors: Record<string, DeviceParameterDescriptor> = {
@@ -177,6 +182,54 @@
         {/if}
       </div>
     {:else}
+      <div class="device-chain-strip" aria-label="MIDI device chain">
+        {#if selectedTrackMidiDeviceKind === 'arpeggiator'}
+          <section class="midi-device-card" aria-label="Arpeggiator MIDI device">
+            <div class="midi-device-heading">
+              <div>
+                <span>MIDI</span>
+                <strong>Arpeggiator</strong>
+              </div>
+              <button
+                type="button"
+                class="remove-device-button"
+                aria-label="Remove Arpeggiator"
+                title="Remove Arpeggiator"
+                on:click={() => onRemoveMidiDevice('arpeggiator')}
+              >
+                x
+              </button>
+            </div>
+            {#if selectedTrackMidiDeviceParameterViews.length > 0}
+              <div class="parameter-module-grid midi-parameter-grid">
+                {#each selectedTrackMidiDeviceParameterViews as parameter (`${parameter.device.id}:${parameter.descriptor.key}`)}
+                  <ParameterEditor
+                    descriptor={parameter.descriptor}
+                    value={parameter.runtimeValue ?? parameter.value}
+                    disabled={!selectedTrackId}
+                    automated={parameter.automated ?? false}
+                    onChange={(value) =>
+                      onSetDeviceParameterValue(
+                        parameter.device.id,
+                        parameter.descriptor.key,
+                        value
+                      )}
+                  />
+                {/each}
+              </div>
+            {/if}
+          </section>
+        {:else}
+          <button
+            type="button"
+            class="insert-midi-device-button"
+            on:click={() => onAttachMidiDevice('arpeggiator')}
+          >
+            + Arp
+          </button>
+        {/if}
+      </div>
+
       <div class="module-heading device-heading">
         <div>
           <h2>{selectedTrackDeviceName}</h2>
@@ -361,6 +414,66 @@
     min-width: 0;
     display: grid;
     gap: var(--spacing-2xs);
+  }
+
+  .device-chain-strip {
+    min-width: 0;
+    display: grid;
+    gap: var(--spacing-xs);
+  }
+
+  .midi-device-card {
+    min-width: 0;
+    display: grid;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm);
+    border: var(--border-width) solid var(--border);
+    background: var(--surface-2);
+  }
+
+  .midi-device-heading {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: var(--spacing-sm);
+  }
+
+  .midi-device-heading > div {
+    min-width: 0;
+    display: grid;
+    gap: var(--spacing-2xs);
+  }
+
+  .midi-device-heading span {
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .midi-device-heading strong {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-size: var(--font-size-sm);
+  }
+
+  .insert-midi-device-button {
+    justify-self: start;
+    min-height: var(--control-height-sm);
+    border-radius: var(--radius-control);
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .insert-midi-device-button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .midi-parameter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .remove-device-button {

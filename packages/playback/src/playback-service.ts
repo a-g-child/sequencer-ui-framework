@@ -1,6 +1,7 @@
 import type { AssetReference } from '@sequencer/assets'
 import type { DocumentObserver, Operation, Service, ServiceContext, ServiceEvent } from '@sequencer/core'
 import {
+  ArpeggiatorFactory,
   BasicSynthFactory,
   ExternalMidiFactory,
   SamplerFactory,
@@ -182,8 +183,7 @@ export class PlaybackService implements Service, DocumentObserver {
       return
     }
 
-    void this.rebuildRuntimeDevices()
-    this.rebuildModel()
+    void this.rebuildRuntimeDevicesAndModel()
   }
 
   onCommandUndone(operation: Operation): void {
@@ -204,8 +204,7 @@ export class PlaybackService implements Service, DocumentObserver {
       return
     }
 
-    void this.rebuildRuntimeDevices()
-    this.rebuildModel()
+    void this.rebuildRuntimeDevicesAndModel()
   }
 
   onCommandRedone(operation: Operation): void {
@@ -226,8 +225,7 @@ export class PlaybackService implements Service, DocumentObserver {
       return
     }
 
-    void this.rebuildRuntimeDevices()
-    this.rebuildModel()
+    void this.rebuildRuntimeDevicesAndModel()
   }
 
   private applyRuntimeDeviceParameterOperation(operation: Operation): boolean {
@@ -420,6 +418,7 @@ export class PlaybackService implements Service, DocumentObserver {
       { activeClipsByTrackId: this.liveClips.state.activeClipByTrackId }
     )
     this.scheduler.setModel(this.model)
+    this.deviceManager.configureTrackDeviceChains(this.model.tracks)
     this.syncTrackMixersToWebAudio()
     this.statisticsOutput.recordPlaybackModelRebuild(nowMs() - startedAt)
     this.emitStatus()
@@ -543,6 +542,7 @@ export class PlaybackService implements Service, DocumentObserver {
   }
 
   private async initialiseDevices(): Promise<void> {
+    this.deviceManager.register(new ArpeggiatorFactory<PlaybackEvent>())
     this.deviceManager.register(new BasicSynthFactory<PlaybackEvent>())
     this.deviceManager.register(new ExternalMidiFactory<PlaybackEvent>())
     this.deviceManager.register(new SamplerFactory<PlaybackEvent>())
@@ -559,18 +559,32 @@ export class PlaybackService implements Service, DocumentObserver {
     this.deviceManager.buildFromInstances(
       this.context.documentStore.document.deviceInstances.values()
     )
+    if (this.model) {
+      this.deviceManager.configureTrackDeviceChains(this.model.tracks)
+    }
     await this.deviceManager.connectAll()
     this.syncBasicSynthRuntimeParametersToWebAudio()
     this.emitStatus()
+  }
+
+  private async rebuildRuntimeDevicesAndModel(): Promise<void> {
+    await this.rebuildRuntimeDevices()
+    this.rebuildModel()
   }
 
   private syncBasicSynthRuntimeParametersToWebAudio(): void {
     if (!this.context) return
 
     for (const track of this.context.documentStore.document.tracks.values()) {
-      if (!track.deviceId) continue
+      const deviceId = deviceIdsForTrack(track).find((candidateId) => {
+        const candidate = this.deviceManager.runtimeDevices.find(candidateId)
 
-      const device = this.deviceManager.runtimeDevices.find(track.deviceId)
+        return candidate?.descriptorKey === 'basic-synth'
+      })
+
+      if (!deviceId) continue
+
+      const device = this.deviceManager.runtimeDevices.find(deviceId)
 
       if (!device || device.descriptorKey !== 'basic-synth') continue
 
@@ -689,6 +703,15 @@ function normalizeRuntimeKeyTracking(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 0
 
   return Math.min(1, Math.max(0, value))
+}
+
+function deviceIdsForTrack(track: {
+  readonly deviceIds?: readonly string[]
+  readonly deviceId?: string
+}): readonly string[] {
+  if (track.deviceIds && track.deviceIds.length > 0) return track.deviceIds
+
+  return track.deviceId ? [track.deviceId] : []
 }
 
 function isDeviceParameterOperation(

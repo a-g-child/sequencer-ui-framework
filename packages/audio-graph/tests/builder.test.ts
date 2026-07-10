@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   AudioGraphBuilder,
+  ARPEGGIATOR_MIDI_GRAPH,
   BASIC_SYNTH_AUDIO_GRAPH,
   DEFAULT_AUDIO_NODE_DESCRIPTORS,
   SAMPLER_AUDIO_GRAPH,
@@ -193,6 +194,21 @@ test('builds the Basic Synth graph preset', () => {
       }
     ]
   );
+});
+
+test('builds the Arpeggiator MIDI graph preset', () => {
+  const graph = new AudioGraphBuilder(DEFAULT_AUDIO_NODE_DESCRIPTORS).build(
+    ARPEGGIATOR_MIDI_GRAPH
+  );
+
+  assert.deepEqual(graph.diagnostics, []);
+  assert.equal(graph.nodes.length, 3);
+  assert.equal(graph.connections.length, 2);
+  assert.deepEqual(graph.executionOrder, [
+    'midi-in',
+    'arpeggiator',
+    'midi-out'
+  ]);
 });
 
 test('builds the Sampler graph preset', () => {

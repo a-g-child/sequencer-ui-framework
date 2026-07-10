@@ -2,8 +2,8 @@ import type {
   DeviceDescriptor,
   DeviceParameterDescriptor,
   DeviceParameterValue
-} from './descriptor';
-import type { DeviceInstance } from './instance';
+} from './descriptor.ts';
+import type { DeviceInstance } from './instance.ts';
 
 export type RuntimeParameterValue = DeviceParameterValue;
 

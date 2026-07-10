@@ -1,6 +1,6 @@
-import type { DeviceDescriptor } from './descriptor';
-import type { DeviceInstance } from './instance';
-import type { RuntimeDevice } from './runtime';
+import type { DeviceDescriptor } from './descriptor.ts';
+import type { DeviceInstance } from './instance.ts';
+import type { RuntimeDevice } from './runtime.ts';
 
 export interface DeviceFactory<TEvent = unknown> {
   readonly descriptor: DeviceDescriptor;

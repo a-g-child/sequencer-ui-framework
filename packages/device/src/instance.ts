@@ -1,4 +1,4 @@
-import type { DeviceParameterValue } from './descriptor';
+import type { DeviceParameterValue } from './descriptor.ts';
 
 export type DeviceId = string;
 

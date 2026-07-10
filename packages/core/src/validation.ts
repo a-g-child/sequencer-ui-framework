@@ -92,16 +92,17 @@ export function validateDocument(document: SequencerDocument): ValidationIssue[]
       }
     }
 
-    if (track.deviceId && !document.deviceInstances.has(track.deviceId)) {
-      issues.push({
-        level: "error",
-        message: `Track references missing device instance: ${track.deviceId}`,
-        entityId: track.id
-      });
-    }
+    for (const deviceId of deviceIdsForTrack(track)) {
+      if (!document.deviceInstances.has(deviceId)) {
+        issues.push({
+          level: "error",
+          message: `Track references missing device instance: ${deviceId}`,
+          entityId: track.id
+        });
+        continue;
+      }
 
-    if (track.deviceId) {
-      const device = document.deviceInstances.find(track.deviceId);
+      const device = document.deviceInstances.find(deviceId);
       const sampleSlots = samplerSampleSlots(device);
 
       for (const slot of sampleSlots) {
@@ -353,6 +354,15 @@ export function validateDocument(document: SequencerDocument): ValidationIssue[]
   }
 
   return issues;
+}
+
+function deviceIdsForTrack(track: {
+  readonly deviceIds?: readonly string[];
+  readonly deviceId?: string;
+}): readonly string[] {
+  if (track.deviceIds && track.deviceIds.length > 0) return track.deviceIds;
+
+  return track.deviceId ? [track.deviceId] : [];
 }
 
 function isUnit(value: number): boolean {
