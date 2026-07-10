@@ -235,12 +235,12 @@
         {/if}
       </div>
     {:else}
-      <div class="device-chain-strip" aria-label="MIDI device chain">
-        {#if selectedTrackMidiDeviceKind === 'arpeggiator'}
-          <section class="midi-device-card" aria-label="Arpeggiator MIDI device">
+      <div class="device-chain">
+        <section class="device-module midi-module" aria-label="MIDI device chain">
+          {#if selectedTrackMidiDeviceKind === 'arpeggiator'}
             <div class="midi-device-heading">
               <div>
-                <span>MIDI</span>
+                <span>MIDI FX</span>
                 <strong>Arpeggiator</strong>
               </div>
               <button
@@ -271,152 +271,149 @@
                 {/each}
               </div>
             {/if}
-          </section>
-        {:else}
-          <button
-            type="button"
-            class="insert-midi-device-button"
-            on:click={() => onAttachMidiDevice('arpeggiator')}
-          >
-            + Arp
-          </button>
-        {/if}
-      </div>
-
-      <div class="module-heading device-heading">
-        <div>
-          <h2>{selectedTrackDeviceName}</h2>
-          <span>{selectedTrackDeviceKind === 'sampler' ? 'Sampler' : 'Synth'}</span>
-        </div>
-        <button
-          type="button"
-          class="remove-device-button"
-          aria-label={`Remove ${selectedTrackDeviceName}`}
-          title="Remove device"
-          on:click={onRemoveDevice}
-        >
-          x
-        </button>
-      </div>
-
-      <div
-        class="device-module-layout"
-        class:synth-layout={selectedTrackDeviceKind !== 'sampler'}
-      >
-        {#if selectedTrackDeviceKind === 'sampler'}
-          <section class="sampler-panel" aria-label="Sampler slots">
-            <div class="sample-slot-selector">
-              {#each samplerSlots as slot, index (slot.id)}
-                <button
-                  type="button"
-                  class:active={slot.id === selectedSamplerSlotId}
-                  class:loaded={slot.loaded}
-                  aria-pressed={slot.id === selectedSamplerSlotId}
-                  title={slot.label}
-                  on:click={() => onSelectSamplerSlot(slot.id)}
-                >
-                  <strong>{index + 1}</strong>
-                  <span>{slot.loaded ? slot.label : slot.rootNote}</span>
-                </button>
-              {/each}
-            </div>
-
-          <div class="sample-loader">
-            <span>{samplerSampleName}</span>
-            <label class="sample-load-button">
-              Load
-              <input
-                type="file"
-                accept="audio/*"
-                on:change={loadSamplerFile}
-                disabled={!selectedTrackId}
-              />
-            </label>
-            {#if samplerSampleStatus}
-              <p class="output-status">{samplerSampleStatus}</p>
-            {/if}
-          </div>
-
-          {#if samplerSlot}
-            <div class="sample-slot-grid" aria-label="Sample slot settings">
-              <NumberParameter
-                descriptor={samplerNumberDescriptors.rootNote}
-                value={samplerSlot.rootNote}
-                onChange={(value) => updateSamplerNumber('rootNote', value)}
-              />
-              <NumberParameter
-                descriptor={samplerNumberDescriptors.gain}
-                value={samplerSlot.gain}
-                onChange={(value) => updateSamplerNumber('gain', value)}
-              />
-              <NumberParameter
-                descriptor={samplerNumberDescriptors.start}
-                value={samplerSlot.start}
-                onChange={(value) => updateSamplerNumber('start', value)}
-              />
-              <NumberParameter
-                descriptor={samplerNumberDescriptors.end}
-                value={samplerSlot.end ?? samplerSlot.start}
-                onChange={(value) => updateSamplerNumber('end', value)}
-              />
-              <label class="sample-slot-toggle">
-                <span>Loop</span>
-                <button
-                  type="button"
-                  class:active={samplerSlot.loop}
-                  aria-pressed={samplerSlot.loop}
-                  on:click={() => updateSamplerSlot({ loop: !samplerSlot.loop })}
-                >
-                  {samplerSlot.loop ? 'On' : 'Off'}
-                </button>
-              </label>
-              <NumberParameter
-                descriptor={samplerNumberDescriptors.loopStart}
-                value={samplerSlot.loopStart ?? samplerSlot.start}
-                disabled={!samplerSlot.loop}
-                onChange={(value) => updateSamplerNumber('loopStart', value)}
-              />
-              <NumberParameter
-                descriptor={samplerNumberDescriptors.loopEnd}
-                value={samplerSlot.loopEnd ?? samplerSlot.end ?? samplerSlot.start}
-                disabled={!samplerSlot.loop}
-                onChange={(value) => updateSamplerNumber('loopEnd', value)}
-              />
-            </div>
-          {/if}
-          </section>
-        {/if}
-
-        <section class="device-parameter-panel" aria-label="Device parameters">
-          {#if selectedTrackDeviceParameterViews.length > 0}
-            <div class="parameter-module-grid device-parameter-grid">
-              {#each selectedTrackDeviceParameterViews as parameter (`${parameter.device.id}:${parameter.descriptor.key}`)}
-                <ParameterEditor
-                  descriptor={parameter.descriptor}
-                  value={parameter.runtimeValue ?? parameter.value}
-                  disabled={!selectedTrackId}
-                  automated={parameter.automated ?? false}
-                  onChange={(value) =>
-                    onSetDeviceParameterValue(
-                      parameter.device.id,
-                      parameter.descriptor.key,
-                      value
-                    )}
-                />
-              {/each}
-            </div>
           {:else}
-            <p class="empty-module">No device parameters</p>
+            <button
+              type="button"
+              class="insert-midi-device-button"
+              on:click={() => onAttachMidiDevice('arpeggiator')}
+            >
+              + Arp
+            </button>
           {/if}
         </section>
-      </div>
 
-      <div class="device-chain-strip" aria-label="Audio effect chain">
-        {#if selectedTrackAudioEffectKind === 'delay'}
-          <section class="audio-effect-card" aria-label="Delay audio effect">
+        <section class="device-module instrument-module" aria-label="Instrument">
+          <div class="module-heading device-heading">
+            <div>
+              <h2>{selectedTrackDeviceName}</h2>
+              <span>{selectedTrackDeviceKind === 'sampler' ? 'Sampler' : 'Synth'}</span>
+            </div>
+            <button
+              type="button"
+              class="remove-device-button"
+              aria-label={`Remove ${selectedTrackDeviceName}`}
+              title="Remove device"
+              on:click={onRemoveDevice}
+            >
+              x
+            </button>
+          </div>
+
+          <div class="device-module-layout">
+            {#if selectedTrackDeviceKind === 'sampler'}
+              <section class="sampler-panel" aria-label="Sampler slots">
+                <div class="sample-slot-selector">
+                  {#each samplerSlots as slot, index (slot.id)}
+                    <button
+                      type="button"
+                      class:active={slot.id === selectedSamplerSlotId}
+                      class:loaded={slot.loaded}
+                      aria-pressed={slot.id === selectedSamplerSlotId}
+                      title={slot.label}
+                      on:click={() => onSelectSamplerSlot(slot.id)}
+                    >
+                      <strong>{index + 1}</strong>
+                      <span>{slot.loaded ? slot.label : slot.rootNote}</span>
+                    </button>
+                  {/each}
+                </div>
+
+              <div class="sample-loader">
+                <span>{samplerSampleName}</span>
+                <label class="sample-load-button">
+                  Load
+                  <input
+                    type="file"
+                    accept="audio/*"
+                    on:change={loadSamplerFile}
+                    disabled={!selectedTrackId}
+                  />
+                </label>
+                {#if samplerSampleStatus}
+                  <p class="output-status">{samplerSampleStatus}</p>
+                {/if}
+              </div>
+
+              {#if samplerSlot}
+                <div class="sample-slot-grid" aria-label="Sample slot settings">
+                  <NumberParameter
+                    descriptor={samplerNumberDescriptors.rootNote}
+                    value={samplerSlot.rootNote}
+                    onChange={(value) => updateSamplerNumber('rootNote', value)}
+                  />
+                  <NumberParameter
+                    descriptor={samplerNumberDescriptors.gain}
+                    value={samplerSlot.gain}
+                    onChange={(value) => updateSamplerNumber('gain', value)}
+                  />
+                  <NumberParameter
+                    descriptor={samplerNumberDescriptors.start}
+                    value={samplerSlot.start}
+                    onChange={(value) => updateSamplerNumber('start', value)}
+                  />
+                  <NumberParameter
+                    descriptor={samplerNumberDescriptors.end}
+                    value={samplerSlot.end ?? samplerSlot.start}
+                    onChange={(value) => updateSamplerNumber('end', value)}
+                  />
+                  <label class="sample-slot-toggle">
+                    <span>Loop</span>
+                    <button
+                      type="button"
+                      class:active={samplerSlot.loop}
+                      aria-pressed={samplerSlot.loop}
+                      on:click={() => updateSamplerSlot({ loop: !samplerSlot.loop })}
+                    >
+                      {samplerSlot.loop ? 'On' : 'Off'}
+                    </button>
+                  </label>
+                  <NumberParameter
+                    descriptor={samplerNumberDescriptors.loopStart}
+                    value={samplerSlot.loopStart ?? samplerSlot.start}
+                    disabled={!samplerSlot.loop}
+                    onChange={(value) => updateSamplerNumber('loopStart', value)}
+                  />
+                  <NumberParameter
+                    descriptor={samplerNumberDescriptors.loopEnd}
+                    value={samplerSlot.loopEnd ?? samplerSlot.end ?? samplerSlot.start}
+                    disabled={!samplerSlot.loop}
+                    onChange={(value) => updateSamplerNumber('loopEnd', value)}
+                  />
+                </div>
+              {/if}
+              </section>
+            {/if}
+
+            <section class="device-parameter-panel" aria-label="Device parameters">
+              {#if selectedTrackDeviceParameterViews.length > 0}
+                <div class="parameter-module-grid device-parameter-grid">
+                  {#each selectedTrackDeviceParameterViews as parameter (`${parameter.device.id}:${parameter.descriptor.key}`)}
+                    <ParameterEditor
+                      descriptor={parameter.descriptor}
+                      value={parameter.runtimeValue ?? parameter.value}
+                      disabled={!selectedTrackId}
+                      automated={parameter.automated ?? false}
+                      onChange={(value) =>
+                        onSetDeviceParameterValue(
+                          parameter.device.id,
+                          parameter.descriptor.key,
+                          value
+                        )}
+                    />
+                  {/each}
+                </div>
+              {:else}
+                <p class="empty-module">No device parameters</p>
+              {/if}
+            </section>
+          </div>
+        </section>
+
+        <section class="device-module effect-module" aria-label="Audio effect chain">
+          {#if selectedTrackAudioEffectKind === 'delay'}
             <div class="effect-device-heading">
               <div>
-                <span>Audio Effect</span>
+                <span>Audio FX</span>
                 <strong>Delay</strong>
               </div>
               <button
@@ -497,16 +494,16 @@
                 <p class="empty-module">Delay parameters unavailable</p>
               {/if}
             </div>
-          </section>
-        {:else}
-          <button
-            type="button"
-            class="insert-effect-device-button"
-            on:click={() => onAttachAudioEffect('delay')}
-          >
-            + Delay
-          </button>
-        {/if}
+          {:else}
+            <button
+              type="button"
+              class="insert-effect-device-button"
+              on:click={() => onAttachAudioEffect('delay')}
+            >
+              + Delay
+            </button>
+          {/if}
+        </section>
       </div>
     {/if}
   </section>
@@ -567,16 +564,17 @@
     gap: var(--spacing-2xs);
   }
 
-  .device-chain-strip {
-    min-width: 0;
+  .device-chain {
     display: grid;
-    gap: var(--spacing-xs);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--spacing-md);
+    align-items: start;
   }
 
-  .midi-device-card,
-  .audio-effect-card {
+  .device-module {
     min-width: 0;
     display: grid;
+    align-content: start;
     gap: var(--spacing-sm);
     padding: var(--spacing-sm);
     border: var(--border-width) solid var(--border);
@@ -615,7 +613,7 @@
 
   .insert-midi-device-button,
   .insert-effect-device-button {
-    justify-self: start;
+    justify-self: stretch;
     min-height: var(--control-height-sm);
     border-radius: var(--radius-control);
     color: var(--muted);
@@ -635,7 +633,7 @@
   }
 
   .delay-effect-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .delay-effect-grid {
@@ -647,6 +645,7 @@
   .division-grid-parameter {
     min-width: 0;
     display: grid;
+    grid-column: 1 / -1;
     gap: var(--spacing-2xs);
     color: var(--muted);
     font-size: var(--font-size-xs);
@@ -758,20 +757,16 @@
 
   .parameter-module-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--spacing-sm);
   }
 
   .device-module-layout {
     min-width: 0;
     display: grid;
-    grid-template-columns: minmax(240px, 0.85fr) minmax(360px, 1.15fr);
+    grid-template-columns: 1fr;
     align-items: start;
-    gap: var(--spacing-lg);
-  }
-
-  .device-module-layout.synth-layout {
-    grid-template-columns: minmax(0, 1fr);
+    gap: var(--spacing-md);
   }
 
   .sampler-panel,
@@ -904,10 +899,6 @@
     color: var(--accent);
   }
 
-  .device-parameter-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .empty-module {
     margin: 0;
     color: var(--muted);
@@ -922,6 +913,10 @@
     }
 
     .device-module-layout {
+      grid-template-columns: 1fr;
+    }
+
+    .device-chain {
       grid-template-columns: 1fr;
     }
 

@@ -9,6 +9,9 @@
   export let disabled = false
   export let automated = false
   export let onChange: (value: DeviceParameterValue) => void = () => {}
+  let dragPointerId: number | null = null
+  let dragStartY = 0
+  let dragStartValue = 0
 
   $: numberValue = Number(value ?? descriptor.defaultValue)
   $: displayValue = Number.isFinite(numberValue) ? numberValue : 0
@@ -19,25 +22,50 @@
   $: normalizedValue = normalizeValue(displayValue, minimum, maximum, scale)
   $: angle = -135 + normalizedValue * 270
   $: formattedValue = formatValue(displayValue, step)
-  $: dialStyle = `--dial-angle: ${angle}deg; --dial-fill: ${normalizedValue * 100}%`
+ $: dialStyle = `
+    --dial-angle: ${angle}deg;
+    --dial-progress: ${normalizedValue * 270}deg;
+  `
 
   function beginDialDrag(event: PointerEvent) {
     if (disabled) return
 
     const target = event.currentTarget as HTMLElement
 
+    dragPointerId = event.pointerId
+    dragStartY = event.clientY
+    dragStartValue = displayValue
+
     target.setPointerCapture(event.pointerId)
-    updateFromPointer(event, target)
   }
 
   function dragDial(event: PointerEvent) {
-    if (disabled) return
+    if (disabled || dragPointerId !== event.pointerId) return
 
     const target = event.currentTarget as HTMLElement
 
     if (!target.hasPointerCapture(event.pointerId)) return
 
-    updateFromPointer(event, target)
+    const verticalDistance = dragStartY - event.clientY
+    const range = maximum - minimum
+
+    // Number of vertical pixels needed to move through the full range.
+    const dragDistance = event.shiftKey ? 1000 : 200
+    const valueDelta = (verticalDistance / dragDistance) * range
+
+    setValue(dragStartValue + valueDelta)
+  }
+
+  function endDialDrag(event: PointerEvent) {
+    if (dragPointerId !== event.pointerId) return
+
+    const target = event.currentTarget as HTMLElement
+
+    if (target.hasPointerCapture(event.pointerId)) {
+      target.releasePointerCapture(event.pointerId)
+    }
+
+    dragPointerId = null
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -98,11 +126,17 @@
     if (!Number.isFinite(nextValue)) return
 
     const clampedValue = Math.min(maximum, Math.max(minimum, nextValue))
+
     const steppedValue = step > 0
-      ? Math.round(clampedValue / step) * step
+      ? minimum + Math.round((clampedValue - minimum) / step) * step
       : clampedValue
 
-    onChange(Number(steppedValue.toFixed(6)))
+    const finalValue = Math.min(
+      maximum,
+      Math.max(minimum, steppedValue)
+    )
+
+    onChange(Number(finalValue.toFixed(6)))
   }
 
   function normalizeValue(
@@ -165,6 +199,8 @@
       disabled={disabled}
       on:pointerdown={beginDialDrag}
       on:pointermove={dragDial}
+      on:pointerup={endDialDrag}
+      on:pointercancel={endDialDrag}
       on:keydown={handleKeydown}
       on:wheel={handleWheel}
     >
@@ -221,50 +257,111 @@
     width: 44px;
     aspect-ratio: 1;
     padding: 0;
+    border: 0;
     border-radius: 50%;
-    border: var(--border-width) solid var(--border);
-    background:
-      conic-gradient(
-        from 225deg,
-        var(--accent) 0 var(--dial-fill),
-        color-mix(in srgb, var(--border) 78%, transparent) var(--dial-fill) 75%,
-        transparent 75% 100%
-      );
+    background: transparent;
     cursor: ns-resize;
     touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
   }
 
-  .parameter-control.automated .dial {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
+  /* Inactive circumference */
+  .dial::before {
+    content: '';
+    position: absolute;
+    inset: 1px;
+    border-radius: 50%;
+    background: conic-gradient(
+      from -135deg,
+      color-mix(in srgb, var(--text) 20%, transparent) 0deg 270deg,
+      transparent 270deg 360deg
+    );
+
+    mask: radial-gradient(
+      farthest-side,
+      transparent calc(100% - 2px),
+      #000 calc(100% - 2px)
+    );
+
+    -webkit-mask: radial-gradient(
+      farthest-side,
+      transparent calc(100% - 2px),
+      #000 calc(100% - 2px)
+    );
+  }
+
+  /* Highlight from minimum to current value */
+  .dial::after {
+    content: '';
+    position: absolute;
+    inset: 1px;
+    border-radius: 50%;
+    background: conic-gradient(
+      from -135deg,
+      var(--accent) 0deg var(--dial-progress),
+      transparent var(--dial-progress) 360deg
+    );
+
+    mask: radial-gradient(
+      farthest-side,
+      transparent calc(100% - 2px),
+      #000 calc(100% - 2px)
+    );
+
+    -webkit-mask: radial-gradient(
+      farthest-side,
+      transparent calc(100% - 2px),
+      #000 calc(100% - 2px)
+    );
+  }
+
+  .dial:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
   }
 
   .dial:disabled {
     cursor: not-allowed;
-    opacity: 0.58;
+    opacity: 0.45;
   }
 
   .dial-face {
     position: absolute;
     inset: 5px;
     border-radius: 50%;
-    background:
-      radial-gradient(circle at 50% 42%, var(--surface-elevated), var(--surface));
-    box-shadow:
-      inset 0 0 0 var(--border-width) color-mix(in srgb, var(--text) 9%, transparent),
-      0 1px 0 color-mix(in srgb, var(--text) 8%, transparent);
+    background: transparent;
+  }
+
+  .dial-face::before {
+    display: none;
   }
 
   .dial-pointer {
     position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    transform: rotate(var(--dial-angle));
+  }
+
+  .dial-pointer::after {
+    content: '';
+    position: absolute;
     left: 50%;
-    top: 50%;
+    top: 2px;
     width: 2px;
     height: 13px;
     border-radius: 999px;
     background: var(--text);
-    transform-origin: 50% 88%;
-    transform: translate(-50%, -88%) rotate(var(--dial-angle));
+    transform: translateX(-50%);
+  }
+
+  .parameter-control.automated .dial {
+    box-shadow: none;
+  }
+
+  .parameter-control.automated .dial::after {
+    filter: drop-shadow(0 0 2px var(--accent));
   }
 
   .number-control strong {
