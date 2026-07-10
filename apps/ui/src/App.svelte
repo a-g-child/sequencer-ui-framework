@@ -29,6 +29,7 @@
     BASIC_SYNTH_DESCRIPTOR,
     DELAY_DESCRIPTOR,
     EXTERNAL_MIDI_DESCRIPTOR,
+    LFO_DESCRIPTOR,
     SAMPLER_DESCRIPTOR,
     type DeviceDescriptor,
     type DeviceInstance,
@@ -88,7 +89,7 @@
   type MainViewMode = 'matrix' | 'editor'
   type ClipCopyMode = 'idle' | 'select-source' | 'select-target'
   type SelectableDeviceKind = 'basic-synth' | 'sampler'
-  type SelectableMidiDeviceKind = 'arpeggiator'
+  type SelectableMidiDeviceKind = 'arpeggiator' | 'lfo'
   type SelectableAudioEffectKind = 'delay'
 
   type DeviceParameterView = {
@@ -101,6 +102,13 @@
 
   type SamplerSlotView = SampleSlot & {
     loaded: boolean
+    label: string
+  }
+
+  type LfoModulationTargetOption = {
+    id: string
+    deviceId: string
+    parameterKey: string
     label: string
   }
 
@@ -119,6 +127,7 @@
     BASIC_SYNTH_DESCRIPTOR,
     DELAY_DESCRIPTOR,
     EXTERNAL_MIDI_DESCRIPTOR,
+    LFO_DESCRIPTOR,
     SAMPLER_DESCRIPTOR
   ]
   const DEVICE_DESCRIPTORS_BY_KEY = new Map(
@@ -262,6 +271,13 @@
       automatedRuntimeParameterIds,
       activePattern?.id
     )
+  $: selectedTrackLfoParameterViews =
+    buildSelectedTrackLfoParameterViews(
+      selectedTrack,
+      runtimeParameterValues,
+      automatedRuntimeParameterIds,
+      activePattern?.id
+    )
   $: selectedTrackAudioEffectParameterViews =
     buildSelectedTrackAudioEffectParameterViews(
       selectedTrack,
@@ -269,6 +285,7 @@
       automatedRuntimeParameterIds,
       activePattern?.id
     )
+  $: lfoModulationTargetOptions = buildLfoModulationTargetOptions(selectedTrack)
   function rebuildInspector() {
     selected = store.selection.current()
     selectedTrackId = selected?.type === 'track' ? selected.id : ''
@@ -389,7 +406,11 @@
     values: readonly PlaybackRuntimeParameterValue[]
   ) {
     const nextValues = { ...runtimeParameterValues }
-    const nextAutomationIds = new Set(values.map((value) => value.parameterId))
+    const nextAutomationIds = new Set(
+      values
+        .filter((value) => value.automated)
+        .map((value) => value.parameterId)
+    )
 
     for (const parameterId of automatedRuntimeParameterIds) {
       if (!nextAutomationIds.has(parameterId)) {
@@ -652,6 +673,17 @@
     track: Track | undefined,
     status: PlaybackServiceStatus
   ): GraphDiagnosticsView | undefined {
+    const trackGraph = track
+      ? status.trackGraphDiagnostics.find((entry) => entry.trackId === track.id)
+      : undefined
+
+    if (trackGraph) {
+      return graphDiagnosticsViewFromRuntimeGraph(
+        `${trackGraph.trackName} Chain`,
+        trackGraph.graph
+      )
+    }
+
     const device = findTrackDeviceInstance(track)
 
     if (!device) return undefined
@@ -665,8 +697,15 @@
 
     const descriptor = DEVICE_DESCRIPTORS_BY_KEY.get(device.descriptorKey)
 
+    return graphDiagnosticsViewFromRuntimeGraph(descriptor?.name ?? device.name, graph)
+  }
+
+  function graphDiagnosticsViewFromRuntimeGraph(
+    deviceName: string,
+    graph: RuntimeGraphDiagnosticsLike
+  ): GraphDiagnosticsView {
     return {
-      deviceName: descriptor?.name ?? device.name,
+      deviceName,
       presetId: graph.presetId,
       nodeCount: graph.nodeCount,
       connectionCount: graph.connectionCount,
@@ -706,13 +745,13 @@
     nodeCount: number
     connectionCount: number
     latencySamples: number
-    executionOrder: string[]
-    diagnostics: Array<{
+    executionOrder: readonly string[]
+    diagnostics: readonly {
       severity: string
       code: string
       message: string
-    }>
-    nodeDiagnostics: Array<{
+    }[]
+    nodeDiagnostics: readonly {
       nodeId: string
       descriptorId: string
       executionIndex: number
@@ -720,7 +759,7 @@
       averageProcessMs?: number
       peakProcessMs?: number
       latencySamples?: number
-    }>
+    }[]
   }
 
   function isRuntimeGraphDiagnosticsLike(
@@ -806,6 +845,17 @@
     return buildDeviceParameterViews(device, values, automatedIds, patternId)
   }
 
+  function buildSelectedTrackLfoParameterViews(
+    track: Track | undefined,
+    values: Record<string, ParameterValue>,
+    automatedIds: Set<string>,
+    patternId: string | undefined
+  ): DeviceParameterView[] {
+    const device = findTrackLfoDevice(track)
+
+    return buildDeviceParameterViews(device, values, automatedIds, patternId)
+  }
+
   function buildSelectedTrackAudioEffectParameterViews(
     track: Track | undefined,
     values: Record<string, ParameterValue>,
@@ -825,6 +875,12 @@
   ): DeviceParameterView[] {
     return [
       ...buildSelectedTrackMidiDeviceParameterViews(
+        track,
+        values,
+        automatedIds,
+        patternId
+      ),
+      ...buildSelectedTrackLfoParameterViews(
         track,
         values,
         automatedIds,
@@ -900,6 +956,10 @@
     track: Track | undefined
   ): SelectableMidiDeviceKind | undefined {
     return findTrackArpeggiatorDevice(track) ? 'arpeggiator' : undefined
+  }
+
+  function selectedTrackHasLfo(track: Track | undefined): boolean {
+    return Boolean(findTrackLfoDevice(track))
   }
 
   function selectedTrackAudioEffectKind(
@@ -996,6 +1056,18 @@
     return undefined
   }
 
+  function findTrackLfoDevice(
+    track: Track | undefined
+  ): DeviceInstance | undefined {
+    for (const deviceId of deviceChainForTrack(track)) {
+      const device = store.document.deviceInstances.find(deviceId)
+
+      if (device?.descriptorKey === LFO_DESCRIPTOR.key) return device
+    }
+
+    return undefined
+  }
+
   function findTrackDelayDevice(
     track: Track | undefined
   ): DeviceInstance | undefined {
@@ -1006,6 +1078,38 @@
     }
 
     return undefined
+  }
+
+  function buildLfoModulationTargetOptions(
+    track: Track | undefined
+  ): LfoModulationTargetOption[] {
+    const options: LfoModulationTargetOption[] = []
+    const lfo = findTrackLfoDevice(track)
+
+    for (const deviceId of deviceChainForTrack(track)) {
+      if (deviceId === lfo?.id) continue
+
+      const device = store.document.deviceInstances.find(deviceId)
+      const descriptor = device
+        ? DEVICE_DESCRIPTORS_BY_KEY.get(device.descriptorKey)
+        : undefined
+
+      if (!device || !descriptor) continue
+      if (!descriptor.capabilities.includes('automation-target')) continue
+
+      for (const parameter of descriptor.parameters) {
+        if (parameter.kind !== 'number') continue
+
+        options.push({
+          id: `${device.id}:${parameter.key}`,
+          deviceId: device.id,
+          parameterKey: parameter.key,
+          label: `${device.name} / ${parameter.name}`
+        })
+      }
+    }
+
+    return options
   }
 
   function deviceChainForTrack(track: Track | undefined): string[] {
@@ -1121,14 +1225,36 @@
 
   function attachTrackMidiDevice(kind: SelectableMidiDeviceKind) {
     if (!selectedTrack) return undefined
-    if (kind !== 'arpeggiator') return undefined
-    if (findTrackArpeggiatorDevice(selectedTrack)) return undefined
+    if (kind === 'arpeggiator' && findTrackArpeggiatorDevice(selectedTrack)) {
+      return undefined
+    }
+    if (kind === 'lfo' && findTrackLfoDevice(selectedTrack)) {
+      return undefined
+    }
 
+    const descriptor =
+      kind === 'lfo' ? LFO_DESCRIPTOR : ARPEGGIATOR_DESCRIPTOR
     const device = createDeviceInstance(
-      ARPEGGIATOR_DESCRIPTOR,
-      ARPEGGIATOR_DESCRIPTOR.name
+      descriptor,
+      descriptor.name
     ) as DeviceInstance
-    const nextChain = [device.id, ...deviceChainForTrack(selectedTrack)]
+    const chain = deviceChainForTrack(selectedTrack)
+    const firstInstrumentIndex = chain.findIndex((deviceId) => {
+      const chainDevice = store.document.deviceInstances.find(deviceId)
+      const chainDescriptor = chainDevice
+        ? DEVICE_DESCRIPTORS_BY_KEY.get(chainDevice.descriptorKey)
+        : undefined
+
+      return chainDescriptor?.capabilities.includes('instrument')
+    })
+    const nextChain =
+      firstInstrumentIndex === -1
+        ? [...chain, device.id]
+        : [
+            ...chain.slice(0, firstInstrumentIndex),
+            device.id,
+            ...chain.slice(firstInstrumentIndex)
+          ]
 
     controller.addDeviceInstance(device)
     controller.setTrackDeviceChain(selectedTrack.id, nextChain)
@@ -1137,14 +1263,16 @@
 
   function removeTrackMidiDevice(kind: SelectableMidiDeviceKind) {
     if (!selectedTrack) return
-    if (kind !== 'arpeggiator') return
 
-    const arpeggiator = findTrackArpeggiatorDevice(selectedTrack)
+    const midiDevice =
+      kind === 'lfo'
+        ? findTrackLfoDevice(selectedTrack)
+        : findTrackArpeggiatorDevice(selectedTrack)
 
-    if (!arpeggiator) return
+    if (!midiDevice) return
 
     const nextChain = deviceChainForTrack(selectedTrack).filter(
-      (deviceId) => deviceId !== arpeggiator.id
+      (deviceId) => deviceId !== midiDevice.id
     )
 
     controller.setTrackDeviceChain(selectedTrack.id, nextChain)
@@ -2294,6 +2422,10 @@
       {selectedTrackDeviceParameterViews}
       selectedTrackMidiDeviceKind={selectedTrackMidiDeviceKind(selectedTrack)}
       {selectedTrackMidiDeviceParameterViews}
+      selectedTrackHasLfo={selectedTrackHasLfo(selectedTrack)}
+      selectedTrackLfoDevice={findTrackLfoDevice(selectedTrack)}
+      {selectedTrackLfoParameterViews}
+      {lfoModulationTargetOptions}
       selectedTrackAudioEffectKind={selectedTrackAudioEffectKind(selectedTrack)}
       {selectedTrackAudioEffectParameterViews}
       samplerSampleName={buildSelectedSamplerSampleName(selectedTrack)}

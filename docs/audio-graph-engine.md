@@ -30,6 +30,21 @@ The current `DeviceDescriptor`, `DeviceInstance`, `RuntimeDevice`, and playback
 event path remain the creative-facing contract while the graph engine is
 introduced.
 
+Graph presets on device descriptors should be treated as reusable graph
+fragments, not as the final execution owner. A device can describe its internal
+fragment, but the device chain assembles the executable track graph:
+
+```text
+Track
+  -> Device Chain
+  -> Track Graph
+  -> Executor
+```
+
+This keeps linear chains, modulation routing, sends, parallel paths, and
+sidechains in one schedulable graph instead of scattering ownership across
+individual devices.
+
 Today, instruments such as Basic Synth and Sampler are hardcoded runtime device
 classes. The graph engine moves those instruments toward graph presets assembled
 from reusable nodes:
@@ -203,6 +218,17 @@ Milestones:
 6. Route current RuntimeDevice voice actions into graph executor commands.
 7. Move Basic Synth and Sampler runtime behavior to graph-backed execution.
 8. Add a native adapter that consumes the same runtime graph and command stream.
+
+Current bridge milestone:
+
+```text
+Device graph presets
+  -> buildDeviceChainGraph(...)
+  -> track-level RuntimeAudioGraph diagnostics
+```
+
+This composes MIDI effects, instruments, and audio effects into one track graph
+while the existing runtime device path continues to execute sound generation.
 
 The current hardcoded devices can remain in place until graph-backed devices
 match their behavior.

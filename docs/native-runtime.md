@@ -76,6 +76,12 @@ Native work should attach below these contracts. It should not bypass them.
 Current Phase 9 implementation status is tracked in
 `docs/native-runtime-status.md`.
 
+The real-time runtime target is tracked in
+`docs/real-time-native-runtime.md`. That document supersedes the earlier
+"scheduler as replaceable event emitter" framing for native audio playback: the
+native audio callback should become the authoritative audio clock, with the
+sample-domain scheduler physically colocated with the native graph executor.
+
 ## Native Scheduler
 
 The current TypeScript scheduler is the reference implementation. A native

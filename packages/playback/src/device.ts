@@ -1,7 +1,9 @@
 import {
   DeviceRegistry,
   RuntimeDeviceRegistry,
+  clearRuntimeParameterModulation,
   getRuntimeParameter,
+  setRuntimeParameterModulation,
   setRuntimeParameterValue,
   type DeviceFactory,
   type DeviceInstance,
@@ -108,14 +110,16 @@ export class PlaybackDeviceManager {
     }
   }
 
-  advance(deltaMs: number): void {
+  advance(deltaMs: number, bpm?: number): void {
     if (!Number.isFinite(deltaMs) || deltaMs <= 0) return
 
     for (const device of this.runtimeDevices.values()) {
       if (hasAdvance(device)) {
-        device.advance(deltaMs)
+        device.advance(deltaMs, { bpm })
       }
     }
+
+    this.applyRuntimeModulations()
   }
 
   setRuntimeParameterValue(
@@ -203,6 +207,33 @@ export class PlaybackDeviceManager {
     return event.destination?.deviceInstanceId
       ? [event.destination.deviceInstanceId]
       : []
+  }
+
+  private applyRuntimeModulations(): void {
+    for (const device of this.runtimeDevices.values()) {
+      for (const parameter of device.parameters) {
+        if (typeof parameter.value === 'number') {
+          clearRuntimeParameterModulation(parameter)
+        }
+      }
+    }
+
+    for (const device of this.runtimeDevices.values()) {
+      if (!hasModulation(device)) continue
+
+      const modulation = device.consumeModulation()
+
+      if (!modulation) continue
+
+      const targetDevice = this.runtimeDevices.find(modulation.deviceInstanceId)
+      const targetParameter = targetDevice
+        ? getRuntimeParameter(targetDevice.parameters, modulation.parameterKey)
+        : undefined
+
+      if (!targetParameter || typeof targetParameter.value !== 'number') continue
+
+      setRuntimeParameterModulation(targetParameter, modulation.value)
+    }
   }
 }
 
@@ -313,10 +344,25 @@ function hasPanic(
 function hasAdvance(
   device: PlaybackRuntimeDevice
 ): device is PlaybackRuntimeDevice & {
-  advance(deltaMs: number): void
+  advance(deltaMs: number, context?: { readonly bpm?: number }): void
 } {
   return (
     'advance' in device &&
     typeof device.advance === 'function'
+  )
+}
+
+function hasModulation(
+  device: PlaybackRuntimeDevice
+): device is PlaybackRuntimeDevice & {
+  consumeModulation(): {
+    readonly deviceInstanceId: string
+    readonly parameterKey: string
+    readonly value: number
+  } | undefined
+} {
+  return (
+    'consumeModulation' in device &&
+    typeof device.consumeModulation === 'function'
   )
 }

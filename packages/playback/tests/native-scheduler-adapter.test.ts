@@ -7,7 +7,7 @@ import { NativeSchedulerAdapter } from '../src/native/NativeSchedulerAdapter.ts'
 import { WasmSchedulerAdapter } from '../src/native/WasmSchedulerAdapter.ts'
 import { midiMessagesForPlaybackEvent } from '../src/output/MidiMessages.ts'
 import { WebMidiOutput } from '../src/output/WebMidiOutput.ts'
-import type { DeviceCommand } from '../src/native/schemas.ts'
+import type { DeviceCommand, EngineCommand } from '../src/native/schemas.ts'
 import {
   createPanicDeviceCommand,
   voiceActionsToDeviceCommands
@@ -91,6 +91,26 @@ describe('NativeAudioAdapter', () => {
     assert.equal(adapter.status.receivedCommandCount, 2)
     assert.equal(adapter.status.lastCommand, commands[1])
     assert.equal(adapter.acks().length, 2)
+  })
+
+  it('acknowledges sample-timestamped engine parameter commands', () => {
+    const adapter = new NativeAudioAdapter()
+    const commands: EngineCommand[] = [
+      {
+        id: 'command-1',
+        type: 'parameter:ramp',
+        deviceInstanceId: 'device-1',
+        parameterKey: 'mix',
+        value: 0.75,
+        atSample: 1024,
+        rampSamples: 128,
+        timeMs: 0
+      }
+    ]
+
+    assert.deepEqual(adapter.handleCommands(commands), [
+      { commandId: 'command-1', type: 'parameter:ramp', accepted: true }
+    ])
   })
 })
 

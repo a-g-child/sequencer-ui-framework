@@ -1,10 +1,11 @@
 <script lang="ts">
   import type { Track } from '@sequencer/core'
-  import type {
-    DeviceInstance,
-    DeviceParameterDescriptor,
-    DeviceParameterValue,
-    SampleSlot
+  import {
+    LFO_DESCRIPTOR,
+    type DeviceInstance,
+    type DeviceParameterDescriptor,
+    type DeviceParameterValue,
+    type SampleSlot
   } from '@sequencer/device'
   import ParameterEditor from '../framework/parameter/ParameterEditor.svelte'
   import NumberParameter from '../framework/parameter/NumberParameter.svelte'
@@ -22,8 +23,15 @@
     label: string
   }
 
+  type LfoModulationTargetOption = {
+    id: string
+    deviceId: string
+    parameterKey: string
+    label: string
+  }
+
   type DeviceModuleKind = 'basic-synth' | 'sampler'
-  type MidiDeviceModuleKind = 'arpeggiator'
+  type MidiDeviceModuleKind = 'arpeggiator' | 'lfo'
   type AudioEffectModuleKind = 'delay'
 
   export let selectedTrack: Track | undefined = undefined
@@ -33,6 +41,10 @@
   export let selectedTrackDeviceParameterViews: DeviceParameterView[] = []
   export let selectedTrackMidiDeviceKind: MidiDeviceModuleKind | undefined = undefined
   export let selectedTrackMidiDeviceParameterViews: DeviceParameterView[] = []
+  export let selectedTrackHasLfo = false
+  export let selectedTrackLfoDevice: DeviceInstance | undefined = undefined
+  export let selectedTrackLfoParameterViews: DeviceParameterView[] = []
+  export let lfoModulationTargetOptions: LfoModulationTargetOption[] = []
   export let selectedTrackAudioEffectKind: AudioEffectModuleKind | undefined = undefined
   export let selectedTrackAudioEffectParameterViews: DeviceParameterView[] = []
   export let samplerSampleName = 'No sample'
@@ -178,6 +190,46 @@
     onSetDeviceParameterValue(parameter.device.id, parameter.descriptor.key, value)
   }
 
+  function setLfoParameter(key: string, value: DeviceParameterValue): void {
+    const parameter = lfoParameterViews.find(
+      (candidate) => candidate.descriptor.key === key
+    )
+    const deviceId = parameter?.device.id ?? selectedTrackLfoDevice?.id
+
+    if (!deviceId) return
+
+    onSetDeviceParameterValue(deviceId, key, value)
+  }
+
+  function setLfoTarget(event: Event): void {
+    const value = (event.currentTarget as HTMLSelectElement).value
+    const [deviceId = '', parameterKey = ''] = value.split(':')
+
+    setLfoParameter('targetDeviceId', deviceId)
+    setLfoParameter('targetParameterKey', parameterKey)
+  }
+
+  function buildLfoParameterViews(
+    suppliedDevice: DeviceInstance | undefined,
+    suppliedViews: DeviceParameterView[]
+  ): DeviceParameterView[] {
+    const lfoDevice = suppliedDevice ?? suppliedViews[0]?.device
+
+    if (!lfoDevice) return []
+
+    return LFO_DESCRIPTOR.parameters.map((descriptor) => {
+      const existing = suppliedViews.find(
+        (parameter) => parameter.descriptor.key === descriptor.key
+      )
+
+      return existing ?? {
+        device: lfoDevice,
+        descriptor,
+        value: lfoDevice.parameterValues[descriptor.key] ?? descriptor.defaultValue
+      }
+    })
+  }
+
   $: delayModeParameter = selectedTrackAudioEffectParameterViews.find(
     (parameter) => parameter.descriptor.key === 'timeMode'
   )
@@ -200,6 +252,25 @@
     delayFeedbackParameter,
     delayMixParameter
   ].filter((parameter): parameter is DeviceParameterView => Boolean(parameter))
+  $: lfoParameterViews = buildLfoParameterViews(
+    selectedTrackLfoDevice,
+    selectedTrackLfoParameterViews
+  )
+  $: lfoTargetDeviceParameter = lfoParameterViews.find(
+    (parameter) => parameter.descriptor.key === 'targetDeviceId'
+  )
+  $: lfoTargetParameterParameter = lfoParameterViews.find(
+    (parameter) => parameter.descriptor.key === 'targetParameterKey'
+  )
+  $: selectedLfoTargetId = [
+    String(lfoTargetDeviceParameter?.runtimeValue ?? lfoTargetDeviceParameter?.value ?? ''),
+    String(lfoTargetParameterParameter?.runtimeValue ?? lfoTargetParameterParameter?.value ?? '')
+  ].join(':')
+  $: lfoControlParameters = lfoParameterViews.filter(
+    (parameter) =>
+      parameter.descriptor.key !== 'targetDeviceId' &&
+      parameter.descriptor.key !== 'targetParameterKey'
+  )
 </script>
 
 <section class="track-modules" aria-label="Selected track options">
@@ -237,49 +308,119 @@
     {:else}
       <div class="device-chain">
         <section class="device-module midi-module" aria-label="MIDI device chain">
-          {#if selectedTrackMidiDeviceKind === 'arpeggiator'}
-            <div class="midi-device-heading">
-              <div>
-                <span>MIDI FX</span>
-                <strong>Arpeggiator</strong>
-              </div>
-              <button
-                type="button"
-                class="remove-device-button"
-                aria-label="Remove Arpeggiator"
-                title="Remove Arpeggiator"
-                on:click={() => onRemoveMidiDevice('arpeggiator')}
-              >
-                x
-              </button>
-            </div>
-            {#if selectedTrackMidiDeviceParameterViews.length > 0}
-              <div class="parameter-module-grid midi-parameter-grid">
-                {#each selectedTrackMidiDeviceParameterViews as parameter (`${parameter.device.id}:${parameter.descriptor.key}`)}
-                  <ParameterEditor
-                    descriptor={parameter.descriptor}
-                    value={parameter.runtimeValue ?? parameter.value}
-                    disabled={!selectedTrackId}
-                    automated={parameter.automated ?? false}
-                    onChange={(value) =>
-                      onSetDeviceParameterValue(
-                        parameter.device.id,
-                        parameter.descriptor.key,
-                        value
-                      )}
-                  />
-                {/each}
+          <div class="midi-device-stack">
+            {#if selectedTrackMidiDeviceKind === 'arpeggiator'}
+              <div class="midi-device-card">
+                <div class="midi-device-heading">
+                  <div>
+                    <span>MIDI FX</span>
+                    <strong>Arpeggiator</strong>
+                  </div>
+                  <button
+                    type="button"
+                    class="remove-device-button"
+                    aria-label="Remove Arpeggiator"
+                    title="Remove Arpeggiator"
+                    on:click={() => onRemoveMidiDevice('arpeggiator')}
+                  >
+                    x
+                  </button>
+                </div>
+                {#if selectedTrackMidiDeviceParameterViews.length > 0}
+                  <div class="parameter-module-grid midi-parameter-grid">
+                    {#each selectedTrackMidiDeviceParameterViews as parameter (`${parameter.device.id}:${parameter.descriptor.key}`)}
+                      <ParameterEditor
+                        descriptor={parameter.descriptor}
+                        value={parameter.runtimeValue ?? parameter.value}
+                        disabled={!selectedTrackId}
+                        automated={parameter.automated ?? false}
+                        onChange={(value) =>
+                          onSetDeviceParameterValue(
+                            parameter.device.id,
+                            parameter.descriptor.key,
+                            value
+                          )}
+                      />
+                    {/each}
+                  </div>
+                {/if}
               </div>
             {/if}
-          {:else}
-            <button
-              type="button"
-              class="insert-midi-device-button"
-              on:click={() => onAttachMidiDevice('arpeggiator')}
-            >
-              + Arp
-            </button>
-          {/if}
+
+            {#if selectedTrackHasLfo}
+              <div class="midi-device-card">
+                <div class="midi-device-heading">
+                  <div>
+                    <span>MIDI FX</span>
+                    <strong>LFO</strong>
+                  </div>
+                  <button
+                    type="button"
+                    class="remove-device-button"
+                    aria-label="Remove LFO"
+                    title="Remove LFO"
+                    on:click={() => onRemoveMidiDevice('lfo')}
+                  >
+                    x
+                  </button>
+                </div>
+
+                <div class="lfo-grid">
+                  <label class="lfo-target-parameter">
+                    <span>Target</span>
+                    <select
+                      disabled={!selectedTrackId || lfoModulationTargetOptions.length === 0}
+                      value={selectedLfoTargetId}
+                      on:change={setLfoTarget}
+                    >
+                      <option value=":">None</option>
+                      {#each lfoModulationTargetOptions as option (option.id)}
+                        <option value={`${option.deviceId}:${option.parameterKey}`}>
+                          {option.label}
+                        </option>
+                      {/each}
+                    </select>
+                  </label>
+
+                  {#each lfoControlParameters as parameter (`${parameter.device.id}:${parameter.descriptor.key}`)}
+                    <ParameterEditor
+                      descriptor={parameter.descriptor}
+                      value={parameter.runtimeValue ?? parameter.value}
+                      disabled={!selectedTrackId}
+                      automated={parameter.automated ?? false}
+                      onChange={(value) =>
+                        onSetDeviceParameterValue(
+                          parameter.device.id,
+                          parameter.descriptor.key,
+                          value
+                        )}
+                    />
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            <div class="insert-midi-device-grid">
+              {#if selectedTrackMidiDeviceKind !== 'arpeggiator'}
+                <button
+                  type="button"
+                  class="insert-midi-device-button"
+                  on:click={() => onAttachMidiDevice('arpeggiator')}
+                >
+                  + Arp
+                </button>
+              {/if}
+              {#if !selectedTrackHasLfo}
+                <button
+                  type="button"
+                  class="insert-midi-device-button"
+                  on:click={() => onAttachMidiDevice('lfo')}
+                >
+                  + LFO
+                </button>
+              {/if}
+            </div>
+          </div>
         </section>
 
         <section class="device-module instrument-module" aria-label="Instrument">
@@ -609,6 +750,57 @@
     min-width: 0;
     overflow-wrap: anywhere;
     font-size: var(--font-size-sm);
+  }
+
+  .midi-device-stack,
+  .midi-device-card,
+  .lfo-grid,
+  .insert-midi-device-grid {
+    min-width: 0;
+    display: grid;
+    gap: var(--spacing-sm);
+  }
+
+  .midi-device-card {
+    padding-bottom: var(--spacing-sm);
+    border-bottom: var(--border-width) solid var(--border);
+  }
+
+  .midi-device-card:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+
+  .lfo-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .lfo-target-parameter {
+    min-width: 0;
+    display: grid;
+    grid-column: 1 / -1;
+    gap: var(--spacing-2xs);
+    color: var(--muted);
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .lfo-target-parameter select {
+    min-width: 0;
+    min-height: var(--control-height-sm);
+    padding: 0 var(--spacing-xs);
+    border: var(--border-width) solid var(--border);
+    border-radius: var(--radius-control);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--font-size-xs);
+  }
+
+  .lfo-target-parameter select:focus {
+    outline: none;
+    border-color: var(--accent);
   }
 
   .insert-midi-device-button,

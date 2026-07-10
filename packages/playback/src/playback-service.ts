@@ -1,10 +1,19 @@
 import type { AssetReference } from '@sequencer/assets'
+import {
+  AudioGraphBuilder,
+  DEFAULT_AUDIO_NODE_DESCRIPTORS,
+  buildDeviceChainGraph,
+  type AudioGraphDiagnostic,
+  type RuntimeAudioGraph,
+  type RuntimeNodeDiagnostics
+} from '@sequencer/audio-graph'
 import type { DocumentObserver, Operation, Service, ServiceContext, ServiceEvent } from '@sequencer/core'
 import {
   ArpeggiatorFactory,
   BasicSynthFactory,
   DelayFactory,
   ExternalMidiFactory,
+  LfoFactory,
   SamplerFactory,
   getRuntimeParameterEffectiveValue
 } from '@sequencer/device'
@@ -57,6 +66,7 @@ export interface PlaybackServiceStatus extends SchedulerStatus {
   readonly outputManager: OutputManagerStatus
   readonly deviceManager: PlaybackDeviceManagerStatus
   readonly deviceDiagnostics: readonly PlaybackDeviceDiagnostics[]
+  readonly trackGraphDiagnostics: readonly PlaybackTrackGraphDiagnostics[]
   readonly voice?: PlaybackVoiceStatus
   readonly statistics: PlaybackOutputStatistics
   readonly webAudio: {
@@ -64,6 +74,22 @@ export interface PlaybackServiceStatus extends SchedulerStatus {
     readonly trackSettings: Readonly<Record<string, WebAudioOscillatorSettings>>
   }
   readonly webMidi: WebMidiOutputStatus
+}
+
+export interface PlaybackTrackGraphDiagnostics {
+  readonly trackId: string
+  readonly trackName: string
+  readonly graph: PlaybackRuntimeGraphDiagnostics
+}
+
+export interface PlaybackRuntimeGraphDiagnostics {
+  readonly presetId: string
+  readonly nodeCount: number
+  readonly connectionCount: number
+  readonly latencySamples: number
+  readonly executionOrder: readonly string[]
+  readonly diagnostics: readonly AudioGraphDiagnostic[]
+  readonly nodeDiagnostics: readonly RuntimeNodeDiagnostics[]
 }
 
 export interface PlaybackVoiceStatus {
@@ -84,6 +110,7 @@ export class PlaybackService implements Service, DocumentObserver {
   private runtimeBpm?: number
   private latestClockState: ClockState | undefined
   private readonly builder = new PlaybackModelBuilder()
+  private readonly trackGraphBuilder = new AudioGraphBuilder(DEFAULT_AUDIO_NODE_DESCRIPTORS)
   private readonly liveClips = new LiveClipService('bar')
   private readonly scheduler: Scheduler & { readonly status?: SchedulerStatus }
   private readonly deviceManager = new PlaybackDeviceManager()
@@ -141,6 +168,7 @@ export class PlaybackService implements Service, DocumentObserver {
       outputManager: this.outputManager.status,
       deviceManager: this.deviceManager.status,
       deviceDiagnostics: this.deviceManager.getDiagnostics(),
+      trackGraphDiagnostics: this.getTrackGraphDiagnostics(),
       voice: this.voiceStatus(),
       statistics: this.statisticsOutput.statistics,
       webAudio: this.webAudioOutput.settings,
@@ -247,7 +275,10 @@ export class PlaybackService implements Service, DocumentObserver {
     )
 
     if (applied) {
-      this.deviceManager.advance(20)
+      this.deviceManager.advance(
+        20,
+        this.runtimeBpm ?? this.context.documentStore.document.bpm
+      )
     }
 
     return applied
@@ -513,7 +544,10 @@ export class PlaybackService implements Service, DocumentObserver {
 
       const events = this.scheduler.tick(state)
       const dispatchTimeMs = nowMs()
-      this.deviceManager.advance(Math.max(0, state.timeMs - previousTimeMs))
+      this.deviceManager.advance(
+        Math.max(0, state.timeMs - previousTimeMs),
+        state.bpm
+      )
 
       this.statisticsOutput.recordSchedulerFrame({
         clockTimeMs: state.timeMs,
@@ -549,6 +583,7 @@ export class PlaybackService implements Service, DocumentObserver {
     this.deviceManager.register(new BasicSynthFactory<PlaybackEvent>())
     this.deviceManager.register(new DelayFactory<PlaybackEvent>())
     this.deviceManager.register(new ExternalMidiFactory<PlaybackEvent>())
+    this.deviceManager.register(new LfoFactory<PlaybackEvent>())
     this.deviceManager.register(new SamplerFactory<PlaybackEvent>())
     await this.rebuildRuntimeDevices()
   }
@@ -685,12 +720,89 @@ export class PlaybackService implements Service, DocumentObserver {
   private emitRuntimeParameterValues(state: ClockState): void {
     if (!this.model) return
 
-    const values = samplePlaybackAutomationValues(this.model, state.beat)
+    const values = [
+      ...samplePlaybackAutomationValues(this.model, state.beat),
+      ...this.sampleRuntimeDeviceParameterValues()
+    ]
 
     this.context?.events.emit<readonly PlaybackRuntimeParameterValue[]>({
       type: 'playback:runtime-parameters',
       serviceId: this.id,
       payload: values
+    })
+  }
+
+  private sampleRuntimeDeviceParameterValues(): PlaybackRuntimeParameterValue[] {
+    if (!this.model) return []
+
+    const trackIdByDeviceInstanceId = new Map<string, string>()
+
+    for (const track of this.model.tracks) {
+      for (const deviceId of deviceIdsForTrack(track)) {
+        trackIdByDeviceInstanceId.set(deviceId, track.id)
+      }
+    }
+
+    return this.deviceManager.runtimeDevices.values().flatMap((device) => {
+      const trackId = trackIdByDeviceInstanceId.get(device.instanceId)
+
+      if (!trackId) return []
+
+      return device.parameters.flatMap((parameter) => {
+        const value = getRuntimeParameterEffectiveValue(
+          device.parameters,
+          parameter.key
+        )
+
+        if (typeof value !== 'number' || !Number.isFinite(value)) return []
+
+        return [{
+          parameterId: deviceParameterId(device.instanceId, parameter.key),
+          parameterKey: parameter.key,
+          deviceInstanceId: device.instanceId,
+          trackId,
+          value
+        }]
+      })
+    })
+  }
+
+  private getTrackGraphDiagnostics(): PlaybackTrackGraphDiagnostics[] {
+    if (!this.context || !this.model) return []
+
+    const deviceInstances = this.context.documentStore.document.deviceInstances
+
+    return this.model.tracks.flatMap((track) => {
+      const fragments = deviceIdsForTrack(track).flatMap((deviceId) => {
+        const device = deviceInstances.find(deviceId)
+        const descriptor = device
+          ? this.deviceManager.devices.findFactory(device.descriptorKey)?.descriptor
+          : undefined
+
+        if (!device || !descriptor?.graphPreset) return []
+
+        return [{
+          id: device.id,
+          name: device.name,
+          graph: descriptor.graphPreset
+        }]
+      })
+
+      if (fragments.length === 0) return []
+
+      const graph = this.trackGraphBuilder.build(
+        buildDeviceChainGraph({
+          id: `track.${track.id}.chain`,
+          name: `${track.name} Chain`,
+          fragments
+        })
+      )
+
+      return [{
+        trackId: track.id,
+        trackName: track.name,
+        graph: runtimeGraphDiagnostics(graph)
+      }]
     })
   }
 
@@ -710,6 +822,20 @@ export type { PlaybackEvent }
 
 function nowMs(): number {
   return globalThis.performance?.now() ?? Date.now()
+}
+
+function runtimeGraphDiagnostics(
+  graph: RuntimeAudioGraph
+): PlaybackRuntimeGraphDiagnostics {
+  return {
+    presetId: graph.document.id,
+    nodeCount: graph.nodes.length,
+    connectionCount: graph.connections.length,
+    latencySamples: graph.latencySamples,
+    executionOrder: graph.executionOrder,
+    diagnostics: graph.diagnostics,
+    nodeDiagnostics: graph.nodeDiagnostics
+  }
 }
 
 function normalizeWebAudioWaveform(value: unknown): WebAudioWaveform {
@@ -811,12 +937,24 @@ function delayDivisionBeats(division: string): number {
 }
 
 function deviceIdsForTrack(track: {
+  readonly deviceInstanceIds?: readonly string[]
+  readonly deviceInstanceId?: string
   readonly deviceIds?: readonly string[]
   readonly deviceId?: string
 }): readonly string[] {
+  if (track.deviceInstanceIds && track.deviceInstanceIds.length > 0) {
+    return track.deviceInstanceIds
+  }
+
+  if (track.deviceInstanceId) return [track.deviceInstanceId]
+
   if (track.deviceIds && track.deviceIds.length > 0) return track.deviceIds
 
   return track.deviceId ? [track.deviceId] : []
+}
+
+function deviceParameterId(deviceInstanceId: string, parameterKey: string): string {
+  return `device:${deviceInstanceId}:${parameterKey}`
 }
 
 function isDeviceParameterOperation(

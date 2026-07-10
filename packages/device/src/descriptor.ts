@@ -8,6 +8,7 @@ export type DeviceCapability =
   | 'midi-output'
   | 'audio-output'
   | 'automation-target'
+  | 'modulation-source'
   | 'hardware-module'
   | 'network-device';
 

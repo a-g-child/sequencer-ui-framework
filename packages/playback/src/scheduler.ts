@@ -36,6 +36,7 @@ export type PlaybackRuntimeParameterValue = {
   readonly parameterId: string
   readonly parameterKey?: string
   readonly deviceInstanceId?: string
+  readonly automated?: boolean
   readonly value: number
   readonly trackId: string
 }
@@ -389,6 +390,7 @@ export function samplePlaybackAutomationValues(
       parameterId: lane.parameterId,
       parameterKey: lane.parameterKey,
       deviceInstanceId: lane.deviceInstanceId,
+      automated: true,
       trackId: lane.trackId,
       value
     }]

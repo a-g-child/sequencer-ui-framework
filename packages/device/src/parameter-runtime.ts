@@ -120,7 +120,11 @@ function updateRuntimeParameterEffectiveValue(parameter: RuntimeParameter): void
   }
 
   parameter.effectiveValue =
-    parameter.value + (parameter.modulationValue ?? 0);
+    clampRuntimeParameterValue(
+      parameter.value + (parameter.modulationValue ?? 0),
+      parameter.descriptor.min,
+      parameter.descriptor.max
+    );
 }
 
 function createRuntimeParameter(
@@ -142,4 +146,22 @@ function createRuntimeParameter(
     effectiveValue: value,
     smoothingMs: typeof value === 'number' ? 20 : undefined
   };
+}
+
+function clampRuntimeParameterValue(
+  value: number,
+  min: number | undefined,
+  max: number | undefined
+): number {
+  let nextValue = value;
+
+  if (typeof min === 'number') {
+    nextValue = Math.max(min, nextValue);
+  }
+
+  if (typeof max === 'number') {
+    nextValue = Math.min(max, nextValue);
+  }
+
+  return nextValue;
 }

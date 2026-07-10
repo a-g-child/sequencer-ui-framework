@@ -141,9 +141,10 @@ Replace the stub internals in this order:
 - Keep the TypeScript scheduler as the reference implementation until the WASM
   scheduler passes the shared suite.
 
-## Native Work Pause Point
+## Native Work Resume Point
 
-Phase 9 has done its job.
+Phase 9 has done its job, but the next native step should not be another
+replaceable prototype.
 
 Native execution can now enter through known seams:
 
@@ -159,12 +160,14 @@ Audio:
   -> NativeAudioAdapter
 ```
 
-The next best investment should return to musical and product value:
+The next best native investment is the real-time engine shell described in
+`docs/real-time-native-runtime.md`:
 
-- Web MIDI output
-- asset vocabulary
-- sampler device foundation
-- clip matrix polish
+- start an audio stream
+- output silence
+- own a monotonic sample counter
+- drain a real-time-safe command queue
+- publish telemetry for callback timing, xruns, queue depth, and sample position
 
-Those features can now grow with confidence that native execution has a place
-to attach later.
+That shell establishes the clock and callback discipline before oscillator,
+sampler, or effect DSP is moved into native code.

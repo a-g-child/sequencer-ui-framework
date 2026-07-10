@@ -7,6 +7,7 @@ import {
   DEFAULT_AUDIO_NODE_DESCRIPTORS,
   DELAY_AUDIO_GRAPH,
   SAMPLER_AUDIO_GRAPH,
+  buildDeviceChainGraph,
   type AudioGraphDocument,
   type AudioNodeDescriptor
 } from '../src/index.ts';
@@ -244,6 +245,66 @@ test('builds the Delay audio effect graph preset', () => {
     'delay',
     'audio-out'
   ]);
+});
+
+test('composes a track device chain graph from device graph fragments', () => {
+  const document = buildDeviceChainGraph({
+    id: 'track.track-1.chain',
+    name: 'Track 1 Chain',
+    fragments: [
+      { id: 'arp-1', graph: ARPEGGIATOR_MIDI_GRAPH },
+      { id: 'sampler-1', graph: SAMPLER_AUDIO_GRAPH },
+      { id: 'delay-1', graph: DELAY_AUDIO_GRAPH }
+    ]
+  });
+  const graph = new AudioGraphBuilder(DEFAULT_AUDIO_NODE_DESCRIPTORS).build(
+    document
+  );
+
+  assert.deepEqual(graph.diagnostics, []);
+  assert.deepEqual(
+    document.nodes.map((node) => node.id),
+    [
+      'track-midi-in',
+      'arp-1.arpeggiator',
+      'sampler-1.sample-player',
+      'sampler-1.amp-envelope',
+      'sampler-1.track-gain',
+      'sampler-1.pan',
+      'sampler-1.mixer',
+      'delay-1.delay',
+      'track-audio-out'
+    ]
+  );
+  assert.ok(
+    document.connections.some(
+      (connection) =>
+        connection.source.nodeId === 'arp-1.arpeggiator' &&
+        connection.source.portId === 'midi-out' &&
+        connection.target.nodeId === 'sampler-1.sample-player' &&
+        connection.target.portId === 'midi-in'
+    )
+  );
+  assert.ok(
+    document.connections.some(
+      (connection) =>
+        connection.source.nodeId === 'sampler-1.mixer' &&
+        connection.source.portId === 'audio-out' &&
+        connection.target.nodeId === 'delay-1.delay' &&
+        connection.target.portId === 'audio-in'
+    )
+  );
+  assert.ok(
+    document.connections.some(
+      (connection) =>
+        connection.source.nodeId === 'delay-1.delay' &&
+        connection.source.portId === 'audio-out' &&
+        connection.target.nodeId === 'track-audio-out' &&
+        connection.target.portId === 'audio-in'
+    )
+  );
+  assert.equal(graph.nodes.length, 9);
+  assert.equal(graph.connections.length, 9);
 });
 
 test('accepts matching audio, midi, and control port kinds', () => {

@@ -1,14 +1,14 @@
-import type { DeviceCommand, NativeAudioCommandAck } from './schemas.ts'
+import type { EngineCommand, NativeAudioCommandAck } from './schemas.ts'
 
 export interface NativeAudioAdapterStatus {
   readonly receivedCommandCount: number
-  readonly lastCommand?: DeviceCommand
+  readonly lastCommand?: EngineCommand
   readonly lastAck?: NativeAudioCommandAck
 }
 
 export class NativeAudioAdapter {
   private receivedCommandCount = 0
-  private lastCommand?: DeviceCommand
+  private lastCommand?: EngineCommand
   private lastAck?: NativeAudioCommandAck
   private readonly acknowledgedCommands: NativeAudioCommandAck[] = []
 
@@ -20,7 +20,7 @@ export class NativeAudioAdapter {
     }
   }
 
-  handleCommands(commands: readonly DeviceCommand[]): readonly NativeAudioCommandAck[] {
+  handleCommands(commands: readonly EngineCommand[]): readonly NativeAudioCommandAck[] {
     const acknowledgements = commands.map((command) => this.acknowledge(command))
 
     this.acknowledgedCommands.push(...acknowledgements)
@@ -38,7 +38,7 @@ export class NativeAudioAdapter {
     this.acknowledgedCommands.length = 0
   }
 
-  private acknowledge(command: DeviceCommand): NativeAudioCommandAck {
+  private acknowledge(command: EngineCommand): NativeAudioCommandAck {
     const ack = {
       commandId: command.id,
       type: command.type,
