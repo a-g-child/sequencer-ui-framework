@@ -1,3 +1,12 @@
+use std::{
+    cell::UnsafeCell,
+    mem::MaybeUninit,
+    sync::{
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc,
+    },
+};
+
 use engine_dsp::SmoothedParameter;
 use engine_protocol::{
     AudioBufferSlot, BufferSlotId, NativeExecutionPlan, NodeId, ParameterSlotId, PlanNodeKind,
@@ -25,6 +34,8 @@ pub struct ProcessRange {
 }
 
 pub struct PreparedExecutionPlan {
+    plan_id: u64,
+    plan_revision: u64,
     nodes: Box<[RuntimeNode]>,
     buffers: AudioBufferArena,
     parameters: Box<[RuntimeParameter]>,
@@ -126,6 +137,8 @@ impl PreparedExecutionPlan {
             .into_boxed_slice();
 
         Ok(Self {
+            plan_id: plan.plan_id,
+            plan_revision: plan.plan_revision,
             nodes,
             buffers,
             parameters,
@@ -187,6 +200,215 @@ impl PreparedExecutionPlan {
 
     pub fn maximum_frames(&self) -> usize {
         self.buffers.maximum_frames
+    }
+
+    pub fn plan_id(&self) -> u64 {
+        self.plan_id
+    }
+
+    pub fn plan_revision(&self) -> u64 {
+        self.plan_revision
+    }
+}
+
+pub const PREPARED_PLAN_TRANSFER_CAPACITY: usize = 4;
+pub const RETIRED_PLAN_TRANSFER_CAPACITY: usize = 4;
+
+pub struct PreparedPlanTransfer {
+    pub transfer_id: u64,
+    pub plan_id: u64,
+    pub plan_revision: u64,
+    pub plan: PreparedExecutionPlan,
+}
+
+pub struct RetiredExecutionPlan {
+    pub plan_id: u64,
+    pub plan_revision: u64,
+    pub plan: PreparedExecutionPlan,
+}
+
+pub struct PendingPlanSet {
+    slots: [Option<PreparedPlanTransfer>; PREPARED_PLAN_TRANSFER_CAPACITY],
+}
+
+impl Default for PendingPlanSet {
+    fn default() -> Self {
+        Self {
+            slots: std::array::from_fn(|_| None),
+        }
+    }
+}
+
+impl PendingPlanSet {
+    pub fn insert(&mut self, transfer: PreparedPlanTransfer) -> Result<(), PreparedPlanTransfer> {
+        if self.contains_transfer_id(transfer.transfer_id) {
+            return Err(transfer);
+        }
+
+        if let Some(slot) = self.slots.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(transfer);
+            return Ok(());
+        }
+
+        Err(transfer)
+    }
+
+    pub fn take(&mut self, transfer_id: u64) -> Option<PreparedPlanTransfer> {
+        let slot = self.slots.iter_mut().find(|slot| {
+            slot.as_ref()
+                .is_some_and(|slot| slot.transfer_id == transfer_id)
+        })?;
+
+        slot.take()
+    }
+
+    pub fn len(&self) -> usize {
+        self.slots.iter().filter(|slot| slot.is_some()).count()
+    }
+
+    pub fn contains_transfer_id(&self, transfer_id: u64) -> bool {
+        self.slots.iter().any(|slot| {
+            slot.as_ref()
+                .is_some_and(|slot| slot.transfer_id == transfer_id)
+        })
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.slots.iter().all(Option::is_some)
+    }
+}
+
+struct TransferQueue<T: Send, const N: usize> {
+    buffer: Box<[UnsafeCell<MaybeUninit<T>>]>,
+    head: AtomicUsize,
+    tail: AtomicUsize,
+    overflow_count: AtomicU64,
+}
+
+unsafe impl<T: Send, const N: usize> Send for TransferQueue<T, N> {}
+unsafe impl<T: Send, const N: usize> Sync for TransferQueue<T, N> {}
+
+impl<T: Send, const N: usize> TransferQueue<T, N> {
+    fn new() -> Self {
+        assert!(N > 1, "transfer queue capacity must be greater than one");
+
+        let mut buffer = Vec::with_capacity(N);
+
+        for _ in 0..N {
+            buffer.push(UnsafeCell::new(MaybeUninit::uninit()));
+        }
+
+        Self {
+            buffer: buffer.into_boxed_slice(),
+            head: AtomicUsize::new(0),
+            tail: AtomicUsize::new(0),
+            overflow_count: AtomicU64::new(0),
+        }
+    }
+
+    fn push(&self, value: T) -> Result<(), T> {
+        let head = self.head.load(Ordering::Relaxed);
+        let next_head = (head + 1) % N;
+
+        if next_head == self.tail.load(Ordering::Acquire) {
+            self.overflow_count.fetch_add(1, Ordering::Relaxed);
+            return Err(value);
+        }
+
+        unsafe {
+            (*self.buffer[head].get()).write(value);
+        }
+        self.head.store(next_head, Ordering::Release);
+        Ok(())
+    }
+
+    fn pop(&self) -> Option<T> {
+        let tail = self.tail.load(Ordering::Relaxed);
+
+        if tail == self.head.load(Ordering::Acquire) {
+            return None;
+        }
+
+        let value = unsafe { (*self.buffer[tail].get()).assume_init_read() };
+        self.tail.store((tail + 1) % N, Ordering::Release);
+
+        Some(value)
+    }
+
+    fn overflow_count(&self) -> u64 {
+        self.overflow_count.load(Ordering::Relaxed)
+    }
+}
+
+impl<T: Send, const N: usize> Drop for TransferQueue<T, N> {
+    fn drop(&mut self) {
+        while self.pop().is_some() {}
+    }
+}
+
+pub struct PreparedPlanSender {
+    queue: Arc<TransferQueue<PreparedPlanTransfer, PREPARED_PLAN_TRANSFER_CAPACITY>>,
+}
+
+pub struct PreparedPlanReceiver {
+    queue: Arc<TransferQueue<PreparedPlanTransfer, PREPARED_PLAN_TRANSFER_CAPACITY>>,
+}
+
+pub struct RetiredPlanSender {
+    queue: Arc<TransferQueue<RetiredExecutionPlan, RETIRED_PLAN_TRANSFER_CAPACITY>>,
+}
+
+pub struct RetiredPlanReceiver {
+    queue: Arc<TransferQueue<RetiredExecutionPlan, RETIRED_PLAN_TRANSFER_CAPACITY>>,
+}
+
+pub fn prepared_plan_transfer_queue() -> (PreparedPlanSender, PreparedPlanReceiver) {
+    let queue = Arc::new(TransferQueue::new());
+
+    (
+        PreparedPlanSender {
+            queue: queue.clone(),
+        },
+        PreparedPlanReceiver { queue },
+    )
+}
+
+pub fn retired_plan_queue() -> (RetiredPlanSender, RetiredPlanReceiver) {
+    let queue = Arc::new(TransferQueue::new());
+
+    (
+        RetiredPlanSender {
+            queue: queue.clone(),
+        },
+        RetiredPlanReceiver { queue },
+    )
+}
+
+impl PreparedPlanSender {
+    pub fn push(&self, transfer: PreparedPlanTransfer) -> Result<(), PreparedPlanTransfer> {
+        self.queue.push(transfer)
+    }
+
+    pub fn overflow_count(&self) -> u64 {
+        self.queue.overflow_count()
+    }
+}
+
+impl PreparedPlanReceiver {
+    pub fn pop(&self) -> Option<PreparedPlanTransfer> {
+        self.queue.pop()
+    }
+}
+
+impl RetiredPlanSender {
+    pub fn push(&self, retired: RetiredExecutionPlan) -> Result<(), RetiredExecutionPlan> {
+        self.queue.push(retired)
+    }
+}
+
+impl RetiredPlanReceiver {
+    pub fn pop(&self) -> Option<RetiredExecutionPlan> {
+        self.queue.pop()
     }
 }
 
@@ -525,6 +747,8 @@ mod tests {
     fn rejects_missing_output() {
         let plan = NativeExecutionPlan {
             version: NATIVE_EXECUTION_PLAN_VERSION,
+            plan_id: 1,
+            plan_revision: 1,
             nodes: vec![
                 PlanNode {
                     id: NODE_OSCILLATOR,

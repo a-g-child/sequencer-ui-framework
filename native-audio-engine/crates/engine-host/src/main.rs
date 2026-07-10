@@ -13,8 +13,8 @@ use engine_audio_io::{
     OutputStreamRequest,
 };
 use engine_core::{
-    engine_command_queue, engine_telemetry_queue, AudioEngine, PARAM_DIAGNOSTIC_FREQUENCY,
-    PARAM_DIAGNOSTIC_GAIN,
+    engine_command_queue, engine_telemetry_queue, prepared_plan_transfer_queue, retired_plan_queue,
+    AudioEngine, PARAM_DIAGNOSTIC_FREQUENCY, PARAM_DIAGNOSTIC_GAIN,
 };
 use engine_protocol::{diagnostic_tone_plan, EngineCommand, EngineEvent};
 
@@ -36,6 +36,8 @@ struct HostOptions {
     diagnostic_tone: bool,
     frequency_hz: f32,
     gain: f32,
+    swap_frequency_hz: Option<f32>,
+    swap_after_ms: Option<u64>,
 }
 
 impl Default for HostOptions {
@@ -51,6 +53,8 @@ impl Default for HostOptions {
             diagnostic_tone: false,
             frequency_hz: 440.0,
             gain: 0.05,
+            swap_frequency_hz: None,
+            swap_after_ms: None,
         }
     }
 }
@@ -94,6 +98,8 @@ fn run(options: HostOptions) -> Result<(), engine_audio_io::AudioDriverError> {
 
     let (command_sender, command_receiver) = engine_command_queue();
     let (telemetry_sender, telemetry_receiver) = engine_telemetry_queue();
+    let (prepared_plan_sender, prepared_plan_receiver) = prepared_plan_transfer_queue();
+    let (retired_plan_sender, retired_plan_receiver) = retired_plan_queue();
     let mut engine = AudioEngine::new();
 
     let request = OutputStreamRequest {
@@ -126,7 +132,9 @@ fn run(options: HostOptions) -> Result<(), engine_audio_io::AudioDriverError> {
             .expect("failed to prepare diagnostic tone execution plan");
     }
 
-    let engine = engine.with_realtime_queues(command_receiver, telemetry_sender);
+    let engine = engine
+        .with_realtime_queues(command_receiver, telemetry_sender)
+        .with_plan_transfer_queues(prepared_plan_receiver, retired_plan_sender);
 
     let active_stream = driver.start_output(request, Box::new(EngineProcessor::new(engine)))?;
 
@@ -183,14 +191,68 @@ fn run(options: HostOptions) -> Result<(), engine_audio_io::AudioDriverError> {
     }
 
     let started_at = std::time::Instant::now();
+    let mut swap_submitted = false;
 
     while !stop_requested.load(Ordering::SeqCst) {
         for event in driver.drain_events() {
             print_driver_event(event);
         }
 
+        while let Some(retired) = retired_plan_receiver.pop() {
+            println!(
+                "control event: retired plan {}:{}",
+                retired.plan_id, retired.plan_revision
+            );
+            drop(retired);
+        }
+
         while let Some(event) = telemetry_receiver.pop() {
             print_engine_event(event);
+        }
+
+        if options.diagnostic_tone
+            && !swap_submitted
+            && options
+                .swap_after_ms
+                .map(|swap_after_ms| started_at.elapsed() >= Duration::from_millis(swap_after_ms))
+                .unwrap_or(false)
+        {
+            if let Some(swap_frequency_hz) = options.swap_frequency_hz {
+                let maximum_frames = active_stream
+                    .requested_buffer_frames
+                    .map(|frames| frames.max(4096) as usize)
+                    .unwrap_or(4096);
+                let mut plan = diagnostic_tone_plan(swap_frequency_hz, 0.0, active_stream.channels);
+                let transfer_id = 1;
+
+                plan.plan_id = 1;
+                plan.plan_revision = 2;
+
+                let prepared = engine_core::PreparedExecutionPlan::prepare(&plan, maximum_frames)
+                    .expect("failed to prepare swap execution plan");
+                let requested_sample = options
+                    .swap_after_ms
+                    .map(|ms| active_stream.sample_rate as u64 * ms / 1_000)
+                    .unwrap_or(0);
+
+                if prepared_plan_sender
+                    .push(engine_core::PreparedPlanTransfer {
+                        transfer_id,
+                        plan_id: plan.plan_id,
+                        plan_revision: plan.plan_revision,
+                        plan: prepared,
+                    })
+                    .is_ok()
+                {
+                    let _ = command_sender.push(EngineCommand::SwapExecutionPlan {
+                        id: next_command_id,
+                        transfer_id,
+                        requested_sample,
+                    });
+                    next_command_id += 1;
+                    swap_submitted = true;
+                }
+            }
         }
 
         if options
@@ -278,6 +340,16 @@ fn parse_options(args: Vec<String>) -> Result<HostOptions, String> {
                 index += 1;
                 options.gain = parse_number(&value(&args, index, "--gain")?)?;
             }
+            "--swap-frequency" => {
+                index += 1;
+                options.swap_frequency_hz =
+                    Some(parse_number(&value(&args, index, "--swap-frequency")?)?);
+            }
+            "--swap-after-ms" => {
+                index += 1;
+                options.swap_after_ms =
+                    Some(parse_number(&value(&args, index, "--swap-after-ms")?)?);
+            }
             "--help" | "-h" => {
                 print_usage();
                 std::process::exit(0);
@@ -324,7 +396,8 @@ fn print_usage() {
 
 optional:
   --duration-ms 1000
-  --diagnostic-tone --frequency 440 --gain 0.05"
+  --diagnostic-tone --frequency 440 --gain 0.05
+  --swap-frequency 880 --swap-after-ms 500"
     );
 }
 
@@ -361,6 +434,17 @@ fn print_engine_event(event: EngineEvent) {
         }
         EngineEvent::TransportStateChanged { playing, at_sample } => {
             println!("engine event: transport playing={playing} at sample {at_sample}");
+        }
+        EngineEvent::ExecutionPlanSwapped {
+            command_id,
+            plan_id,
+            plan_revision,
+            requested_sample,
+            applied_sample,
+        } => {
+            println!(
+                "engine event: command {command_id} swapped to plan {plan_id}:{plan_revision}, requested {requested_sample}, applied {applied_sample}"
+            );
         }
         EngineEvent::StreamError { code } => {
             println!("engine event: stream error code {code}");

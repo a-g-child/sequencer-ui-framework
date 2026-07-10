@@ -19,6 +19,11 @@ pub enum EngineCommand {
         at_sample: u64,
         ramp_samples: u32,
     },
+    SwapExecutionPlan {
+        id: u64,
+        transfer_id: u64,
+        requested_sample: u64,
+    },
 }
 
 impl EngineCommand {
@@ -27,7 +32,8 @@ impl EngineCommand {
             Self::TransportStart { id, .. }
             | Self::TransportStop { id, .. }
             | Self::Panic { id, .. }
-            | Self::SetParameter { id, .. } => id,
+            | Self::SetParameter { id, .. }
+            | Self::SwapExecutionPlan { id, .. } => id,
         }
     }
 
@@ -37,6 +43,9 @@ impl EngineCommand {
             | Self::TransportStop { at_sample, .. }
             | Self::Panic { at_sample, .. }
             | Self::SetParameter { at_sample, .. } => at_sample,
+            Self::SwapExecutionPlan {
+                requested_sample, ..
+            } => requested_sample,
         }
     }
 }

@@ -16,6 +16,13 @@ pub enum EngineEvent {
         playing: bool,
         at_sample: u64,
     },
+    ExecutionPlanSwapped {
+        command_id: u64,
+        plan_id: u64,
+        plan_revision: u64,
+        requested_sample: u64,
+        applied_sample: u64,
+    },
     StreamError {
         code: u32,
     },
@@ -28,4 +35,8 @@ pub enum CommandRejection {
     PendingQueueFull,
     OutOfOrder,
     UnknownParameter,
+    MissingPreparedPlan,
+    DuplicatePreparedPlan,
+    PendingPlanFull,
+    RetirementQueueFull,
 }

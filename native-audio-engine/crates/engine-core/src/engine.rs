@@ -3,12 +3,13 @@ use std::time::Instant;
 use engine_dsp::{DiagnosticOscillator, PARAM_DIAGNOSTIC_FREQUENCY, PARAM_DIAGNOSTIC_GAIN};
 use engine_protocol::{
     AudioTelemetry, CommandDiagnostics, CommandRejection, EngineCommand, EngineEvent,
-    NativeExecutionPlan,
+    NativeExecutionPlan, RuntimePlanStatus,
 };
 
 use crate::{
-    EngineCommandReceiver, EngineTelemetrySender, PlanValidationError, PreparedExecutionPlan,
-    ProcessContext, ProcessRange,
+    EngineCommandReceiver, EngineTelemetrySender, PendingPlanSet, PlanValidationError,
+    PreparedExecutionPlan, PreparedPlanReceiver, ProcessContext, ProcessRange,
+    RetiredExecutionPlan, RetiredPlanSender,
 };
 
 const PENDING_COMMAND_CAPACITY: usize = 1024;
@@ -40,9 +41,15 @@ pub struct AudioEngine {
     last_parameter: Option<(u32, f32)>,
     diagnostic_signal: DiagnosticSignalState,
     execution_plan: Option<PreparedExecutionPlan>,
+    pending_plans: PendingPlanSet,
+    prepared_plan_receiver: Option<PreparedPlanReceiver>,
+    retired_plan_sender: Option<RetiredPlanSender>,
+    successful_plan_swaps: u64,
+    rejected_plan_swaps: u64,
     command_diagnostics: CommandDiagnostics,
     pending_commands: Vec<EngineCommand>,
     processing_commands: Vec<EngineCommand>,
+    block_commands: Vec<EngineCommand>,
     command_receiver: Option<EngineCommandReceiver>,
     telemetry_sender: Option<EngineTelemetrySender>,
     last_received_command_sample: Option<u64>,
@@ -66,9 +73,15 @@ impl AudioEngine {
             last_parameter: None,
             diagnostic_signal: DiagnosticSignalState::disabled(),
             execution_plan: None,
+            pending_plans: PendingPlanSet::default(),
+            prepared_plan_receiver: None,
+            retired_plan_sender: None,
+            successful_plan_swaps: 0,
+            rejected_plan_swaps: 0,
             command_diagnostics: CommandDiagnostics::default(),
             pending_commands: Vec::with_capacity(PENDING_COMMAND_CAPACITY),
             processing_commands: Vec::with_capacity(PENDING_COMMAND_CAPACITY),
+            block_commands: Vec::with_capacity(PENDING_COMMAND_CAPACITY),
             command_receiver: None,
             telemetry_sender: None,
             last_received_command_sample: None,
@@ -96,6 +109,16 @@ impl AudioEngine {
     ) -> Self {
         self.command_receiver = Some(command_receiver);
         self.telemetry_sender = Some(telemetry_sender);
+        self
+    }
+
+    pub fn with_plan_transfer_queues(
+        mut self,
+        prepared_plan_receiver: PreparedPlanReceiver,
+        retired_plan_sender: RetiredPlanSender,
+    ) -> Self {
+        self.prepared_plan_receiver = Some(prepared_plan_receiver);
+        self.retired_plan_sender = Some(retired_plan_sender);
         self
     }
 
@@ -135,6 +158,8 @@ impl AudioEngine {
 
         self.drain_command_queue();
         self.prepare_block_commands();
+        self.drain_plan_transfers();
+        self.apply_block_boundary_swaps(block_start, block_end);
         self.render_block(output, context, block_start, block_end);
 
         self.sample_position = self
@@ -172,12 +197,151 @@ impl AudioEngine {
                 .unwrap_or(0),
             pending_command_count: self.pending_commands.len() as u32,
             command_diagnostics: self.current_command_diagnostics(),
+            runtime_plan_status: self.runtime_plan_status(),
+        }
+    }
+
+    fn runtime_plan_status(&self) -> RuntimePlanStatus {
+        RuntimePlanStatus {
+            active_plan_id: self
+                .execution_plan
+                .as_ref()
+                .map(PreparedExecutionPlan::plan_id),
+            active_plan_revision: self
+                .execution_plan
+                .as_ref()
+                .map(PreparedExecutionPlan::plan_revision),
+            pending_plan_count: self.pending_plans.len() as u32,
+            successful_swaps: self.successful_plan_swaps,
+            rejected_swaps: self.rejected_plan_swaps,
         }
     }
 
     fn prepare_block_commands(&mut self) {
         self.processing_commands.clear();
         std::mem::swap(&mut self.pending_commands, &mut self.processing_commands);
+    }
+
+    fn drain_plan_transfers(&mut self) {
+        loop {
+            let transfer = self
+                .prepared_plan_receiver
+                .as_ref()
+                .and_then(PreparedPlanReceiver::pop);
+            let Some(transfer) = transfer else {
+                break;
+            };
+
+            let transfer_id = transfer.transfer_id;
+            let reason = if self.pending_plans.contains_transfer_id(transfer_id) {
+                CommandRejection::DuplicatePreparedPlan
+            } else if self.pending_plans.is_full() {
+                CommandRejection::PendingPlanFull
+            } else {
+                CommandRejection::PendingPlanFull
+            };
+
+            if let Err(transfer) = self.pending_plans.insert(transfer) {
+                self.rejected_plan_swaps = self.rejected_plan_swaps.saturating_add(1);
+                self.retire_unactivated_transfer(transfer);
+                self.publish_event(EngineEvent::CommandRejected {
+                    command_id: transfer_id,
+                    reason,
+                });
+            }
+        }
+    }
+
+    fn retire_unactivated_transfer(&mut self, transfer: crate::PreparedPlanTransfer) {
+        if let Some(sender) = self.retired_plan_sender.as_ref() {
+            let _ = sender.push(RetiredExecutionPlan {
+                plan_id: transfer.plan_id,
+                plan_revision: transfer.plan_revision,
+                plan: transfer.plan,
+            });
+        }
+    }
+
+    fn apply_block_boundary_swaps(&mut self, block_start: u64, _block_end: u64) {
+        self.pending_commands.clear();
+        self.block_commands.clear();
+
+        for index in 0..self.processing_commands.len() {
+            let command = self.processing_commands[index];
+
+            match command {
+                EngineCommand::SwapExecutionPlan {
+                    requested_sample, ..
+                } if requested_sample <= block_start => {
+                    self.apply_swap_command(command, block_start);
+                }
+                EngineCommand::SwapExecutionPlan { .. } => {
+                    self.pending_commands.push(command);
+                }
+                _ => {
+                    self.block_commands.push(command);
+                }
+            }
+        }
+
+        self.processing_commands.clear();
+        std::mem::swap(&mut self.block_commands, &mut self.processing_commands);
+    }
+
+    fn apply_swap_command(&mut self, command: EngineCommand, applied_sample: u64) {
+        let EngineCommand::SwapExecutionPlan {
+            id,
+            transfer_id,
+            requested_sample,
+        } = command
+        else {
+            return;
+        };
+        let Some(transfer) = self.pending_plans.take(transfer_id) else {
+            self.reject_swap_command(id, CommandRejection::MissingPreparedPlan);
+            return;
+        };
+
+        if let Some(old_plan) = self.execution_plan.take() {
+            let retired = RetiredExecutionPlan {
+                plan_id: old_plan.plan_id(),
+                plan_revision: old_plan.plan_revision(),
+                plan: old_plan,
+            };
+
+            let Some(sender) = self.retired_plan_sender.as_ref() else {
+                let _ = self.pending_plans.insert(transfer);
+                self.execution_plan = Some(retired.plan);
+                self.reject_swap_command(id, CommandRejection::RetirementQueueFull);
+                return;
+            };
+
+            if let Err(retired) = sender.push(retired) {
+                let _ = self.pending_plans.insert(transfer);
+                self.execution_plan = Some(retired.plan);
+                self.reject_swap_command(id, CommandRejection::RetirementQueueFull);
+                return;
+            }
+        }
+
+        let plan_id = transfer.plan_id;
+        let plan_revision = transfer.plan_revision;
+
+        self.execution_plan = Some(transfer.plan);
+        self.successful_plan_swaps = self.successful_plan_swaps.saturating_add(1);
+        self.command_diagnostics.applied = self.command_diagnostics.applied.saturating_add(1);
+        self.publish_event(EngineEvent::ExecutionPlanSwapped {
+            command_id: id,
+            plan_id,
+            plan_revision,
+            requested_sample,
+            applied_sample,
+        });
+    }
+
+    fn reject_swap_command(&mut self, command_id: u64, reason: CommandRejection) {
+        self.rejected_plan_swaps = self.rejected_plan_swaps.saturating_add(1);
+        self.reject_command(command_id, reason);
     }
 
     fn render_block(
@@ -422,6 +586,10 @@ impl AudioEngine {
 
                 self.last_parameter = Some((parameter_id, value));
             }
+            EngineCommand::SwapExecutionPlan { id, .. } => {
+                self.reject_swap_command(id, CommandRejection::MissingPreparedPlan);
+                return;
+            }
         }
 
         self.command_diagnostics.applied = self.command_diagnostics.applied.saturating_add(1);
@@ -487,6 +655,35 @@ mod tests {
     use super::*;
     use engine_protocol::diagnostic_tone_plan;
 
+    fn plan_with_identity(
+        plan_id: u64,
+        plan_revision: u64,
+        frequency_hz: f32,
+    ) -> NativeExecutionPlan {
+        let mut plan = diagnostic_tone_plan(frequency_hz, 0.05, 2);
+
+        plan.plan_id = plan_id;
+        plan.plan_revision = plan_revision;
+        plan
+    }
+
+    fn prepared_transfer(
+        transfer_id: u64,
+        plan_id: u64,
+        plan_revision: u64,
+        frequency_hz: f32,
+    ) -> crate::PreparedPlanTransfer {
+        let plan = plan_with_identity(plan_id, plan_revision, frequency_hz);
+        let prepared = PreparedExecutionPlan::prepare(&plan, 512).unwrap();
+
+        crate::PreparedPlanTransfer {
+            transfer_id,
+            plan_id,
+            plan_revision,
+            plan: prepared,
+        }
+    }
+
     fn process_block(engine: &mut AudioEngine, output: &mut [f32], frames: u32) -> AudioTelemetry {
         engine.process(
             output,
@@ -507,12 +704,28 @@ mod tests {
         output
     }
 
+    fn process_frames_telemetry(engine: &mut AudioEngine, frames: u32) -> AudioTelemetry {
+        let mut output = vec![0.0_f32; frames as usize * 2];
+
+        process_block(engine, &mut output, frames)
+    }
+
     fn frame_is_silent(output: &[f32], frame: usize) -> bool {
         output[frame * 2] == 0.0 && output[frame * 2 + 1] == 0.0
     }
 
     fn frame_has_signal(output: &[f32], frame: usize) -> bool {
         output[frame * 2] != 0.0 || output[frame * 2 + 1] != 0.0
+    }
+
+    fn next_swap_event(receiver: &crate::EngineTelemetryReceiver) -> Option<EngineEvent> {
+        while let Some(event) = receiver.pop() {
+            if matches!(event, EngineEvent::ExecutionPlanSwapped { .. }) {
+                return Some(event);
+            }
+        }
+
+        None
     }
 
     fn enqueue_parity_commands(command_sender: &crate::EngineCommandSender) {
@@ -1245,5 +1458,252 @@ mod tests {
             telemetry_receiver.pop(),
             Some(EngineEvent::StreamError { code: 1 })
         );
+    }
+
+    #[test]
+    fn execution_plan_swap_applies_at_next_block_boundary() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, telemetry_receiver) = crate::engine_telemetry_queue();
+        let (prepared_sender, prepared_receiver) = crate::prepared_plan_transfer_queue();
+        let (retired_sender, retired_receiver) = crate::retired_plan_queue();
+        let plan_a = plan_with_identity(1, 1, 220.0);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan_a, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender)
+            .with_plan_transfer_queues(prepared_receiver, retired_sender);
+
+        assert!(prepared_sender
+            .push(prepared_transfer(10, 2, 1, 440.0))
+            .is_ok());
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SwapExecutionPlan {
+                id: 2,
+                transfer_id: 10,
+                requested_sample: 100,
+            })
+            .unwrap();
+
+        let first = process_frames(&mut engine, 128);
+        let telemetry = process_block(&mut engine, &mut vec![0.0; 256], 128);
+
+        assert!(first.iter().any(|sample| *sample != 0.0));
+        assert_eq!(telemetry.runtime_plan_status.active_plan_id, Some(2));
+        assert_eq!(retired_receiver.pop().unwrap().plan_id, 1);
+        assert_eq!(
+            next_swap_event(&telemetry_receiver),
+            Some(EngineEvent::ExecutionPlanSwapped {
+                command_id: 2,
+                plan_id: 2,
+                plan_revision: 1,
+                requested_sample: 100,
+                applied_sample: 128
+            })
+        );
+    }
+
+    #[test]
+    fn execution_plan_swap_at_exact_boundary_applies_at_that_boundary() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, telemetry_receiver) = crate::engine_telemetry_queue();
+        let (prepared_sender, prepared_receiver) = crate::prepared_plan_transfer_queue();
+        let (retired_sender, _retired_receiver) = crate::retired_plan_queue();
+        let plan_a = plan_with_identity(1, 1, 220.0);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan_a, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender)
+            .with_plan_transfer_queues(prepared_receiver, retired_sender);
+
+        assert!(prepared_sender
+            .push(prepared_transfer(11, 2, 3, 440.0))
+            .is_ok());
+        command_sender
+            .push(EngineCommand::SwapExecutionPlan {
+                id: 3,
+                transfer_id: 11,
+                requested_sample: 128,
+            })
+            .unwrap();
+
+        process_frames(&mut engine, 128);
+        process_frames(&mut engine, 128);
+
+        assert_eq!(
+            next_swap_event(&telemetry_receiver),
+            Some(EngineEvent::ExecutionPlanSwapped {
+                command_id: 3,
+                plan_id: 2,
+                plan_revision: 3,
+                requested_sample: 128,
+                applied_sample: 128
+            })
+        );
+    }
+
+    #[test]
+    fn missing_execution_plan_transfer_rejects_without_changing_active_plan() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, telemetry_receiver) = crate::engine_telemetry_queue();
+        let (_prepared_sender, prepared_receiver) = crate::prepared_plan_transfer_queue();
+        let (retired_sender, _retired_receiver) = crate::retired_plan_queue();
+        let plan_a = plan_with_identity(1, 1, 220.0);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan_a, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender)
+            .with_plan_transfer_queues(prepared_receiver, retired_sender);
+
+        command_sender
+            .push(EngineCommand::SwapExecutionPlan {
+                id: 4,
+                transfer_id: 404,
+                requested_sample: 0,
+            })
+            .unwrap();
+
+        let telemetry = process_frames_telemetry(&mut engine, 128);
+
+        assert_eq!(telemetry.runtime_plan_status.active_plan_id, Some(1));
+        assert_eq!(telemetry.runtime_plan_status.rejected_swaps, 1);
+        assert_eq!(
+            telemetry_receiver.pop(),
+            Some(EngineEvent::CommandRejected {
+                command_id: 4,
+                reason: CommandRejection::MissingPreparedPlan
+            })
+        );
+    }
+
+    #[test]
+    fn duplicate_execution_plan_transfer_id_is_rejected() {
+        let (_command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, telemetry_receiver) = crate::engine_telemetry_queue();
+        let (prepared_sender, prepared_receiver) = crate::prepared_plan_transfer_queue();
+        let (retired_sender, retired_receiver) = crate::retired_plan_queue();
+        let mut engine = AudioEngine::new()
+            .with_realtime_queues(command_receiver, telemetry_sender)
+            .with_plan_transfer_queues(prepared_receiver, retired_sender);
+
+        assert!(prepared_sender
+            .push(prepared_transfer(77, 1, 1, 220.0))
+            .is_ok());
+        assert!(prepared_sender
+            .push(prepared_transfer(77, 2, 1, 440.0))
+            .is_ok());
+
+        let telemetry = process_frames_telemetry(&mut engine, 128);
+
+        assert_eq!(telemetry.runtime_plan_status.pending_plan_count, 1);
+        assert_eq!(telemetry.runtime_plan_status.rejected_swaps, 1);
+        assert_eq!(retired_receiver.pop().unwrap().plan_id, 2);
+        assert_eq!(
+            telemetry_receiver.pop(),
+            Some(EngineEvent::CommandRejected {
+                command_id: 77,
+                reason: CommandRejection::DuplicatePreparedPlan
+            })
+        );
+    }
+
+    #[test]
+    fn full_retirement_queue_rejects_swap_and_preserves_active_plan() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, telemetry_receiver) = crate::engine_telemetry_queue();
+        let (prepared_sender, prepared_receiver) = crate::prepared_plan_transfer_queue();
+        let (retired_sender, _retired_receiver) = crate::retired_plan_queue();
+
+        for index in 0..3 {
+            assert!(retired_sender
+                .push(crate::RetiredExecutionPlan {
+                    plan_id: 100 + index,
+                    plan_revision: 1,
+                    plan: PreparedExecutionPlan::prepare(
+                        &plan_with_identity(100 + index, 1, 110.0 + index as f32),
+                        512,
+                    )
+                    .unwrap(),
+                })
+                .is_ok());
+        }
+
+        let plan_a = plan_with_identity(1, 1, 220.0);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan_a, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender)
+            .with_plan_transfer_queues(prepared_receiver, retired_sender);
+
+        assert!(prepared_sender
+            .push(prepared_transfer(12, 2, 1, 440.0))
+            .is_ok());
+        command_sender
+            .push(EngineCommand::SwapExecutionPlan {
+                id: 5,
+                transfer_id: 12,
+                requested_sample: 0,
+            })
+            .unwrap();
+
+        let telemetry = process_frames_telemetry(&mut engine, 128);
+
+        assert_eq!(telemetry.runtime_plan_status.active_plan_id, Some(1));
+        assert_eq!(telemetry.runtime_plan_status.pending_plan_count, 1);
+        assert_eq!(
+            telemetry_receiver.pop(),
+            Some(EngineEvent::CommandRejected {
+                command_id: 5,
+                reason: CommandRejection::RetirementQueueFull
+            })
+        );
+    }
+
+    #[test]
+    fn multiple_execution_plan_swaps_retire_in_order() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let (prepared_sender, prepared_receiver) = crate::prepared_plan_transfer_queue();
+        let (retired_sender, retired_receiver) = crate::retired_plan_queue();
+        let plan_a = plan_with_identity(1, 1, 220.0);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan_a, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender)
+            .with_plan_transfer_queues(prepared_receiver, retired_sender);
+
+        assert!(prepared_sender
+            .push(prepared_transfer(20, 2, 1, 330.0))
+            .is_ok());
+        assert!(prepared_sender
+            .push(prepared_transfer(21, 3, 1, 440.0))
+            .is_ok());
+        command_sender
+            .push(EngineCommand::SwapExecutionPlan {
+                id: 6,
+                transfer_id: 20,
+                requested_sample: 128,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SwapExecutionPlan {
+                id: 7,
+                transfer_id: 21,
+                requested_sample: 256,
+            })
+            .unwrap();
+
+        process_frames(&mut engine, 128);
+        process_frames(&mut engine, 128);
+        let telemetry = process_frames_telemetry(&mut engine, 128);
+
+        assert_eq!(telemetry.runtime_plan_status.active_plan_id, Some(3));
+        assert_eq!(retired_receiver.pop().unwrap().plan_id, 1);
+        assert_eq!(retired_receiver.pop().unwrap().plan_id, 2);
     }
 }

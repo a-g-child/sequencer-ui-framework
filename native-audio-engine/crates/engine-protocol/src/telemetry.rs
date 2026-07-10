@@ -13,6 +13,7 @@ pub struct AudioTelemetry {
     pub command_queue_depth: u32,
     pub pending_command_count: u32,
     pub command_diagnostics: CommandDiagnostics,
+    pub runtime_plan_status: RuntimePlanStatus,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -24,4 +25,13 @@ pub struct CommandDiagnostics {
     pub out_of_order: u64,
     pub command_queue_overflows: u64,
     pub telemetry_queue_overflows: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RuntimePlanStatus {
+    pub active_plan_id: Option<u64>,
+    pub active_plan_revision: Option<u64>,
+    pub pending_plan_count: u32,
+    pub successful_swaps: u64,
+    pub rejected_swaps: u64,
 }

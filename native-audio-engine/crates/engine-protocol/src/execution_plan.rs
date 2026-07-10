@@ -14,6 +14,8 @@ pub type ParameterSlotId = u32;
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeExecutionPlan {
     pub version: u32,
+    pub plan_id: u64,
+    pub plan_revision: u64,
     pub nodes: Vec<PlanNode>,
     pub buffers: Vec<AudioBufferSlot>,
     pub parameters: Vec<ParameterSlot>,
@@ -74,6 +76,8 @@ pub fn diagnostic_tone_plan(
 ) -> NativeExecutionPlan {
     NativeExecutionPlan {
         version: NATIVE_EXECUTION_PLAN_VERSION,
+        plan_id: 1,
+        plan_revision: 1,
         nodes: vec![
             PlanNode {
                 id: NODE_OSCILLATOR,
