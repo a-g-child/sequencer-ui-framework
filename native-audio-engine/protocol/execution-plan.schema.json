@@ -3,16 +3,100 @@
   "$id": "https://sequencer.local/native-audio-engine/execution-plan.schema.json",
   "title": "NativeExecutionPlan",
   "type": "object",
-  "required": ["version", "nodes", "buffers", "parameters", "eventRoutes"],
+  "required": [
+    "version",
+    "nodes",
+    "buffers",
+    "parameters",
+    "audioExecutionOrder"
+  ],
   "properties": {
-    "version": { "type": "integer", "minimum": 1 },
-    "nodes": { "type": "array" },
-    "buffers": { "type": "array" },
-    "parameters": { "type": "array" },
-    "audioGroups": { "type": "array" },
-    "controlGroups": { "type": "array" },
-    "eventRoutes": { "type": "array" },
-    "latencySamples": { "type": "integer", "minimum": 0 }
+    "version": { "type": "integer", "const": 1 },
+    "nodes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/planNode" }
+    },
+    "buffers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/audioBufferSlot" }
+    },
+    "parameters": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/parameterSlot" }
+    },
+    "audioExecutionOrder": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 1 }
+    }
   },
-  "additionalProperties": true
+  "additionalProperties": false,
+  "$defs": {
+    "planNode": {
+      "type": "object",
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1 },
+        "kind": {
+          "oneOf": [
+            { "$ref": "#/$defs/oscillatorNode" },
+            { "$ref": "#/$defs/gainNode" },
+            { "$ref": "#/$defs/outputNode" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "oscillatorNode": {
+      "type": "object",
+      "required": ["type", "frequencyParameter", "outputBuffer"],
+      "properties": {
+        "type": { "const": "oscillator" },
+        "frequencyParameter": { "type": "integer", "minimum": 1 },
+        "outputBuffer": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "gainNode": {
+      "type": "object",
+      "required": ["type", "gainParameter", "inputBuffer", "outputBuffer"],
+      "properties": {
+        "type": { "const": "gain" },
+        "gainParameter": { "type": "integer", "minimum": 1 },
+        "inputBuffer": { "type": "integer", "minimum": 1 },
+        "outputBuffer": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "outputNode": {
+      "type": "object",
+      "required": ["type", "inputBuffer", "outputChannels"],
+      "properties": {
+        "type": { "const": "output" },
+        "inputBuffer": { "type": "integer", "minimum": 1 },
+        "outputChannels": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "audioBufferSlot": {
+      "type": "object",
+      "required": ["id", "channels"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1 },
+        "channels": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "parameterSlot": {
+      "type": "object",
+      "required": ["id", "node", "parameter", "defaultValue"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1 },
+        "node": { "type": "integer", "minimum": 1 },
+        "parameter": { "type": "integer", "minimum": 1 },
+        "defaultValue": { "type": "number" }
+      },
+      "additionalProperties": false
+    }
+  }
 }
+

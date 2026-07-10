@@ -3,9 +3,13 @@ use std::time::Instant;
 use engine_dsp::{DiagnosticOscillator, PARAM_DIAGNOSTIC_FREQUENCY, PARAM_DIAGNOSTIC_GAIN};
 use engine_protocol::{
     AudioTelemetry, CommandDiagnostics, CommandRejection, EngineCommand, EngineEvent,
+    NativeExecutionPlan,
 };
 
-use crate::{EngineCommandReceiver, EngineTelemetrySender, ProcessContext};
+use crate::{
+    EngineCommandReceiver, EngineTelemetrySender, PlanValidationError, PreparedExecutionPlan,
+    ProcessContext, ProcessRange,
+};
 
 const PENDING_COMMAND_CAPACITY: usize = 1024;
 
@@ -35,6 +39,7 @@ pub struct AudioEngine {
     playing: bool,
     last_parameter: Option<(u32, f32)>,
     diagnostic_signal: DiagnosticSignalState,
+    execution_plan: Option<PreparedExecutionPlan>,
     command_diagnostics: CommandDiagnostics,
     pending_commands: Vec<EngineCommand>,
     processing_commands: Vec<EngineCommand>,
@@ -60,6 +65,7 @@ impl AudioEngine {
             playing: false,
             last_parameter: None,
             diagnostic_signal: DiagnosticSignalState::disabled(),
+            execution_plan: None,
             command_diagnostics: CommandDiagnostics::default(),
             pending_commands: Vec::with_capacity(PENDING_COMMAND_CAPACITY),
             processing_commands: Vec::with_capacity(PENDING_COMMAND_CAPACITY),
@@ -72,6 +78,15 @@ impl AudioEngine {
     pub fn with_diagnostic_signal(mut self) -> Self {
         self.diagnostic_signal.enabled = true;
         self
+    }
+
+    pub fn with_execution_plan(
+        mut self,
+        plan: &NativeExecutionPlan,
+        maximum_frames: usize,
+    ) -> Result<Self, PlanValidationError> {
+        self.execution_plan = Some(PreparedExecutionPlan::prepare(plan, maximum_frames)?);
+        Ok(self)
     }
 
     pub fn with_realtime_queues(
@@ -174,6 +189,91 @@ impl AudioEngine {
     ) {
         output.fill(0.0);
 
+        if self.execution_plan.is_some() {
+            self.render_execution_plan(output, context, block_start, block_end);
+            return;
+        }
+
+        self.render_diagnostic_signal(output, context, block_start, block_end);
+    }
+
+    fn render_execution_plan(
+        &mut self,
+        output: &mut [f32],
+        context: ProcessContext,
+        block_start: u64,
+        block_end: u64,
+    ) {
+        let frame_count = context.frame_count as usize;
+
+        if self
+            .execution_plan
+            .as_ref()
+            .map(|plan| frame_count > plan.maximum_frames())
+            .unwrap_or(false)
+        {
+            self.stream_errors = self.stream_errors.saturating_add(1);
+            self.publish_event(EngineEvent::StreamError { code: 1 });
+            self.retain_all_processing_commands();
+            return;
+        }
+
+        let mut command_index = 0;
+        let mut current_frame = 0;
+
+        while current_frame < frame_count {
+            let sample_position = block_start.saturating_add(current_frame as u64);
+            command_index = self.apply_commands_until(command_index, block_start, sample_position);
+
+            let next_frame = self
+                .next_command_frame(command_index, block_start, block_end)
+                .unwrap_or(frame_count)
+                .min(frame_count);
+
+            if current_frame < next_frame && self.playing {
+                let range = ProcessRange {
+                    start_frame: current_frame,
+                    end_frame: next_frame,
+                };
+                let plan = self
+                    .execution_plan
+                    .as_mut()
+                    .expect("execution plan should exist while rendering");
+
+                plan.clear_range(range);
+                plan.process(
+                    output,
+                    context.sample_rate,
+                    context.output_channels.max(1) as usize,
+                    range,
+                );
+            }
+
+            current_frame = next_frame;
+        }
+
+        self.retain_future_commands(command_index, block_end);
+    }
+
+    fn next_command_frame(
+        &self,
+        command_index: usize,
+        block_start: u64,
+        block_end: u64,
+    ) -> Option<usize> {
+        self.processing_commands
+            .get(command_index)
+            .filter(|command| command.at_sample() < block_end)
+            .map(|command| command.at_sample().saturating_sub(block_start) as usize)
+    }
+
+    fn render_diagnostic_signal(
+        &mut self,
+        output: &mut [f32],
+        context: ProcessContext,
+        block_start: u64,
+        block_end: u64,
+    ) {
         let channels = context.output_channels.max(1) as usize;
         let frame_count = context.frame_count as usize;
         let mut command_index = 0;
@@ -240,6 +340,14 @@ impl AudioEngine {
         self.processing_commands.clear();
     }
 
+    fn retain_all_processing_commands(&mut self) {
+        for index in 0..self.processing_commands.len() {
+            self.pending_commands.push(self.processing_commands[index]);
+        }
+
+        self.processing_commands.clear();
+    }
+
     fn drain_command_queue(&mut self) {
         loop {
             let command = self
@@ -293,6 +401,9 @@ impl AudioEngine {
                 self.playing = false;
                 self.diagnostic_signal.panic_muted = true;
                 self.diagnostic_signal.oscillator.reset();
+                if let Some(plan) = self.execution_plan.as_mut() {
+                    plan.reset();
+                }
                 self.publish_event(EngineEvent::TransportStateChanged {
                     playing: false,
                     at_sample: applied_sample,
@@ -322,6 +433,10 @@ impl AudioEngine {
     }
 
     fn set_parameter(&mut self, parameter_id: u32, value: f32, ramp_samples: u32) -> bool {
+        if let Some(plan) = self.execution_plan.as_mut() {
+            return plan.set_parameter(parameter_id, value, ramp_samples);
+        }
+
         match parameter_id {
             PARAM_DIAGNOSTIC_FREQUENCY => {
                 self.diagnostic_signal.oscillator.set_frequency(value);
@@ -370,6 +485,7 @@ impl AudioEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine_protocol::diagnostic_tone_plan;
 
     fn process_block(engine: &mut AudioEngine, output: &mut [f32], frames: u32) -> AudioTelemetry {
         engine.process(
@@ -397,6 +513,82 @@ mod tests {
 
     fn frame_has_signal(output: &[f32], frame: usize) -> bool {
         output[frame * 2] != 0.0 || output[frame * 2 + 1] != 0.0
+    }
+
+    fn enqueue_parity_commands(command_sender: &crate::EngineCommandSender) {
+        command_sender
+            .push(EngineCommand::SetParameter {
+                id: 1,
+                parameter_id: PARAM_DIAGNOSTIC_FREQUENCY,
+                value: 440.0,
+                at_sample: 0,
+                ramp_samples: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetParameter {
+                id: 2,
+                parameter_id: PARAM_DIAGNOSTIC_GAIN,
+                value: 0.0,
+                at_sample: 0,
+                ramp_samples: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 3,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetParameter {
+                id: 4,
+                parameter_id: PARAM_DIAGNOSTIC_GAIN,
+                value: 0.2,
+                at_sample: 32,
+                ramp_samples: 48,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetParameter {
+                id: 5,
+                parameter_id: PARAM_DIAGNOSTIC_FREQUENCY,
+                value: 660.0,
+                at_sample: 100,
+                ramp_samples: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::Panic {
+                id: 6,
+                at_sample: 220,
+            })
+            .unwrap();
+    }
+
+    fn render_diagnostic_or_plan(use_plan: bool, groups: &[u32]) -> Vec<f32> {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine = AudioEngine::new();
+
+        if use_plan {
+            let plan = diagnostic_tone_plan(440.0, 0.05, 2);
+
+            engine = engine.with_execution_plan(&plan, 512).unwrap();
+        } else {
+            engine = engine.with_diagnostic_signal();
+        }
+
+        let mut engine = engine.with_realtime_queues(command_receiver, telemetry_sender);
+        let mut rendered = Vec::new();
+
+        enqueue_parity_commands(&command_sender);
+
+        for frames in groups {
+            rendered.extend(process_frames(&mut engine, *frames));
+        }
+
+        rendered
     }
 
     #[test]
@@ -1002,5 +1194,56 @@ mod tests {
         for (left, right) in a.iter().zip(b.iter()) {
             assert!((left - right).abs() < 0.000_000_1);
         }
+    }
+
+    #[test]
+    fn plan_driven_output_matches_diagnostic_signal_path() {
+        let diagnostic = render_diagnostic_or_plan(false, &[64, 192, 32, 224]);
+        let plan = render_diagnostic_or_plan(true, &[64, 192, 32, 224]);
+
+        assert_eq!(diagnostic.len(), plan.len());
+        for (diagnostic_sample, plan_sample) in diagnostic.iter().zip(plan.iter()) {
+            assert!((diagnostic_sample - plan_sample).abs() < 0.000_000_1);
+        }
+    }
+
+    #[test]
+    fn plan_driven_output_is_independent_of_callback_grouping() {
+        let a = render_diagnostic_or_plan(true, &[128, 128, 128, 128]);
+        let b = render_diagnostic_or_plan(true, &[64, 192, 32, 224]);
+
+        assert_eq!(a.len(), b.len());
+        for (left, right) in a.iter().zip(b.iter()) {
+            assert!((left - right).abs() < 0.000_000_1);
+        }
+    }
+
+    #[test]
+    fn plan_callback_over_capacity_outputs_silence_and_retains_commands() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, telemetry_receiver) = crate::engine_telemetry_queue();
+        let plan = diagnostic_tone_plan(440.0, 0.05, 2);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan, 64)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+        let mut output = vec![1.0_f32; 128 * 2];
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1000,
+                at_sample: 0,
+            })
+            .unwrap();
+
+        let telemetry = process_block(&mut engine, &mut output, 128);
+
+        assert!(output.iter().all(|sample| *sample == 0.0));
+        assert_eq!(telemetry.stream_errors, 1);
+        assert_eq!(telemetry.pending_command_count, 1);
+        assert_eq!(
+            telemetry_receiver.pop(),
+            Some(EngineEvent::StreamError { code: 1 })
+        );
     }
 }

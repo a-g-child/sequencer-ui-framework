@@ -16,7 +16,7 @@ use engine_core::{
     engine_command_queue, engine_telemetry_queue, AudioEngine, PARAM_DIAGNOSTIC_FREQUENCY,
     PARAM_DIAGNOSTIC_GAIN,
 };
-use engine_protocol::{EngineCommand, EngineEvent};
+use engine_protocol::{diagnostic_tone_plan, EngineCommand, EngineEvent};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DriverKind {
@@ -96,11 +96,6 @@ fn run(options: HostOptions) -> Result<(), engine_audio_io::AudioDriverError> {
     let (telemetry_sender, telemetry_receiver) = engine_telemetry_queue();
     let mut engine = AudioEngine::new();
 
-    if options.diagnostic_tone {
-        engine = engine.with_diagnostic_signal();
-    }
-
-    let engine = engine.with_realtime_queues(command_receiver, telemetry_sender);
     let request = OutputStreamRequest {
         device_id: options.device_id,
         preferred_sample_rate: options.sample_rate,
@@ -114,6 +109,24 @@ fn run(options: HostOptions) -> Result<(), engine_audio_io::AudioDriverError> {
         format_optional(request.preferred_buffer_frames),
         format_optional(request.preferred_channels)
     );
+
+    if options.diagnostic_tone {
+        let maximum_frames = request
+            .preferred_buffer_frames
+            .map(|frames| frames.max(4096) as usize)
+            .unwrap_or(4096);
+        let plan = diagnostic_tone_plan(
+            options.frequency_hz,
+            0.0,
+            request.preferred_channels.unwrap_or(2),
+        );
+
+        engine = engine
+            .with_execution_plan(&plan, maximum_frames)
+            .expect("failed to prepare diagnostic tone execution plan");
+    }
+
+    let engine = engine.with_realtime_queues(command_receiver, telemetry_sender);
 
     let active_stream = driver.start_output(request, Box::new(EngineProcessor::new(engine)))?;
 
