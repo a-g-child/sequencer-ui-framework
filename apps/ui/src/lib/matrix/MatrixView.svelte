@@ -37,15 +37,25 @@
   export let onToggleClipCopyMode: () => void
   export let onPasteClipToSlot: (trackId: string, slotIndex: number) => void
 
+  type MatrixDialKey = 'volume' | 'pan'
+
+  let matrixDialDrag:
+    | {
+        pointerId: number
+        trackId: string
+        key: MatrixDialKey
+        startY: number
+        startValue: number
+        min: number
+        max: number
+      }
+    | undefined
+
   function clipForSlot(
     matrixTrack: MatrixTrackView,
     slotIndex: number
   ): MatrixClipView | undefined {
     return matrixTrack.clips.find((clip) => clip.slotIndex === slotIndex)
-  }
-
-  function readNumber(event: Event): number {
-    return Number((event.currentTarget as HTMLInputElement).value)
   }
 
   function dialPercent(value: number, min: number, max: number): number {
@@ -54,10 +64,153 @@
     return Math.min(1, Math.max(0, (value - min) / (max - min)))
   }
 
+  function dialStyle(
+    value: number,
+    min: number,
+    max: number,
+    mode: MatrixDialKey
+  ): string {
+    const percent = dialPercent(value, min, max)
+    const dialDegrees = Number((percent * 270).toFixed(3))
+    const fillStart = mode === 'pan' ? Math.min(135, dialDegrees) : 0
+    const fillEnd = mode === 'pan' ? Math.max(135, dialDegrees) : dialDegrees
+
+    return [
+      `--dial-value: ${percent}`,
+      `--dial-fill-start: ${fillStart}deg`,
+      `--dial-fill-end: ${fillEnd}deg`
+    ].join(';')
+  }
+
   function panLabel(value: number): string {
     if (Math.abs(value) < 0.005) return 'C'
 
     return `${value < 0 ? 'L' : 'R'}${Math.round(Math.abs(value) * 100)}`
+  }
+
+  function beginMatrixDialDrag(
+    event: PointerEvent,
+    trackId: string,
+    key: MatrixDialKey,
+    value: number,
+    min: number,
+    max: number
+  ): void {
+    const target = event.currentTarget as HTMLElement
+
+    matrixDialDrag = {
+      pointerId: event.pointerId,
+      trackId,
+      key,
+      startY: event.clientY,
+      startValue: value,
+      min,
+      max
+    }
+    target.setPointerCapture(event.pointerId)
+  }
+
+  function dragMatrixDial(event: PointerEvent): void {
+    if (!matrixDialDrag || matrixDialDrag.pointerId !== event.pointerId) return
+
+    const target = event.currentTarget as HTMLElement
+
+    if (!target.hasPointerCapture(event.pointerId)) return
+
+    const range = matrixDialDrag.max - matrixDialDrag.min
+    const dragDistance = event.shiftKey ? 1000 : 200
+    const valueDelta = ((matrixDialDrag.startY - event.clientY) / dragDistance) *
+      range
+
+    setMatrixDialValue(
+      matrixDialDrag.trackId,
+      matrixDialDrag.key,
+      matrixDialDrag.startValue + valueDelta,
+      matrixDialDrag.min,
+      matrixDialDrag.max
+    )
+  }
+
+  function endMatrixDialDrag(event: PointerEvent): void {
+    if (!matrixDialDrag || matrixDialDrag.pointerId !== event.pointerId) return
+
+    const target = event.currentTarget as HTMLElement
+
+    if (target.hasPointerCapture(event.pointerId)) {
+      target.releasePointerCapture(event.pointerId)
+    }
+
+    matrixDialDrag = undefined
+  }
+
+  function handleMatrixDialKeydown(
+    event: KeyboardEvent,
+    trackId: string,
+    key: MatrixDialKey,
+    value: number,
+    min: number,
+    max: number
+  ): void {
+    const increment = event.shiftKey ? 0.001 : 0.01
+
+    if (event.key === 'ArrowUp' || event.key === 'ArrowRight') {
+      event.preventDefault()
+      setMatrixDialValue(trackId, key, value + increment, min, max)
+    }
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') {
+      event.preventDefault()
+      setMatrixDialValue(trackId, key, value - increment, min, max)
+    }
+
+    if (event.key === 'Home') {
+      event.preventDefault()
+      setMatrixDialValue(trackId, key, min, min, max)
+    }
+
+    if (event.key === 'End') {
+      event.preventDefault()
+      setMatrixDialValue(trackId, key, max, min, max)
+    }
+  }
+
+  function handleMatrixDialWheel(
+    event: WheelEvent,
+    trackId: string,
+    key: MatrixDialKey,
+    value: number,
+    min: number,
+    max: number
+  ): void {
+    event.preventDefault()
+    setMatrixDialValue(
+      trackId,
+      key,
+      value + (event.deltaY < 0 ? 0.01 : -0.01),
+      min,
+      max
+    )
+  }
+
+  function setMatrixDialValue(
+    trackId: string,
+    key: MatrixDialKey,
+    value: number,
+    min: number,
+    max: number
+  ): void {
+    if (!Number.isFinite(value)) return
+
+    const clampedValue = Math.min(max, Math.max(min, value))
+    const steppedValue = min + Math.round((clampedValue - min) / 0.01) * 0.01
+    const finalValue = Number(Math.min(max, Math.max(min, steppedValue)).toFixed(6))
+
+    if (key === 'volume') {
+      onSetTrackMixerValue(trackId, 'volume', finalValue)
+      return
+    }
+
+    onSetTrackMixerValue(trackId, 'pan', finalValue)
   }
 </script>
 
@@ -162,55 +315,107 @@
             <small>{matrixTrack.queuedLaunch}</small>
           </button>
           <div class="matrix-track-mixer" aria-label={`${matrixTrack.track.name} mixer`}>
-            <label
-              class="matrix-dial"
-              style={`--dial-value: ${dialPercent(matrixTrack.track.mixer.volume, 0, 1)};`}
+            <div
+              class="matrix-dial volume-dial"
+              style={dialStyle(matrixTrack.track.mixer.volume, 0, 1, 'volume')}
               title={`Volume ${Math.round(matrixTrack.track.mixer.volume * 100)}%`}
             >
-              <span class="matrix-dial-face" aria-hidden="true">
-                <span></span>
-              </span>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={matrixTrack.track.mixer.volume}
+              <button
+                type="button"
+                class="matrix-dial-button"
+                role="slider"
                 aria-label={`${matrixTrack.track.name} volume`}
-                on:input={(event) =>
-                  onSetTrackMixerValue(
+                aria-valuemin={0}
+                aria-valuemax={1}
+                aria-valuenow={matrixTrack.track.mixer.volume}
+                on:pointerdown={(event) =>
+                  beginMatrixDialDrag(
+                    event,
                     matrixTrack.track.id,
                     'volume',
-                    readNumber(event)
+                    matrixTrack.track.mixer.volume,
+                    0,
+                    1
                   )}
-              />
+                on:pointermove={dragMatrixDial}
+                on:pointerup={endMatrixDialDrag}
+                on:pointercancel={endMatrixDialDrag}
+                on:keydown={(event) =>
+                  handleMatrixDialKeydown(
+                    event,
+                    matrixTrack.track.id,
+                    'volume',
+                    matrixTrack.track.mixer.volume,
+                    0,
+                    1
+                  )}
+                on:wheel={(event) =>
+                  handleMatrixDialWheel(
+                    event,
+                    matrixTrack.track.id,
+                    'volume',
+                    matrixTrack.track.mixer.volume,
+                    0,
+                    1
+                  )}
+              >
+                <span class="matrix-dial-face" aria-hidden="true">
+                  <span></span>
+                </span>
+              </button>
               <small>Vol</small>
-            </label>
+            </div>
 
-            <label
-              class="matrix-dial"
-              style={`--dial-value: ${dialPercent(matrixTrack.track.mixer.pan, -1, 1)};`}
+            <div
+              class="matrix-dial pan-dial"
+              style={dialStyle(matrixTrack.track.mixer.pan, -1, 1, 'pan')}
               title={`Pan ${panLabel(matrixTrack.track.mixer.pan)}`}
             >
-              <span class="matrix-dial-face" aria-hidden="true">
-                <span></span>
-              </span>
-              <input
-                type="range"
-                min="-1"
-                max="1"
-                step="0.01"
-                value={matrixTrack.track.mixer.pan}
+              <button
+                type="button"
+                class="matrix-dial-button"
+                role="slider"
                 aria-label={`${matrixTrack.track.name} pan`}
-                on:input={(event) =>
-                  onSetTrackMixerValue(
+                aria-valuemin={-1}
+                aria-valuemax={1}
+                aria-valuenow={matrixTrack.track.mixer.pan}
+                on:pointerdown={(event) =>
+                  beginMatrixDialDrag(
+                    event,
                     matrixTrack.track.id,
                     'pan',
-                    readNumber(event)
+                    matrixTrack.track.mixer.pan,
+                    -1,
+                    1
                   )}
-              />
+                on:pointermove={dragMatrixDial}
+                on:pointerup={endMatrixDialDrag}
+                on:pointercancel={endMatrixDialDrag}
+                on:keydown={(event) =>
+                  handleMatrixDialKeydown(
+                    event,
+                    matrixTrack.track.id,
+                    'pan',
+                    matrixTrack.track.mixer.pan,
+                    -1,
+                    1
+                  )}
+                on:wheel={(event) =>
+                  handleMatrixDialWheel(
+                    event,
+                    matrixTrack.track.id,
+                    'pan',
+                    matrixTrack.track.mixer.pan,
+                    -1,
+                    1
+                  )}
+              >
+                <span class="matrix-dial-face" aria-hidden="true">
+                  <span></span>
+                </span>
+              </button>
               <small>Pan</small>
-            </label>
+            </div>
 
             <div class="matrix-track-switches">
               <button
@@ -377,17 +582,22 @@
     min-width: 0;
     overflow-x: auto;
     display: grid;
-    grid-template-columns: 132px;
-    grid-auto-columns: 176px;
+    grid-template-columns: 84px;
+    grid-auto-columns: 84px;
     grid-auto-flow: column;
-    gap: var(--spacing-sm);
+    gap: var(--spacing-xs);
     padding-bottom: var(--spacing-xs);
   }
 
   .matrix-track {
     min-width: 0;
-    width: 176px;
-    min-height: calc(92px + (var(--matrix-scene-count) * 74px));
+    width: 84px;
+    min-height: calc(
+      86px +
+      (var(--matrix-scene-count) * 38px) +
+      ((var(--matrix-scene-count) - 1) * 4px) +
+      (2 * var(--spacing-xs))
+    );
     border-left: var(--border-width) solid var(--border);
     display: grid;
     grid-template-rows: auto 1fr;
@@ -396,8 +606,13 @@
 
   .matrix-scenes {
     min-width: 0;
-    width: 132px;
-    min-height: calc(92px + (var(--matrix-scene-count) * 74px));
+    width: 84px;
+    min-height: calc(
+      86px +
+      (var(--matrix-scene-count) * 38px) +
+      ((var(--matrix-scene-count) - 1) * 4px) +
+      (2 * var(--spacing-xs))
+    );
     display: grid;
     grid-template-rows: auto 1fr;
     background: var(--surface-2);
@@ -411,8 +626,8 @@
   .matrix-track-header,
   .matrix-scene-header {
     min-width: 0;
-    min-height: 92px;
-    padding: var(--spacing-sm);
+    min-height: 116px;
+    padding: var(--spacing-xs);
     border: 0;
     border-bottom: var(--border-width) solid var(--border);
     border-radius: 0;
@@ -447,9 +662,10 @@
   .matrix-track-mixer {
     min-width: 0;
     display: grid;
-    grid-template-columns: repeat(2, 32px) minmax(0, 1fr);
+    grid-template-columns: repeat(2, 30px);
+    justify-content: start;
     align-items: end;
-    gap: var(--spacing-xs);
+    gap: var(--spacing-2xs) var(--spacing-xs);
   }
 
   .matrix-dial {
@@ -464,64 +680,100 @@
     text-transform: uppercase;
   }
 
+  .matrix-dial-button {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    cursor: ns-resize;
+    touch-action: none;
+  }
+
+  .matrix-dial-button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
   .matrix-dial-face {
     position: relative;
-    width: 28px;
-    height: 28px;
+    display: block;
+    width: 24px;
+    height: 24px;
+    margin: 3px;
     border: var(--border-width) solid var(--border-strong);
     border-radius: 50%;
     background:
       radial-gradient(circle at center, var(--surface-2) 0 44%, transparent 46%),
       conic-gradient(
-        var(--accent) calc(var(--dial-value) * 100%),
-        color-mix(in srgb, var(--border) 76%, transparent) 0
+        from -135deg,
+        transparent 0deg var(--dial-fill-start),
+        var(--accent) var(--dial-fill-start) var(--dial-fill-end),
+        transparent var(--dial-fill-end) 270deg,
+        transparent 270deg 360deg
+      ),
+      conic-gradient(
+        from -135deg,
+        color-mix(in srgb, var(--border) 76%, transparent) 0deg 270deg,
+        transparent 270deg 360deg
       );
   }
 
   .matrix-dial-face span {
     position: absolute;
-    top: 4px;
+    z-index: 2;
+    top: 3px;
     left: 50%;
     width: 2px;
-    height: 8px;
+    height: 7px;
     border-radius: 2px;
-    background: var(--text);
-    transform-origin: 50% 10px;
-    transform: translateX(-50%) rotate(calc((var(--dial-value) * 270deg) - 135deg));
+    background: var(--accent);
+    transform-origin: 50% 9px;
+    transform:
+      translateX(-50%)
+      rotate(calc((var(--dial-value) * 270deg) - 135deg));
   }
 
-  .matrix-dial input {
+  .matrix-dial-face::after {
+    content: '';
     position: absolute;
-    inset: 0;
-    width: 32px;
-    height: 32px;
-    margin: 0;
-    opacity: 0;
-    cursor: pointer;
+    z-index: 1;
+    top: 3px;
+    left: 50%;
+    width: 1px;
+    height: 5px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--text) 68%, transparent);
+    transform: translateX(-50%) rotate(var(--dial-origin, -135deg));
+    transform-origin: 50% 9px;
+  }
+
+  .volume-dial {
+    --dial-origin: -135deg;
+  }
+
+  .pan-dial {
+    --dial-origin: 0deg;
   }
 
   .matrix-track-switches {
-    min-width: 0;
+    grid-column: 1 / -1;
+    width: 100%;
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 3px;
   }
 
-  .matrix-scene-header button,
-  .matrix-scene-stop {
-    min-height: 24px;
-    padding: 0 var(--spacing-xs);
-    border-radius: var(--radius-control);
-    color: var(--muted);
-    font-size: 10px;
-    font-weight: 800;
-    text-transform: uppercase;
+  .matrix-scene-header button {
+    min-height: 16px;
+    padding: 0 var(--spacing-2xs);
+    font-size: 7px;
   }
 
   .matrix-scene-header button:hover,
   .matrix-scene-stop:hover {
     border-color: var(--accent);
-    color: var(--accent);
   }
 
   .matrix-track-switches button {
@@ -530,7 +782,7 @@
     padding: 0;
     border-radius: var(--radius-control);
     color: var(--muted);
-    font-size: 10px;
+    font-size: 8px;
     font-weight: 900;
     line-height: 1;
   }
@@ -570,33 +822,37 @@
     font-size: var(--font-size-xs);
   }
 
-  .matrix-clip-stack {
-    align-content: start;
-    display: grid;
-    padding: var(--spacing-sm);
-    gap: var(--spacing-xs);
-  }
-
+  .matrix-clip-stack,
   .matrix-scene-stack {
     align-content: start;
     display: grid;
-    gap: var(--spacing-xs);
-    padding: var(--spacing-sm);
+    grid-auto-rows: 38px;
+    gap: 4px;
+    padding: var(--spacing-xs);
   }
 
   .matrix-scene-row {
-    min-height: 68px;
+    height: 38px;
+    min-height: 38px;
     display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: var(--spacing-2xs);
+    grid-template-columns: minmax(0, 1fr) 18px;
+    gap: 2px;
   }
 
-  .matrix-clip,
+  .matrix-clip {
+    width: 100%;
+    height: 38px;
+    min-height: 38px;
+    padding: var(--spacing-xs);
+    border-radius: var(--radius-control);
+  }
+
   .matrix-add-clip {
     width: 100%;
-    min-height: 68px;
-    padding: var(--spacing-sm);
-    border-radius: var(--radius-md);
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
+    border-radius: var(--radius-control);
   }
 
   .matrix-clip {
@@ -611,21 +867,44 @@
 
   .matrix-scene-launch {
     min-width: 0;
-    min-height: 42px;
-    padding: var(--spacing-xs);
-    border-radius: var(--radius-md);
+    width: 100%;
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
+    border-radius: var(--radius-control);
     display: grid;
-    align-content: center;
-    gap: var(--spacing-2xs);
-    text-align: left;
+    place-items: center;
+  }
+
+  .matrix-scene-stop {
+    width: 18px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0;
+    border-radius: var(--radius-control);
+    overflow: hidden;
+    color: transparent;
+    font-size: 0;
+  }
+
+  .matrix-scene-stop::before {
+    content: '■';
+    color: var(--muted);
+    font-size: 7px;
+    line-height: 1;
+  }
+
+  .matrix-scene-stop:hover::before {
+    color: var(--accent);
+  }
+
+  .matrix-scene-stop:disabled::before {
+    opacity: 0.35;
   }
 
   .matrix-scene-launch span,
   .matrix-scene-launch small {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    display: none;
   }
 
   .matrix-scene-launch small {
@@ -661,8 +940,7 @@
 
   .matrix-clip > span:not(.matrix-clip-queue-progress):not(.matrix-clip-playhead),
   .matrix-clip small {
-    position: relative;
-    z-index: 2;
+    display: none;
   }
 
   .matrix-clip.active {
@@ -735,7 +1013,6 @@
   }
 
   .matrix-add-clip {
-    min-height: 42px;
     display: grid;
     place-items: center;
     color: var(--muted);
