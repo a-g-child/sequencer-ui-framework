@@ -45,12 +45,12 @@
   }
 
   .workbench-top {
-    min-height: var(--topbar-min-height);
-    padding: var(--spacing-xl) var(--spacing-2xl);
+    min-height: 0;
+    padding: var(--spacing-md) var(--spacing-lg);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--spacing-lg);
+    gap: var(--spacing-md);
   }
 
   .workbench-workspace {

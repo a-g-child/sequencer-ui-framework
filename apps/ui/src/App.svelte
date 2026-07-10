@@ -949,9 +949,7 @@
     controller.setRuntimeBpm(bpm)
   }
 
-  function setSwingAmount(event: Event) {
-    const amount = Number((event.currentTarget as HTMLInputElement).value) / 100
-
+  function setSwingAmount(amount: number) {
     if (!controller.setGrooveAmount(amount)) return
 
     syncView()
@@ -1888,8 +1886,7 @@
 
 <Workbench workspaceMode={viewMode === 'matrix' ? 'full' : 'split'}>
   <svelte:fragment slot="top">
-    <div>
-      <p class="eyebrow">Sequencer</p>
+    <div class="document-heading">
       <h1>{store.document.name}</h1>
     </div>
 
@@ -1908,13 +1905,85 @@
 
     <div class="toolbar" aria-label="Document operations">
       {#if viewMode === 'editor'}
-        <button type="button" on:click={showMatrixView}>Matrix</button>
+        <button
+          type="button"
+          class="toolbar-icon-button primary"
+          aria-label="Show matrix"
+          title="Show matrix"
+          on:click={showMatrixView}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 4h6v6H4z" />
+            <path d="M14 4h6v6h-6z" />
+            <path d="M4 14h6v6H4z" />
+            <path d="M14 14h6v6h-6z" />
+          </svg>
+        </button>
       {/if}
-      <button type="button" on:click={addTrack}>Add Track</button>
-      <button type="button" on:click={saveProject}>Save Project</button>
-      <button type="button" on:click={loadProject}>Load Project</button>
-      <button type="button" on:click={undo} disabled={!canUndo}>Undo</button>
-      <button type="button" on:click={redo} disabled={!canRedo}>Redo</button>
+      <button
+        type="button"
+        class="toolbar-icon-button"
+        aria-label="Add track"
+        title="Add track"
+        on:click={addTrack}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 5v14" />
+          <path d="M5 12h14" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="toolbar-icon-button"
+        aria-label="Save project"
+        title="Save project"
+        on:click={saveProject}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M5 4h12l2 2v14H5z" />
+          <path d="M8 4v6h8V4" />
+          <path d="M8 17h8" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="toolbar-icon-button"
+        aria-label="Load project"
+        title="Load project"
+        on:click={loadProject}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 19h16" />
+          <path d="M12 5v10" />
+          <path d="m8 11 4 4 4-4" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="toolbar-icon-button"
+        aria-label="Undo"
+        title="Undo"
+        on:click={undo}
+        disabled={!canUndo}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M9 7 5 11l4 4" />
+          <path d="M5 11h9a5 5 0 0 1 0 10h-2" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="toolbar-icon-button"
+        aria-label="Redo"
+        title="Redo"
+        on:click={redo}
+        disabled={!canRedo}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="m15 7 4 4-4 4" />
+          <path d="M19 11h-9a5 5 0 0 0 0 10h2" />
+        </svg>
+      </button>
       <span class="project-save-status">{projectPersistenceStatus}</span>
     </div>
   </svelte:fragment>
