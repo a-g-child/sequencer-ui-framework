@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use engine_dsp::{DiagnosticOscillator, PARAM_DIAGNOSTIC_FREQUENCY, PARAM_DIAGNOSTIC_GAIN};
 use engine_protocol::{
     AudioTelemetry, CommandDiagnostics, CommandRejection, EngineCommand, EngineEvent,
 };
@@ -7,6 +8,23 @@ use engine_protocol::{
 use crate::{EngineCommandReceiver, EngineTelemetrySender, ProcessContext};
 
 const PENDING_COMMAND_CAPACITY: usize = 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DiagnosticSignalState {
+    enabled: bool,
+    oscillator: DiagnosticOscillator,
+    panic_muted: bool,
+}
+
+impl DiagnosticSignalState {
+    fn disabled() -> Self {
+        Self {
+            enabled: false,
+            oscillator: DiagnosticOscillator::default(),
+            panic_muted: false,
+        }
+    }
+}
 
 pub struct AudioEngine {
     sample_position: u64,
@@ -16,6 +34,7 @@ pub struct AudioEngine {
     probable_xruns: u64,
     playing: bool,
     last_parameter: Option<(u32, f32)>,
+    diagnostic_signal: DiagnosticSignalState,
     command_diagnostics: CommandDiagnostics,
     pending_commands: Vec<EngineCommand>,
     processing_commands: Vec<EngineCommand>,
@@ -40,6 +59,7 @@ impl AudioEngine {
             probable_xruns: 0,
             playing: false,
             last_parameter: None,
+            diagnostic_signal: DiagnosticSignalState::disabled(),
             command_diagnostics: CommandDiagnostics::default(),
             pending_commands: Vec::with_capacity(PENDING_COMMAND_CAPACITY),
             processing_commands: Vec::with_capacity(PENDING_COMMAND_CAPACITY),
@@ -47,6 +67,11 @@ impl AudioEngine {
             telemetry_sender: None,
             last_received_command_sample: None,
         }
+    }
+
+    pub fn with_diagnostic_signal(mut self) -> Self {
+        self.diagnostic_signal.enabled = true;
+        self
     }
 
     pub fn with_realtime_queues(
@@ -71,6 +96,18 @@ impl AudioEngine {
         self.last_parameter
     }
 
+    pub fn diagnostic_frequency_hz(&self) -> f32 {
+        self.diagnostic_signal.oscillator.frequency_hz()
+    }
+
+    pub fn diagnostic_gain(&self) -> f32 {
+        self.diagnostic_signal.oscillator.gain()
+    }
+
+    pub fn diagnostic_phase(&self) -> f64 {
+        self.diagnostic_signal.oscillator.phase()
+    }
+
     pub fn command_diagnostics(&self) -> CommandDiagnostics {
         self.command_diagnostics
     }
@@ -78,13 +115,12 @@ impl AudioEngine {
     pub fn process(&mut self, output: &mut [f32], context: ProcessContext) -> AudioTelemetry {
         let started_at = Instant::now();
 
-        output.fill(0.0);
-
         let block_start = self.sample_position;
         let block_end = block_start.saturating_add(context.frame_count as u64);
 
         self.drain_command_queue();
-        self.apply_due_commands(block_start, block_end);
+        self.prepare_block_commands();
+        self.render_block(output, context, block_start, block_end);
 
         self.sample_position = self
             .sample_position
@@ -124,6 +160,86 @@ impl AudioEngine {
         }
     }
 
+    fn prepare_block_commands(&mut self) {
+        self.processing_commands.clear();
+        std::mem::swap(&mut self.pending_commands, &mut self.processing_commands);
+    }
+
+    fn render_block(
+        &mut self,
+        output: &mut [f32],
+        context: ProcessContext,
+        block_start: u64,
+        block_end: u64,
+    ) {
+        output.fill(0.0);
+
+        let channels = context.output_channels.max(1) as usize;
+        let frame_count = context.frame_count as usize;
+        let mut command_index = 0;
+
+        for frame in 0..frame_count {
+            let sample_position = block_start.saturating_add(frame as u64);
+
+            command_index = self.apply_commands_until(command_index, block_start, sample_position);
+
+            if self.playing && self.diagnostic_signal.enabled && !self.diagnostic_signal.panic_muted
+            {
+                let sample = self
+                    .diagnostic_signal
+                    .oscillator
+                    .next_sample(context.sample_rate);
+                let frame_start = frame * channels;
+                let frame_end = frame_start + channels;
+
+                for output_sample in &mut output[frame_start..frame_end] {
+                    *output_sample = sample;
+                }
+            }
+        }
+
+        self.retain_future_commands(command_index, block_end);
+    }
+
+    fn apply_commands_until(
+        &mut self,
+        mut command_index: usize,
+        block_start: u64,
+        sample_position: u64,
+    ) -> usize {
+        while command_index < self.processing_commands.len() {
+            let command = self.processing_commands[command_index];
+            let applied_sample = command.at_sample().max(block_start);
+
+            if applied_sample > sample_position {
+                break;
+            }
+
+            let late_by_samples = block_start.saturating_sub(command.at_sample());
+
+            if late_by_samples > 0 {
+                self.command_diagnostics.late = self.command_diagnostics.late.saturating_add(1);
+            }
+
+            self.apply_command(command, applied_sample, late_by_samples);
+            command_index += 1;
+        }
+
+        command_index
+    }
+
+    fn retain_future_commands(&mut self, command_index: usize, block_end: u64) {
+        for index in command_index..self.processing_commands.len() {
+            let command = self.processing_commands[index];
+
+            if command.at_sample() >= block_end {
+                self.pending_commands.push(command);
+            }
+        }
+
+        self.processing_commands.clear();
+    }
+
     fn drain_command_queue(&mut self) {
         loop {
             let command = self
@@ -156,41 +272,27 @@ impl AudioEngine {
         }
     }
 
-    fn apply_due_commands(&mut self, block_start: u64, block_end: u64) {
-        self.processing_commands.clear();
-        std::mem::swap(&mut self.pending_commands, &mut self.processing_commands);
-
-        for index in 0..self.processing_commands.len() {
-            let command = self.processing_commands[index];
-            if command.at_sample() >= block_end {
-                self.pending_commands.push(command);
-                continue;
-            }
-
-            let late_by_samples = block_start.saturating_sub(command.at_sample());
-            let applied_sample = command.at_sample().max(block_start);
-
-            if late_by_samples > 0 {
-                self.command_diagnostics.late = self.command_diagnostics.late.saturating_add(1);
-            }
-
-            self.apply_command(command, applied_sample, late_by_samples);
-        }
-
-        self.processing_commands.clear();
-    }
-
     fn apply_command(&mut self, command: EngineCommand, applied_sample: u64, late_by_samples: u64) {
         match command {
             EngineCommand::TransportStart { .. } => {
                 self.playing = true;
+                self.diagnostic_signal.panic_muted = false;
                 self.publish_event(EngineEvent::TransportStateChanged {
                     playing: true,
                     at_sample: applied_sample,
                 });
             }
-            EngineCommand::TransportStop { .. } | EngineCommand::Panic { .. } => {
+            EngineCommand::TransportStop { .. } => {
                 self.playing = false;
+                self.publish_event(EngineEvent::TransportStateChanged {
+                    playing: false,
+                    at_sample: applied_sample,
+                });
+            }
+            EngineCommand::Panic { .. } => {
+                self.playing = false;
+                self.diagnostic_signal.panic_muted = true;
+                self.diagnostic_signal.oscillator.reset();
                 self.publish_event(EngineEvent::TransportStateChanged {
                     playing: false,
                     at_sample: applied_sample,
@@ -199,8 +301,14 @@ impl AudioEngine {
             EngineCommand::SetParameter {
                 parameter_id,
                 value,
+                ramp_samples,
                 ..
             } => {
+                if !self.set_parameter(parameter_id, value, ramp_samples) {
+                    self.reject_command(command.id(), CommandRejection::UnknownParameter);
+                    return;
+                }
+
                 self.last_parameter = Some((parameter_id, value));
             }
         }
@@ -211,6 +319,22 @@ impl AudioEngine {
             applied_sample,
             late_by_samples,
         });
+    }
+
+    fn set_parameter(&mut self, parameter_id: u32, value: f32, ramp_samples: u32) -> bool {
+        match parameter_id {
+            PARAM_DIAGNOSTIC_FREQUENCY => {
+                self.diagnostic_signal.oscillator.set_frequency(value);
+                true
+            }
+            PARAM_DIAGNOSTIC_GAIN => {
+                self.diagnostic_signal
+                    .oscillator
+                    .set_gain_target(value, ramp_samples);
+                true
+            }
+            _ => false,
+        }
     }
 
     fn reject_command(&mut self, command_id: u64, reason: CommandRejection) {
@@ -257,6 +381,22 @@ mod tests {
                 output_channels: 2,
             },
         )
+    }
+
+    fn process_frames(engine: &mut AudioEngine, frames: u32) -> Vec<f32> {
+        let mut output = vec![0.0_f32; frames as usize * 2];
+
+        process_block(engine, &mut output, frames);
+
+        output
+    }
+
+    fn frame_is_silent(output: &[f32], frame: usize) -> bool {
+        output[frame * 2] == 0.0 && output[frame * 2 + 1] == 0.0
+    }
+
+    fn frame_has_signal(output: &[f32], frame: usize) -> bool {
+        output[frame * 2] != 0.0 || output[frame * 2 + 1] != 0.0
     }
 
     #[test]
@@ -322,7 +462,7 @@ mod tests {
         command_sender
             .push(EngineCommand::SetParameter {
                 id: 2,
-                parameter_id: 9,
+                parameter_id: PARAM_DIAGNOSTIC_GAIN,
                 value: 0.5,
                 at_sample: 44,
                 ramp_samples: 8,
@@ -331,7 +471,7 @@ mod tests {
 
         process_block(&mut engine, &mut output, 128);
 
-        assert_eq!(engine.last_parameter(), Some((9, 0.5)));
+        assert_eq!(engine.last_parameter(), Some((PARAM_DIAGNOSTIC_GAIN, 0.5)));
         assert_eq!(
             telemetry_receiver.pop(),
             Some(EngineEvent::CommandApplied {
@@ -376,7 +516,7 @@ mod tests {
         command_sender
             .push(EngineCommand::SetParameter {
                 id: 7,
-                parameter_id: 4,
+                parameter_id: PARAM_DIAGNOSTIC_GAIN,
                 value: 0.75,
                 at_sample: 64,
                 ramp_samples: 0,
@@ -385,7 +525,7 @@ mod tests {
 
         process_block(&mut engine, &mut output, 128);
 
-        assert_eq!(engine.last_parameter(), Some((4, 0.75)));
+        assert_eq!(engine.last_parameter(), Some((PARAM_DIAGNOSTIC_GAIN, 0.75)));
         assert_eq!(engine.command_diagnostics().late, 1);
         assert_eq!(
             telemetry_receiver.pop(),
@@ -442,7 +582,7 @@ mod tests {
             command_sender
                 .push(EngineCommand::SetParameter {
                     id,
-                    parameter_id: 5,
+                    parameter_id: PARAM_DIAGNOSTIC_GAIN,
                     value,
                     at_sample: 64,
                     ramp_samples: 0,
@@ -452,7 +592,7 @@ mod tests {
 
         process_block(&mut engine, &mut output, 128);
 
-        assert_eq!(engine.last_parameter(), Some((5, 0.3)));
+        assert_eq!(engine.last_parameter(), Some((PARAM_DIAGNOSTIC_GAIN, 0.3)));
         for id in [10, 11, 12] {
             assert_eq!(
                 telemetry_receiver.pop(),
@@ -476,7 +616,7 @@ mod tests {
         command_sender
             .push(EngineCommand::SetParameter {
                 id: 20,
-                parameter_id: 1,
+                parameter_id: PARAM_DIAGNOSTIC_FREQUENCY,
                 value: 0.25,
                 at_sample: 0,
                 ramp_samples: 0,
@@ -485,7 +625,7 @@ mod tests {
         command_sender
             .push(EngineCommand::SetParameter {
                 id: 21,
-                parameter_id: 2,
+                parameter_id: PARAM_DIAGNOSTIC_GAIN,
                 value: 0.5,
                 at_sample: 32,
                 ramp_samples: 0,
@@ -494,7 +634,7 @@ mod tests {
         command_sender
             .push(EngineCommand::SetParameter {
                 id: 22,
-                parameter_id: 3,
+                parameter_id: PARAM_DIAGNOSTIC_FREQUENCY,
                 value: 0.75,
                 at_sample: 96,
                 ramp_samples: 0,
@@ -530,7 +670,11 @@ mod tests {
             command_sender
                 .push(EngineCommand::SetParameter {
                     id: 31 + index,
-                    parameter_id: index as u32,
+                    parameter_id: if index % 2 == 0 {
+                        PARAM_DIAGNOSTIC_FREQUENCY
+                    } else {
+                        PARAM_DIAGNOSTIC_GAIN
+                    },
                     value: index as f32,
                     at_sample: 64,
                     ramp_samples: 0,
@@ -547,7 +691,11 @@ mod tests {
             command_sender
                 .push(EngineCommand::SetParameter {
                     id: 31 + index,
-                    parameter_id: index as u32,
+                    parameter_id: if index % 2 == 0 {
+                        PARAM_DIAGNOSTIC_FREQUENCY
+                    } else {
+                        PARAM_DIAGNOSTIC_GAIN
+                    },
                     value: index as f32,
                     at_sample: 112,
                     ramp_samples: 0,
@@ -587,7 +735,11 @@ mod tests {
             command_sender
                 .push(EngineCommand::SetParameter {
                     id: index,
-                    parameter_id: index as u32,
+                    parameter_id: if index % 2 == 0 {
+                        PARAM_DIAGNOSTIC_FREQUENCY
+                    } else {
+                        PARAM_DIAGNOSTIC_GAIN
+                    },
                     value: index as f32,
                     at_sample: 0,
                     ramp_samples: 0,
@@ -612,6 +764,243 @@ mod tests {
 
             assert_eq!(engine.sample_position(), expected);
             assert_eq!(telemetry.sample_position, expected);
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_parameter_ids() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine =
+            AudioEngine::new().with_realtime_queues(command_receiver, telemetry_sender);
+        let mut output = [0.0_f32; 256];
+
+        command_sender
+            .push(EngineCommand::SetParameter {
+                id: 500,
+                parameter_id: 999,
+                value: 1.0,
+                at_sample: 0,
+                ramp_samples: 0,
+            })
+            .unwrap();
+
+        process_block(&mut engine, &mut output, 128);
+
+        assert_eq!(engine.command_diagnostics().rejected, 1);
+        assert_eq!(
+            telemetry_receiver.pop(),
+            Some(EngineEvent::CommandRejected {
+                command_id: 500,
+                reason: CommandRejection::UnknownParameter
+            })
+        );
+    }
+
+    #[test]
+    fn diagnostic_signal_is_silent_while_stopped() {
+        let mut engine = AudioEngine::new().with_diagnostic_signal();
+        let output = process_frames(&mut engine, 512);
+
+        assert!(output.iter().all(|sample| *sample == 0.0));
+    }
+
+    #[test]
+    fn diagnostic_signal_starts_at_requested_sample_and_routes_stereo() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine = AudioEngine::new()
+            .with_diagnostic_signal()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 600,
+                at_sample: 128,
+            })
+            .unwrap();
+
+        let first = process_frames(&mut engine, 128);
+        let second = process_frames(&mut engine, 128);
+
+        assert!(first.iter().all(|sample| *sample == 0.0));
+        assert!((1..128).any(|frame| frame_has_signal(&second, frame)));
+
+        for frame in 0..128 {
+            assert_eq!(second[frame * 2], second[frame * 2 + 1]);
+        }
+    }
+
+    #[test]
+    fn diagnostic_gain_change_applies_at_exact_sample() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine = AudioEngine::new()
+            .with_diagnostic_signal()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::SetParameter {
+                id: 700,
+                parameter_id: PARAM_DIAGNOSTIC_GAIN,
+                value: 0.0,
+                at_sample: 0,
+                ramp_samples: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 701,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetParameter {
+                id: 702,
+                parameter_id: PARAM_DIAGNOSTIC_GAIN,
+                value: 1.0,
+                at_sample: 100,
+                ramp_samples: 0,
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 128);
+
+        assert!((0..100).all(|frame| frame_is_silent(&output, frame)));
+        assert!((101..128).any(|frame| frame_has_signal(&output, frame)));
+    }
+
+    #[test]
+    fn diagnostic_frequency_change_applies_inside_block() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine = AudioEngine::new()
+            .with_diagnostic_signal()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::SetParameter {
+                id: 800,
+                parameter_id: PARAM_DIAGNOSTIC_FREQUENCY,
+                value: 10.0,
+                at_sample: 0,
+                ramp_samples: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 801,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetParameter {
+                id: 802,
+                parameter_id: PARAM_DIAGNOSTIC_FREQUENCY,
+                value: 20.0,
+                at_sample: 50,
+                ramp_samples: 0,
+            })
+            .unwrap();
+
+        let mut output = vec![0.0_f32; 200];
+        engine.process(
+            &mut output,
+            ProcessContext {
+                block_start_sample: 0,
+                frame_count: 100,
+                sample_rate: 1_000.0,
+                output_channels: 2,
+            },
+        );
+
+        assert!((engine.diagnostic_phase() - 0.5).abs() < 0.000_000_1);
+    }
+
+    #[test]
+    fn diagnostic_panic_silences_from_scheduled_sample() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine = AudioEngine::new()
+            .with_diagnostic_signal()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 900,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::Panic {
+                id: 901,
+                at_sample: 64,
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 128);
+
+        assert!((1..64).any(|frame| frame_has_signal(&output, frame)));
+        assert!((64..128).all(|frame| frame_is_silent(&output, frame)));
+    }
+
+    #[test]
+    fn diagnostic_output_is_independent_of_callback_grouping() {
+        fn render_with_groups(groups: &[u32]) -> Vec<f32> {
+            let (command_sender, command_receiver) = crate::engine_command_queue();
+            let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+            let mut engine = AudioEngine::new()
+                .with_diagnostic_signal()
+                .with_realtime_queues(command_receiver, telemetry_sender);
+            let mut rendered = Vec::new();
+
+            command_sender
+                .push(EngineCommand::SetParameter {
+                    id: 1,
+                    parameter_id: PARAM_DIAGNOSTIC_FREQUENCY,
+                    value: 220.0,
+                    at_sample: 0,
+                    ramp_samples: 0,
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::SetParameter {
+                    id: 2,
+                    parameter_id: PARAM_DIAGNOSTIC_GAIN,
+                    value: 0.2,
+                    at_sample: 0,
+                    ramp_samples: 0,
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::TransportStart {
+                    id: 3,
+                    at_sample: 0,
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::SetParameter {
+                    id: 4,
+                    parameter_id: PARAM_DIAGNOSTIC_FREQUENCY,
+                    value: 330.0,
+                    at_sample: 192,
+                    ramp_samples: 0,
+                })
+                .unwrap();
+
+            for frames in groups {
+                rendered.extend(process_frames(&mut engine, *frames));
+            }
+
+            rendered
+        }
+
+        let a = render_with_groups(&[128, 128, 128, 128]);
+        let b = render_with_groups(&[64, 192, 32, 224]);
+
+        assert_eq!(a.len(), b.len());
+        for (left, right) in a.iter().zip(b.iter()) {
+            assert!((left - right).abs() < 0.000_000_1);
         }
     }
 }

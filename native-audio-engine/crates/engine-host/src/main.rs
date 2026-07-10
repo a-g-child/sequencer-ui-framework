@@ -12,7 +12,10 @@ use engine_audio_io::{
     AudioDriver, AudioDriverEvent, CpalAudioDriver, EngineProcessor, NullAudioDriver,
     OutputStreamRequest,
 };
-use engine_core::{engine_command_queue, engine_telemetry_queue, AudioEngine};
+use engine_core::{
+    engine_command_queue, engine_telemetry_queue, AudioEngine, PARAM_DIAGNOSTIC_FREQUENCY,
+    PARAM_DIAGNOSTIC_GAIN,
+};
 use engine_protocol::{EngineCommand, EngineEvent};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,6 +33,9 @@ struct HostOptions {
     buffer_frames: Option<u32>,
     channels: Option<u16>,
     duration_ms: Option<u64>,
+    diagnostic_tone: bool,
+    frequency_hz: f32,
+    gain: f32,
 }
 
 impl Default for HostOptions {
@@ -42,6 +48,9 @@ impl Default for HostOptions {
             buffer_frames: Some(128),
             channels: Some(2),
             duration_ms: None,
+            diagnostic_tone: false,
+            frequency_hz: 440.0,
+            gain: 0.05,
         }
     }
 }
@@ -85,7 +94,13 @@ fn run(options: HostOptions) -> Result<(), engine_audio_io::AudioDriverError> {
 
     let (command_sender, command_receiver) = engine_command_queue();
     let (telemetry_sender, telemetry_receiver) = engine_telemetry_queue();
-    let engine = AudioEngine::new().with_realtime_queues(command_receiver, telemetry_sender);
+    let mut engine = AudioEngine::new();
+
+    if options.diagnostic_tone {
+        engine = engine.with_diagnostic_signal();
+    }
+
+    let engine = engine.with_realtime_queues(command_receiver, telemetry_sender);
     let request = OutputStreamRequest {
         device_id: options.device_id,
         preferred_sample_rate: options.sample_rate,
@@ -112,10 +127,47 @@ fn run(options: HostOptions) -> Result<(), engine_audio_io::AudioDriverError> {
         active_stream.sample_format
     );
 
+    let mut next_command_id = 1;
+
+    if options.diagnostic_tone {
+        let _ = command_sender.push(EngineCommand::SetParameter {
+            id: next_command_id,
+            parameter_id: PARAM_DIAGNOSTIC_FREQUENCY,
+            value: options.frequency_hz,
+            at_sample: 0,
+            ramp_samples: 0,
+        });
+        next_command_id += 1;
+        let _ = command_sender.push(EngineCommand::SetParameter {
+            id: next_command_id,
+            parameter_id: PARAM_DIAGNOSTIC_GAIN,
+            value: 0.0,
+            at_sample: 0,
+            ramp_samples: 0,
+        });
+        next_command_id += 1;
+    }
+
     let _ = command_sender.push(EngineCommand::TransportStart {
-        id: 1,
+        id: next_command_id,
         at_sample: 0,
     });
+    next_command_id += 1;
+
+    if options.diagnostic_tone {
+        let ramp_samples = options
+            .sample_rate
+            .map(|sample_rate| (sample_rate / 100).max(1))
+            .unwrap_or(480);
+        let _ = command_sender.push(EngineCommand::SetParameter {
+            id: next_command_id,
+            parameter_id: PARAM_DIAGNOSTIC_GAIN,
+            value: options.gain,
+            at_sample: 0,
+            ramp_samples,
+        });
+        next_command_id += 1;
+    }
 
     let started_at = std::time::Instant::now();
 
@@ -140,7 +192,7 @@ fn run(options: HostOptions) -> Result<(), engine_audio_io::AudioDriverError> {
     }
 
     let _ = command_sender.push(EngineCommand::TransportStop {
-        id: 2,
+        id: next_command_id,
         at_sample: u64::MAX,
     });
 
@@ -204,6 +256,15 @@ fn parse_options(args: Vec<String>) -> Result<HostOptions, String> {
                 index += 1;
                 options.duration_ms = Some(parse_number(&value(&args, index, "--duration-ms")?)?);
             }
+            "--diagnostic-tone" => options.diagnostic_tone = true,
+            "--frequency" => {
+                index += 1;
+                options.frequency_hz = parse_number(&value(&args, index, "--frequency")?)?;
+            }
+            "--gain" => {
+                index += 1;
+                options.gain = parse_number(&value(&args, index, "--gain")?)?;
+            }
             "--help" | "-h" => {
                 print_usage();
                 std::process::exit(0);
@@ -249,7 +310,8 @@ fn print_usage() {
   engine-host --driver null --sample-rate 48000 --buffer-frames 128 --channels 2
 
 optional:
-  --duration-ms 1000"
+  --duration-ms 1000
+  --diagnostic-tone --frequency 440 --gain 0.05"
     );
 }
 

@@ -247,8 +247,13 @@ dependencies = [
 name = "engine-core"
 version = "0.0.1"
 dependencies = [
+ "engine-dsp",
  "engine-protocol",
 ]
+
+[[package]]
+name = "engine-dsp"
+version = "0.0.1"
 
 [[package]]
 name = "engine-host"

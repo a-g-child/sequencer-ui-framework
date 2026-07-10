@@ -27,4 +27,5 @@ pub enum EngineEvent {
 pub enum CommandRejection {
     PendingQueueFull,
     OutOfOrder,
+    UnknownParameter,
 }

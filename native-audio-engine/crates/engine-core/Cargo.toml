@@ -5,4 +5,5 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+engine-dsp = { path = "../engine-dsp" }
 engine-protocol = { path = "../engine-protocol" }

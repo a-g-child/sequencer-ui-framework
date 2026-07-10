@@ -51,10 +51,25 @@ impl NullAudioDriver {
 
     pub fn process_blocks(&mut self, block_count: usize) -> Result<(), AudioDriverError> {
         for _ in 0..block_count {
-            self.process_next_block_with_frames(self.buffer_frames)?;
+            self.process_next_block_with_frames(self.buffer_frames)
+                .map(drop)?;
         }
 
         Ok(())
+    }
+
+    pub fn render_blocks(&mut self, block_count: usize) -> Result<Vec<f32>, AudioDriverError> {
+        let mut rendered = Vec::new();
+
+        for _ in 0..block_count {
+            rendered.extend(self.process_next_block_with_frames(self.buffer_frames)?);
+        }
+
+        Ok(rendered)
+    }
+
+    pub fn render_frames(&mut self, frame_count: u32) -> Result<Vec<f32>, AudioDriverError> {
+        self.process_next_block_with_frames(frame_count)
     }
 
     pub fn process_until_sample(&mut self, sample_position: u64) -> Result<(), AudioDriverError> {
@@ -64,7 +79,8 @@ impl NullAudioDriver {
             .unwrap_or(0)
             < sample_position
         {
-            self.process_next_block_with_frames(self.buffer_frames)?;
+            self.process_next_block_with_frames(self.buffer_frames)
+                .map(drop)?;
         }
 
         Ok(())
@@ -75,10 +91,13 @@ impl NullAudioDriver {
     }
 
     pub fn process_block_with_frames(&mut self, frame_count: u32) -> Result<(), AudioDriverError> {
-        self.process_next_block_with_frames(frame_count)
+        self.process_next_block_with_frames(frame_count).map(drop)
     }
 
-    fn process_next_block_with_frames(&mut self, frame_count: u32) -> Result<(), AudioDriverError> {
+    fn process_next_block_with_frames(
+        &mut self,
+        frame_count: u32,
+    ) -> Result<Vec<f32>, AudioDriverError> {
         if !self.active {
             return Err(AudioDriverError::new(
                 AudioDriverErrorCode::DeviceUnavailable,
@@ -116,7 +135,7 @@ impl NullAudioDriver {
         );
 
         self.last_telemetry = Some(telemetry);
-        Ok(())
+        Ok(output)
     }
 }
 
@@ -160,7 +179,8 @@ impl AudioDriver for NullAudioDriver {
                 .expect("null driver stream should be configured")
                 .channels,
         });
-        self.process_next_block_with_frames(self.buffer_frames)?;
+        self.process_next_block_with_frames(self.buffer_frames)
+            .map(drop)?;
 
         Ok(self
             .stream
@@ -235,7 +255,7 @@ mod tests {
         command_sender
             .push(EngineCommand::SetParameter {
                 id: 1,
-                parameter_id: 7,
+                parameter_id: 2,
                 value: 0.25,
                 at_sample: 300,
                 ramp_samples: 0,
@@ -274,5 +294,31 @@ mod tests {
             assert!(driver.last_telemetry().is_some());
             driver.stop().unwrap();
         }
+    }
+
+    #[test]
+    fn renders_deterministic_audio_buffers() {
+        let (command_sender, command_receiver) = engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = engine_telemetry_queue();
+        let engine = AudioEngine::new()
+            .with_diagnostic_signal()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+        let mut driver = NullAudioDriver::new();
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 10,
+                at_sample: 128,
+            })
+            .unwrap();
+
+        driver
+            .start_output(request(128), Box::new(EngineProcessor::new(engine)))
+            .unwrap();
+
+        let rendered = driver.render_frames(128).unwrap();
+
+        assert_eq!(rendered.len(), 256);
+        assert!(rendered.iter().any(|sample| *sample != 0.0));
     }
 }

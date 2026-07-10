@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/engine-protocol",
+  "crates/engine-dsp",
   "crates/engine-core",
   "crates/engine-audio-io",
   "crates/engine-host"
