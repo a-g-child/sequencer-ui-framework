@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sequencer.local/native-audio-engine/engine-event.schema.json",
+  "title": "EngineEvent",
+  "type": "object",
+  "required": ["type"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["telemetry", "stream:error", "lifecycle:started", "lifecycle:stopped"]
+    }
+  },
+  "additionalProperties": true
+}

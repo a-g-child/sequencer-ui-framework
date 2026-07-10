@@ -1,0 +1,13 @@
+[workspace]
+members = [
+  "crates/engine-protocol",
+  "crates/engine-core",
+  "crates/engine-audio-io",
+  "crates/engine-host"
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.0.1"
+license = "UNLICENSED"

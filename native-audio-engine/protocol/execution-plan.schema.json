@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sequencer.local/native-audio-engine/execution-plan.schema.json",
+  "title": "NativeExecutionPlan",
+  "type": "object",
+  "required": ["version", "nodes", "buffers", "parameters", "eventRoutes"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "nodes": { "type": "array" },
+    "buffers": { "type": "array" },
+    "parameters": { "type": "array" },
+    "audioGroups": { "type": "array" },
+    "controlGroups": { "type": "array" },
+    "eventRoutes": { "type": "array" },
+    "latencySamples": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": true
+}

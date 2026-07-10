@@ -1,0 +1,27 @@
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AudioTelemetry {
+    pub sample_position: u64,
+    pub callback_count: u64,
+    pub sample_rate: u32,
+    pub callback_frames: u32,
+    pub output_channels: u16,
+    pub callback_duration_ns: u64,
+    pub maximum_callback_duration_ns: u64,
+    pub callback_load: f32,
+    pub stream_errors: u64,
+    pub probable_xruns: u64,
+    pub command_queue_depth: u32,
+    pub pending_command_count: u32,
+    pub command_diagnostics: CommandDiagnostics,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CommandDiagnostics {
+    pub received: u64,
+    pub applied: u64,
+    pub late: u64,
+    pub rejected: u64,
+    pub out_of_order: u64,
+    pub command_queue_overflows: u64,
+    pub telemetry_queue_overflows: u64,
+}

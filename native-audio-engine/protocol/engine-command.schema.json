@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sequencer.local/native-audio-engine/engine-command.schema.json",
+  "title": "EngineCommand",
+  "type": "object",
+  "required": ["id", "type"],
+  "properties": {
+    "id": { "type": "integer", "minimum": 0 },
+    "type": {
+      "type": "string",
+      "enum": [
+        "transport:start",
+        "transport:stop",
+        "seek",
+        "tempo-map:set",
+        "clip:launch",
+        "parameter:set",
+        "parameter:ramp",
+        "parameter:modulate",
+        "execution-plan:swap",
+        "panic"
+      ]
+    },
+    "atSample": { "type": "integer", "minimum": 0 },
+    "rampSamples": { "type": "integer", "minimum": 0 },
+    "device": { "type": "integer", "minimum": 0 },
+    "parameter": { "type": "integer", "minimum": 0 },
+    "value": { "type": "number" },
+    "beat": { "type": "number" },
+    "snapshotId": { "type": "integer", "minimum": 0 },
+    "planId": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": true
+}

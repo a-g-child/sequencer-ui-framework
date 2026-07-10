@@ -256,3 +256,54 @@ dynamically create graph objects on each note-on.
 The strongest next implementation is a native engine shell that outputs
 silence, owns a sample clock, drains a real-time-safe command queue, and reports
 reliable telemetry.
+
+## Repository Split
+
+The native runtime should be split from the UI framework as soon as practical:
+
+```text
+sequencer-ui-framework
+  Svelte app
+  document model and operations
+  device descriptors and configuration UI
+  PlaybackModel construction
+  AudioGraph / RuntimeGraph compilation
+  NativeExecutionPlan lowering
+  native adapter
+  WebAudio fallback
+
+native-audio-engine
+  audio-device lifecycle
+  authoritative sample clock
+  real-time scheduler
+  command and telemetry queues
+  NativeExecutionPlan loading
+  DSP node implementations
+  buffer allocation
+  voice pools
+  parameter smoothing
+  plan swapping
+  meters and diagnostics
+  platform audio backends
+```
+
+The engine must not depend on Svelte, Node, Electron, Sequencer document types,
+or UI concepts. It receives only lowered execution-ready data:
+
+```text
+NativeExecutionPlan
+EngineCommand
+prepared assets
+```
+
+It returns:
+
+```text
+EngineEvent
+EngineSnapshot
+telemetry
+```
+
+The `native-audio-engine/` workspace in this repository is intentionally
+split-ready. It should become its own repository once the engine shell has a
+stable lifecycle and protocol fixtures.
