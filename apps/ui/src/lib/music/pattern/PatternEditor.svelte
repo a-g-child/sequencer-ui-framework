@@ -1,14 +1,11 @@
 <script lang="ts">
   import {
-    QuantizeNotesOperation,
-    SetNoteHumanizeOffsetsOperation,
     SetNoteProbabilityOperation,
     SetNoteVelocityOperation
   } from '@sequencer/music';
-  import { onMount, tick } from 'svelte';
+  import { onMount } from 'svelte';
   import type { AppController } from '../../app-controller';
   import type { GrooveSettings } from '@sequencer/core';
-  import type { ClipLoopRegion } from '../../app-controller';
   import type { EditorKind } from '../../editors/editor-types';
   import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model';
   import type { RenderInteractionItem } from '../../framework/editor';
@@ -22,13 +19,12 @@
     PatternRendererId
   } from './PatternEditorSession';
   import type { SampleGridLane } from './pattern-renderer';
-  import type { PatternScaleMode } from './pattern-scale';
+  import type { PatternScaleState } from './pattern-scale';
   import type {
     AutomationCurvePoint,
     PatternAutomationTarget
   } from './pattern-automation';
   import PatternToolbar from './PatternToolbar.svelte';
-  import PatternViewControls from './PatternViewControls.svelte';
 
   export let controller: AppController;
   export let pianoRoll: PianoRollView | undefined;
@@ -36,12 +32,7 @@
   export let activeClipId: string | undefined = undefined;
   export let playheadBeat: number | undefined = undefined;
   export let clipLength: number | undefined = undefined;
-  export let loopClip = true;
-  export let loopRegion: ClipLoopRegion | undefined = undefined;
   export let groove: GrooveSettings | undefined = undefined;
-  export let onLoopClipChange: ((loop: boolean) => void) | undefined = undefined;
-  export let onLoopRegionChange: ((loopStart: number, loopLength: number) => void) | undefined = undefined;
-  export let onClipBoundsChange: ((clipStart: number, clipLength: number) => void) | undefined = undefined;
   export let onEditorChange: (editor: EditorKind) => void;
   export let onRenderModelRebuild: ((durationMs: number) => void) | undefined = undefined;
   export let syncView: () => void;
@@ -51,22 +42,21 @@
   export let totalBars: number | undefined = undefined;
   export let beatsPerBar: number | undefined = undefined;
   export let beatDivisions: number | undefined = undefined;
+  export let scale: PatternScaleState | undefined = undefined;
   export let automationTargets: PatternAutomationTarget[] = [];
   export let sampleGridLanes: SampleGridLane[] = [];
 
-  const randomHumanizeRange = 0.06;
-
   let session: PatternEditorSession;
-  let patternCanvas: PatternCanvas | undefined;
   let timelineRevision = '';
-  let showVelocityLane = false;
-  let showProbabilityLane = false;
-  let showAutomationLane = false;
+  export let showVelocityLane = false;
+  export let showProbabilityLane = false;
+  export let showAutomationLane = false;
   let selectedAutomationTargetId = '';
   let automationPointsByTarget: Record<string, AutomationCurvePoint[]> = {};
   let automationRevision = '';
   let sampleGridLaneRevision = '';
   let grooveRevision = '';
+  let scaleRevision = '';
 
   $: if (
     automationTargets.length > 0 &&
@@ -86,6 +76,7 @@
       groove
     });
     sampleGridLaneRevision = '';
+    scaleRevision = '';
   }
 
   $: nextTimelineRevision =
@@ -118,6 +109,17 @@
   $: if (session && nextGrooveRevision !== grooveRevision) {
     grooveRevision = nextGrooveRevision;
     session.setGroove(groove);
+    invalidateSession();
+  }
+
+  $: nextScaleRevision =
+    `${scale?.root ?? ''}:${scale?.scaleId ?? ''}:${scale?.mode ?? ''}`;
+  $: if (session && scale && nextScaleRevision !== scaleRevision) {
+    scaleRevision = nextScaleRevision;
+    session.setScaleRoot(scale.root);
+    session.setScaleId(scale.scaleId);
+    session.setScaleMode(scale.mode);
+    session.applyViewport(session.viewport, pianoRoll);
     invalidateSession();
   }
 
@@ -180,19 +182,6 @@
     }
 
     invalidateSession();
-  }
-
-  function addC4Note() {
-    if (session.createC4Note(pianoRoll)) {
-      syncView();
-      invalidateSession();
-    }
-  }
-
-  function resetPatternViewport() {
-    session.resetViewport(pianoRoll);
-    invalidateSession();
-    void tick().then(() => patternCanvas?.centerOnMiddleC());
   }
 
   function handlePatternWheel(event: WheelEvent) {
@@ -292,18 +281,6 @@
     invalidateSession();
   }
 
-  function toggleVelocityLane() {
-    showVelocityLane = !showVelocityLane;
-  }
-
-  function toggleProbabilityLane() {
-    showProbabilityLane = !showProbabilityLane;
-  }
-
-  function toggleAutomationLane() {
-    showAutomationLane = !showAutomationLane;
-  }
-
   function setAutomationTarget(parameterId: string) {
     selectedAutomationTargetId = parameterId;
   }
@@ -330,68 +307,6 @@
       syncView();
       invalidateSession();
     }
-  }
-
-  function setScaleRoot(root: number) {
-    session.setScaleRoot(root);
-    session.applyViewport(session.viewport, pianoRoll);
-    invalidateSession();
-  }
-
-  function setScaleId(scaleId: string) {
-    session.setScaleId(scaleId);
-    session.applyViewport(session.viewport, pianoRoll);
-    invalidateSession();
-  }
-
-  function setScaleMode(mode: PatternScaleMode) {
-    session.setScaleMode(mode);
-    session.applyViewport(session.viewport, pianoRoll);
-    invalidateSession();
-  }
-
-  function humanizeSelectedNotes() {
-    if (!pianoRoll) return;
-
-    const selectedNotes = session.selectedNotes(pianoRoll);
-
-    if (selectedNotes.length === 0) return;
-
-    controller.execute(
-      new SetNoteHumanizeOffsetsOperation(
-        pianoRoll.patternId,
-        selectedNotes.map((note) => ({
-          id: note.id,
-          offset: randomHumanizeOffset(note.time)
-        }))
-      )
-    );
-    syncView();
-    invalidateSession();
-  }
-
-  function quantizeSelectedNotes() {
-    if (!pianoRoll) return;
-
-    const selectedNotes = session.selectedNotes(pianoRoll);
-
-    if (selectedNotes.length === 0) return;
-
-    controller.execute(
-      new QuantizeNotesOperation(
-        pianoRoll.patternId,
-        selectedNotes.map((note) => note.id),
-        session.grid.snap
-      )
-    );
-    syncView();
-    invalidateSession();
-  }
-
-  function randomHumanizeOffset(noteTime: number): number {
-    const offset = (Math.random() * 2 - 1) * randomHumanizeRange;
-
-    return Math.max(-noteTime, offset);
   }
 
   function isRendererEditor(editor: EditorKind): editor is PatternRendererId {
@@ -424,7 +339,6 @@
       </div> -->
 
       <PatternCanvas
-        bind:this={patternCanvas}
         {renderModel}
         {playheadBeat}
         {height}
@@ -455,30 +369,6 @@
         onNotePointerUp={handleNotePointerUp}
         onVelocityCommit={commitNoteVelocity}
         onProbabilityCommit={commitNoteProbability}
-      />
-
-      <PatternViewControls
-        onAddNote={addC4Note}
-        {showVelocityLane}
-        onToggleVelocityLane={toggleVelocityLane}
-        {showProbabilityLane}
-        onToggleProbabilityLane={toggleProbabilityLane}
-        {showAutomationLane}
-        onToggleAutomationLane={toggleAutomationLane}
-        {loopClip}
-        {loopRegion}
-        onToggleLoopClip={onLoopClipChange
-          ? () => onLoopClipChange(!loopClip)
-          : undefined}
-        {onLoopRegionChange}
-        {onClipBoundsChange}
-        onQuantizeSelected={quantizeSelectedNotes}
-        onHumanizeSelected={humanizeSelectedNotes}
-        scale={session.activeRendererId === 'piano-roll' ? session.scale : undefined}
-        onScaleRootChange={setScaleRoot}
-        onScaleIdChange={setScaleId}
-        onScaleModeChange={setScaleMode}
-        onResetView={resetPatternViewport}
       />
     {/if}
   </section>

@@ -6,8 +6,9 @@ import {
   type ParameterValue
 } from '@sequencer/core'
 import { getNote, getTimingOffset } from '@sequencer/music'
+import type { PatternScaleState } from '../music/pattern/pattern-scale'
 
-export type InspectorTargetType = 'none' | 'track' | 'placement' | 'note'
+export type InspectorTargetType = 'none' | 'track' | 'placement' | 'note' | 'clip'
 
 export type InspectorPropertyView = {
   parameter: Parameter
@@ -34,6 +35,33 @@ export type NoteInspectorView = {
   velocity: number
   probability: number
   humanizeOffset: number
+}
+
+export type ClipInspectorView = {
+  id: string
+  name: string
+  trackId: string
+  trackName: string
+  volume: number
+  pan: number
+  muted: boolean
+  soloed: boolean
+  armed: boolean
+  pending: boolean
+  clipStart: number
+  clipEnd: number
+  loopEnabled: boolean
+  loopStart: number
+  loopEnd: number
+  beatDivisions: number
+  launchQuantize: string
+  launchQuantizeLabel: string
+  selectedNoteCount: number
+  velocityLaneVisible: boolean
+  probabilityLaneVisible: boolean
+  automationLaneVisible: boolean
+  automationTargetCount: number
+  scale?: PatternScaleState
 }
 
 export type GraphDiagnosticMessageView = {
@@ -70,6 +98,7 @@ export type InspectorView = {
   graph?: GraphDiagnosticsView
   placement?: PlacementInspectorView
   note?: NoteInspectorView
+  clip?: ClipInspectorView
 }
 
 export function buildInspectorView(store: DocumentStore): InspectorView {

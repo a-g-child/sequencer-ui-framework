@@ -41,6 +41,7 @@
   import { AppController, type TrackClipView } from './lib/app-controller'
   import {
     buildInspectorView,
+    type ClipInspectorView,
     type GraphDiagnosticsView,
     type InspectorPropertyView,
     type InspectorView
@@ -61,6 +62,11 @@
     buildPatternAutomationTargets,
     deviceAutomationTargetId
   } from './lib/music/pattern/pattern-automation';
+  import {
+    defaultScaleState,
+    type PatternScaleMode,
+    type PatternScaleState
+  } from './lib/music/pattern/pattern-scale';
   import Workbench from './lib/framework/application/Workbench.svelte';
   import InspectorPanel from './lib/panels/InspectorPanel.svelte';
   import RuntimePanel from './lib/panels/RuntimePanel.svelte';
@@ -74,6 +80,10 @@
   import TrackModules from './lib/modules/TrackModules.svelte';
   import { BrowserAssetStore } from './lib/persistence/BrowserAssetStore';
   import { LocalProjectStore } from './lib/persistence/LocalProjectStore';
+  import {
+    QuantizeNotesOperation,
+    SetNoteHumanizeOffsetsOperation
+  } from '@sequencer/music';
 
   type MainViewMode = 'matrix' | 'editor'
   type ClipCopyMode = 'idle' | 'select-source' | 'select-target'
@@ -102,6 +112,7 @@
     48, 49, 50, 51
   ]
   const MATRIX_SCENE_ROW_COUNT = 8
+  const EDITOR_HUMANIZE_RANGE = 0.06
 
   const DEVICE_DESCRIPTORS: DeviceDescriptor[] = [
     ARPEGGIATOR_DESCRIPTOR,
@@ -216,6 +227,11 @@
   let clipCopySource: TrackClipView | undefined
   let clipPressTimer: ReturnType<typeof setTimeout> | undefined
   let clipPressOpenedEditor = false
+  let editorBeatDivisions = 4
+  let showVelocityLane = false
+  let showProbabilityLane = false
+  let showAutomationLane = false
+  let editorScale: PatternScaleState = { ...defaultScaleState }
   $: activePatternPlayheadBeat = localPlayheadBeat(
     transportPlaying,
     transportBeat,
@@ -227,7 +243,9 @@
   $: selectedTrackGraphDiagnostics =
     buildSelectedTrackGraphDiagnostics(selectedTrack, playbackStatus)
   $: displayedInspector = applyGraphDiagnosticsToInspector(
-    applyRuntimeParameterValues(inspector, runtimeParameterValues),
+    viewMode === 'editor'
+      ? buildActiveClipInspector()
+      : applyRuntimeParameterValues(inspector, runtimeParameterValues),
     selectedTrackGraphDiagnostics
   )
   $: selectedTrackDeviceParameterViews =
@@ -471,6 +489,63 @@
     }
   }
 
+  function buildActiveClipInspector(): InspectorView {
+    const clip = activeClipId
+      ? store.document.midiClips.find(activeClipId)
+      : activePattern
+        ? store.document.midiClips
+            .values()
+            .find((candidate) => candidate.pattern === activePattern?.id)
+        : undefined
+    const track = clip ? findTrackForClip(clip.id) : activePatternTrack
+
+    if (!clip || !track) {
+      return {
+        type: 'none',
+        title: 'No clip selected',
+        properties: []
+      }
+    }
+
+    const activeLaunch = playbackStatus.liveClips.activeClipByTrackId[track.id]
+    const pendingLaunch = playbackStatus.liveClips.pendingLaunchByTrackId[track.id]
+    const clipRegion = activePatternClipLoopRegion
+    const clipLaunchQuantize = playbackStatus.liveClips.launchQuantize
+    const clipInspector: ClipInspectorView = {
+      id: clip.id,
+      name: clip.name,
+      trackId: track.id,
+      trackName: track.name,
+      volume: track.mixer.volume,
+      pan: track.mixer.pan,
+      muted: track.mixer.mute,
+      soloed: track.mixer.solo,
+      armed: activeLaunch?.clipId === clip.id,
+      pending: pendingLaunch?.clipId === clip.id,
+      clipStart: clipRegion.clipStart,
+      clipEnd: clipRegion.clipStart + clipRegion.clipLength,
+      loopEnabled: activePatternClipLoop,
+      loopStart: clipRegion.loopStart,
+      loopEnd: clipRegion.loopStart + clipRegion.loopLength,
+      beatDivisions: editorBeatDivisions,
+      launchQuantize: clipLaunchQuantize,
+      launchQuantizeLabel: launchQuantizeLabel(clipLaunchQuantize),
+      selectedNoteCount: selectedEditorNoteIds().length,
+      velocityLaneVisible: showVelocityLane,
+      probabilityLaneVisible: showProbabilityLane,
+      automationLaneVisible: showAutomationLane,
+      automationTargetCount: automationTargets.length,
+      scale: activeEditor === 'piano-roll' ? editorScale : undefined
+    }
+
+    return {
+      type: 'clip',
+      title: clip.name,
+      properties: [],
+      clip: clipInspector
+    }
+  }
+
   function formatPlaybackEvent(event: PlaybackEvent | undefined): string {
     if (!event) return 'none'
 
@@ -502,6 +577,14 @@
     const patternId = controller.patternIdForClip(clipId)
 
     return patternId ? store.document.patterns.find(patternId) : undefined
+  }
+
+  function findTrackForClip(clipId: string | undefined): Track | undefined {
+    if (!clipId) return undefined
+
+    return store.document.tracks.values().find((track) =>
+      track.clips.some((slot) => slot.target === clipId)
+    )
   }
 
   function resolveActiveClipId(
@@ -1228,6 +1311,110 @@
 
     if (!changed) return
     syncView()
+  }
+
+  function setActivePatternClipEnd(clipEnd: number) {
+    const clipStart = activePatternClipLoopRegion.clipStart
+
+    setActivePatternClipBounds(clipStart, clipEnd - clipStart)
+  }
+
+  function setActivePatternClipLoopStart(loopStart: number) {
+    const loopEnd =
+      activePatternClipLoopRegion.loopStart +
+      activePatternClipLoopRegion.loopLength
+
+    setActivePatternClipLoopRegion(loopStart, loopEnd - loopStart)
+  }
+
+  function setActivePatternClipLoopEnd(loopEnd: number) {
+    setActivePatternClipLoopRegion(
+      activePatternClipLoopRegion.loopStart,
+      loopEnd - activePatternClipLoopRegion.loopStart
+    )
+  }
+
+  function setEditorBeatDivisions(value: number) {
+    if (!Number.isFinite(value)) return
+
+    editorBeatDivisions = Math.min(32, Math.max(1, Math.round(value)))
+  }
+
+  function setEditorScaleRoot(root: number) {
+    editorScale = {
+      ...editorScale,
+      root: Math.min(11, Math.max(0, Math.round(root)))
+    }
+  }
+
+  function setEditorScaleId(scaleId: string) {
+    editorScale = {
+      ...editorScale,
+      scaleId
+    }
+  }
+
+  function setEditorScaleMode(mode: PatternScaleMode) {
+    editorScale = {
+      ...editorScale,
+      mode
+    }
+  }
+
+  function armEditedClip() {
+    const trackId = findTrackForClip(activeClipId)?.id ?? selectedTrackId
+
+    if (!trackId || !activeClipId) return
+
+    ensureClipActiveWhenStopped(trackId, activeClipId)
+    syncView()
+  }
+
+  function quantizeEditorSelection() {
+    const noteIds = selectedEditorNoteIds()
+
+    if (!activePattern || noteIds.length === 0) return
+
+    controller.execute(
+      new QuantizeNotesOperation(activePattern.id, noteIds, 1 / editorBeatDivisions)
+    )
+    syncView()
+  }
+
+  function humanizeEditorSelection() {
+    const noteIds = selectedEditorNoteIds()
+
+    if (!activePattern || noteIds.length === 0) return
+
+    const notes = pianoRoll?.notes.filter((note) => noteIds.includes(note.id)) ?? []
+
+    if (notes.length === 0) return
+
+    controller.execute(
+      new SetNoteHumanizeOffsetsOperation(
+        activePattern.id,
+        notes.map((note) => ({
+          id: note.id,
+          offset: randomEditorHumanizeOffset(note.time)
+        }))
+      )
+    )
+    syncView()
+  }
+
+  function selectedEditorNoteIds(): string[] {
+    const selection = store.selection.current()
+
+    if (!selection || selection.type !== 'note' || !selection.parentId) return []
+    if (activePattern && selection.parentId !== activePattern.id) return []
+
+    return selection.ids?.length ? [...selection.ids] : [selection.id]
+  }
+
+  function randomEditorHumanizeOffset(noteTime: number): number {
+    const offset = (Math.random() * 2 - 1) * EDITOR_HUMANIZE_RANGE
+
+    return Math.max(-noteTime, offset)
   }
 
   function setRenderModelRebuildTime(durationMs: number) {
@@ -2005,6 +2192,35 @@
         onCommitNoteTime={commitNoteTime}
         onCommitNoteDuration={commitNoteDuration}
         onDeleteSelectedNote={deleteSelectedNote}
+        onSetTrackMute={(trackId, value) =>
+          setTrackMixerValue(trackId, 'mute', value)}
+        onSetTrackSolo={(trackId, value) =>
+          setTrackMixerValue(trackId, 'solo', value)}
+        onSetTrackVolume={(trackId, value) =>
+          setTrackMixerValue(trackId, 'volume', value)}
+        onSetTrackPan={(trackId, value) =>
+          setTrackMixerValue(trackId, 'pan', value)}
+        onStopTrack={stopMatrixTrackAndRefresh}
+        onArmClip={armEditedClip}
+        onSetClipLoop={toggleActivePatternClipLoop}
+        onSetClipEnd={setActivePatternClipEnd}
+        onSetClipLoopStart={setActivePatternClipLoopStart}
+        onSetClipLoopEnd={setActivePatternClipLoopEnd}
+        onSetBeatDivisions={setEditorBeatDivisions}
+        onQuantizeClipSelection={quantizeEditorSelection}
+        onHumanizeClipSelection={humanizeEditorSelection}
+        onToggleVelocityLane={() => {
+          showVelocityLane = !showVelocityLane
+        }}
+        onToggleProbabilityLane={() => {
+          showProbabilityLane = !showProbabilityLane
+        }}
+        onToggleAutomationLane={() => {
+          showAutomationLane = !showAutomationLane
+        }}
+        onScaleRootChange={setEditorScaleRoot}
+        onScaleIdChange={setEditorScaleId}
+        onScaleModeChange={setEditorScaleMode}
       />
     {/if}
   </svelte:fragment>
@@ -2046,16 +2262,16 @@
           {pianoRoll}
           {activeEditor}
           {activeClipId}
+          beatDivisions={editorBeatDivisions}
+          scale={editorScale}
           playheadBeat={activePatternPlayheadBeat}
-          loopClip={activePatternClipLoop}
-          loopRegion={activePatternClipLoopRegion}
           {groove}
           clipLength={activePatternClipLoopRegion.clipLength}
-          onLoopClipChange={toggleActivePatternClipLoop}
-          onLoopRegionChange={setActivePatternClipLoopRegion}
-          onClipBoundsChange={setActivePatternClipBounds}
           onRenderModelRebuild={setRenderModelRebuildTime}
           {automationTargets}
+          bind:showVelocityLane
+          bind:showProbabilityLane
+          bind:showAutomationLane
           sampleGridLanes={selectedSamplerGridLanes(selectedTrack)}
           onEditorChange={(editor) => {
             activeEditor = editor;
