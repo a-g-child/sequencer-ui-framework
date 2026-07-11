@@ -198,6 +198,7 @@ impl MonophonicVoice {
         self.active_note = Some(note);
         self.velocity = velocity.clamp(0.0, 1.0);
         self.oscillator.set_frequency(midi_note_frequency(note));
+        self.oscillator.set_gain_target(1.0, 0);
         self.envelope.gate_on();
     }
 

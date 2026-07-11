@@ -15,6 +15,7 @@ use engine_protocol::{
 
 pub const MAX_EVENT_DEPTH: u16 = 32;
 pub const MAX_EVENTS_PER_BLOCK: usize = 1024;
+pub const MAX_INSTRUMENT_VOICES: u16 = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlanValidationError {
@@ -29,6 +30,8 @@ pub enum PlanValidationError {
     MultipleOutputs,
     InvalidBlockCapacity,
     InvalidEventRouteMask,
+    InvalidInstrumentVoiceCount,
+    InvalidInstrumentVoiceConfig,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,6 +83,13 @@ pub struct RuntimeNodeMetadata {
     pub stable_id: u64,
     pub runtime_index: u32,
     pub node_kind: RuntimeNodeKind,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InstrumentDiagnostics {
+    pub active_voices: u32,
+    pub peak_active_voices: u32,
+    pub voice_steals: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -199,8 +209,14 @@ impl PreparedExecutionPlan {
                     let output_buffer = buffer_index(plan, node_plan.output_buffer)?;
 
                     require_channels(plan, node_plan.output_buffer, 1)?;
+                    validate_voice_config(
+                        node_plan.attack_seconds,
+                        node_plan.decay_seconds,
+                        node_plan.sustain_level,
+                        node_plan.release_seconds,
+                    )?;
 
-                    Ok(RuntimeNode::Voice(InstrumentNode {
+                    Ok(RuntimeNode::Voice(MonoInstrumentNode {
                         voice: MonophonicVoice::new(
                             node_plan.attack_seconds,
                             node_plan.decay_seconds,
@@ -221,15 +237,31 @@ impl PreparedExecutionPlan {
                     let output_buffer = buffer_index(plan, node_plan.output_buffer)?;
 
                     require_channels(plan, node_plan.output_buffer, 1)?;
+                    validate_instrument_voice_count(node_plan.voice_count)?;
+                    validate_voice_config(
+                        node_plan.attack_seconds,
+                        node_plan.decay_seconds,
+                        node_plan.sustain_level,
+                        node_plan.release_seconds,
+                    )?;
 
                     Ok(RuntimeNode::Instrument(InstrumentNode {
-                        voice: MonophonicVoice::new(
-                            node_plan.attack_seconds,
-                            node_plan.decay_seconds,
-                            node_plan.sustain_level,
-                            node_plan.release_seconds,
-                        ),
+                        voices: (0..node_plan.voice_count)
+                            .map(|_| {
+                                InstrumentVoice::new(
+                                    node_plan.attack_seconds,
+                                    node_plan.decay_seconds,
+                                    node_plan.sustain_level,
+                                    node_plan.release_seconds,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
                         output_buffer,
+                        allocation_sequence: 0,
+                        release_sequence: 0,
+                        voice_steals: 0,
+                        peak_active_voices: 0,
                     }))
                 }
                 PlanNodeKind::Gain(node_plan) => {
@@ -513,6 +545,19 @@ impl PreparedExecutionPlan {
     pub fn metadata(&self) -> PreparedExecutionPlanMetadata {
         PreparedExecutionPlanMetadata {
             nodes: self.node_metadata.clone(),
+        }
+    }
+
+    pub fn instrument_diagnostics(&self, node_id: NodeId) -> Option<InstrumentDiagnostics> {
+        let node_index = self
+            .node_metadata
+            .iter()
+            .find(|node| node.stable_id == node_id as u64)?
+            .runtime_index as usize;
+
+        match self.nodes.get(node_index)? {
+            RuntimeNode::Instrument(node) => Some(node.diagnostics()),
+            _ => None,
         }
     }
 
@@ -853,7 +898,7 @@ enum RuntimeNode {
     Transpose(TransposeNode),
     Scale(ScaleNode),
     Instrument(InstrumentNode),
-    Voice(InstrumentNode),
+    Voice(MonoInstrumentNode),
     Gain(GainNode),
     Output(OutputNode),
     #[cfg(test)]
@@ -889,7 +934,7 @@ impl RuntimeNode {
     fn reset(&mut self) {
         match self {
             Self::Oscillator(node) => node.phase = 0.0,
-            Self::Instrument(node) => node.voice.panic(),
+            Self::Instrument(node) => node.panic(),
             Self::Voice(node) => node.voice.panic(),
             _ => {}
         }
@@ -973,6 +1018,22 @@ struct ScaleNode {
 }
 
 struct InstrumentNode {
+    voices: Box<[InstrumentVoice]>,
+    output_buffer: usize,
+    allocation_sequence: u64,
+    release_sequence: u64,
+    voice_steals: u64,
+    peak_active_voices: u32,
+}
+
+struct InstrumentVoice {
+    voice: MonophonicVoice,
+    note: Option<u8>,
+    started_at: u64,
+    released_at: Option<u64>,
+}
+
+struct MonoInstrumentNode {
     voice: MonophonicVoice,
     output_buffer: usize,
 }
@@ -1063,6 +1124,160 @@ impl ScaleNode {
 }
 
 impl InstrumentNode {
+    fn process(&mut self, context: &NodeProcessContext, buffers: &mut AudioBufferArena) {
+        let output = buffers.slot_mut(self.output_buffer);
+
+        for frame in context.range.start_frame..context.range.end_frame {
+            let mut sample = 0.0;
+
+            for voice in self.voices.iter_mut() {
+                sample += voice.voice.next_sample(context.sample_rate);
+
+                if voice.voice.active_note().is_none() {
+                    voice.note = None;
+                    voice.released_at = None;
+                }
+            }
+
+            output[frame] = sample;
+        }
+    }
+
+    fn process_event(
+        &mut self,
+        event: &ScheduledEngineEvent,
+        _emitter: &mut EventEmitter<'_>,
+    ) -> bool {
+        match *event {
+            ScheduledEngineEvent::NoteOn { note, velocity, .. } => {
+                self.note_on(note, velocity);
+                true
+            }
+            ScheduledEngineEvent::NoteOff { note, .. } => {
+                self.note_off(note);
+                true
+            }
+        }
+    }
+
+    fn note_on(&mut self, note: u8, velocity: f32) {
+        let Some(index) = self.select_voice_for_note_on(note) else {
+            return;
+        };
+        let was_steal = self.voices[index].note.is_some()
+            && self.voices[index].released_at.is_none()
+            && self.voices[index].note != Some(note);
+
+        if was_steal {
+            self.voice_steals = self.voice_steals.saturating_add(1);
+        }
+
+        self.allocation_sequence = self.allocation_sequence.saturating_add(1);
+        self.voices[index].note = Some(note);
+        self.voices[index].started_at = self.allocation_sequence;
+        self.voices[index].released_at = None;
+        self.voices[index].voice.note_on(note, velocity);
+        self.update_peak_active_voices();
+    }
+
+    fn note_off(&mut self, note: u8) {
+        for voice in self
+            .voices
+            .iter_mut()
+            .filter(|voice| voice.note == Some(note))
+        {
+            voice.voice.note_off(note);
+
+            if voice.released_at.is_none() {
+                self.release_sequence = self.release_sequence.saturating_add(1);
+                voice.released_at = Some(self.release_sequence);
+            }
+        }
+    }
+
+    fn panic(&mut self) {
+        for voice in self.voices.iter_mut() {
+            voice.reset();
+        }
+    }
+
+    fn select_voice_for_note_on(&self, note: u8) -> Option<usize> {
+        self.voices
+            .iter()
+            .position(|voice| voice.note == Some(note))
+            .or_else(|| self.voices.iter().position(InstrumentVoice::is_idle))
+            .or_else(|| {
+                self.voices
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, voice)| {
+                        voice.released_at.map(|released_at| (index, released_at))
+                    })
+                    .min_by_key(|(_, released_at)| *released_at)
+                    .map(|(index, _)| index)
+            })
+            .or_else(|| {
+                self.voices
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, voice)| voice.note.is_some())
+                    .min_by_key(|(_, voice)| voice.started_at)
+                    .map(|(index, _)| index)
+            })
+    }
+
+    fn active_voice_count(&self) -> u32 {
+        self.voices
+            .iter()
+            .filter(|voice| voice.note.is_some() && voice.released_at.is_none())
+            .count() as u32
+    }
+
+    fn update_peak_active_voices(&mut self) {
+        self.peak_active_voices = self.peak_active_voices.max(self.active_voice_count());
+    }
+
+    fn diagnostics(&self) -> InstrumentDiagnostics {
+        InstrumentDiagnostics {
+            active_voices: self.active_voice_count(),
+            peak_active_voices: self.peak_active_voices,
+            voice_steals: self.voice_steals,
+        }
+    }
+}
+
+impl InstrumentVoice {
+    fn new(
+        attack_seconds: f32,
+        decay_seconds: f32,
+        sustain_level: f32,
+        release_seconds: f32,
+    ) -> Self {
+        Self {
+            voice: MonophonicVoice::new(
+                attack_seconds,
+                decay_seconds,
+                sustain_level,
+                release_seconds,
+            ),
+            note: None,
+            started_at: 0,
+            released_at: None,
+        }
+    }
+
+    fn is_idle(&self) -> bool {
+        self.note.is_none()
+    }
+
+    fn reset(&mut self) {
+        self.voice.panic();
+        self.note = None;
+        self.released_at = None;
+    }
+}
+
+impl MonoInstrumentNode {
     fn process(&mut self, context: &NodeProcessContext, buffers: &mut AudioBufferArena) {
         let output = buffers.slot_mut(self.output_buffer);
 
@@ -1611,6 +1826,31 @@ fn require_channels(
     Ok(())
 }
 
+fn validate_instrument_voice_count(voice_count: u16) -> Result<(), PlanValidationError> {
+    if voice_count == 0 || voice_count > MAX_INSTRUMENT_VOICES {
+        return Err(PlanValidationError::InvalidInstrumentVoiceCount);
+    }
+
+    Ok(())
+}
+
+fn validate_voice_config(
+    attack_seconds: f32,
+    decay_seconds: f32,
+    sustain_level: f32,
+    release_seconds: f32,
+) -> Result<(), PlanValidationError> {
+    if !attack_seconds.is_finite()
+        || !decay_seconds.is_finite()
+        || !sustain_level.is_finite()
+        || !release_seconds.is_finite()
+    {
+        return Err(PlanValidationError::InvalidInstrumentVoiceConfig);
+    }
+
+    Ok(())
+}
+
 fn runtime_node_kind(kind: &PlanNodeKind) -> Result<RuntimeNodeKind, PlanValidationError> {
     match kind {
         PlanNodeKind::EventInput(_) => Ok(RuntimeNodeKind::EventInput),
@@ -1709,11 +1949,11 @@ mod tests {
     use super::*;
     use engine_protocol::{
         diagnostic_tone_plan, monophonic_instrument_plan, monophonic_voice_plan, AudioBufferSlot,
-        EventInputNodePlan, EventRoute, EventRouteMask, GainNodePlan, NativeExecutionPlan,
-        OscillatorNodePlan, OutputNodePlan, PlanNode, PlanNodeKind, ScaleNodePlan,
-        ScheduledEngineEvent, TransposeNodePlan, NODE_EVENT_INPUT, NODE_GAIN, NODE_INSTRUMENT,
-        NODE_OSCILLATOR, NODE_OUTPUT, NODE_SCALE, NODE_TRANSPOSE, NODE_VOICE, PARAM_GAIN_GAIN,
-        PARAM_OSCILLATOR_FREQUENCY,
+        EventInputNodePlan, EventRoute, EventRouteMask, GainNodePlan, InstrumentNodePlan,
+        NativeExecutionPlan, OscillatorNodePlan, OutputNodePlan, PlanNode, PlanNodeKind,
+        ScaleNodePlan, ScheduledEngineEvent, TransposeNodePlan, NODE_EVENT_INPUT, NODE_GAIN,
+        NODE_INSTRUMENT, NODE_OSCILLATOR, NODE_OUTPUT, NODE_SCALE, NODE_TRANSPOSE, NODE_VOICE,
+        PARAM_GAIN_GAIN, PARAM_OSCILLATOR_FREQUENCY,
     };
 
     #[test]
@@ -1739,12 +1979,189 @@ mod tests {
         let prepared = RuntimeCompiler::new(128).compile(&plan).unwrap();
         let metadata = prepared.metadata();
 
-        assert_eq!(metadata.nodes[0].stable_id, NODE_INSTRUMENT as u64);
-        assert_eq!(metadata.nodes[0].node_kind, RuntimeNodeKind::Instrument);
+        assert_eq!(metadata.nodes[0].stable_id, NODE_EVENT_INPUT as u64);
+        assert_eq!(metadata.nodes[0].node_kind, RuntimeNodeKind::EventInput);
+        assert_eq!(metadata.nodes[1].stable_id, NODE_INSTRUMENT as u64);
+        assert_eq!(metadata.nodes[1].node_kind, RuntimeNodeKind::Instrument);
         assert_eq!(
-            prepared.event_route_range_for_source(NODE_INSTRUMENT),
+            prepared.event_route_range_for_source(NODE_EVENT_INPUT),
             Some((0, 1))
         );
+    }
+
+    fn instrument_plan_with_voice_count(voice_count: u16) -> NativeExecutionPlan {
+        let mut plan = monophonic_instrument_plan(2);
+
+        if let Some(PlanNodeKind::Instrument(node)) = plan
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == NODE_INSTRUMENT)
+            .map(|node| &mut node.kind)
+        {
+            node.voice_count = voice_count;
+        }
+
+        plan
+    }
+
+    fn instrument_diagnostics(prepared: &PreparedExecutionPlan) -> InstrumentDiagnostics {
+        prepared
+            .instrument_diagnostics(NODE_INSTRUMENT)
+            .expect("instrument diagnostics should exist")
+    }
+
+    #[test]
+    fn instrument_one_note_uses_one_voice() {
+        let mut prepared =
+            PreparedExecutionPlan::prepare(&instrument_plan_with_voice_count(4), 128).unwrap();
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.5, 0)));
+        assert_eq!(
+            instrument_diagnostics(&prepared),
+            InstrumentDiagnostics {
+                active_voices: 1,
+                peak_active_voices: 1,
+                voice_steals: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn instrument_simultaneous_notes_occupy_different_voices() {
+        let mut prepared =
+            PreparedExecutionPlan::prepare(&instrument_plan_with_voice_count(4), 128).unwrap();
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.5, 0)));
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 64, 0.5, 0)));
+
+        assert_eq!(instrument_diagnostics(&prepared).active_voices, 2);
+        assert_eq!(instrument_diagnostics(&prepared).voice_steals, 0);
+    }
+
+    #[test]
+    fn instrument_note_off_releases_correct_voice() {
+        let mut prepared =
+            PreparedExecutionPlan::prepare(&instrument_plan_with_voice_count(4), 128).unwrap();
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.5, 0)));
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 64, 0.5, 0)));
+        assert!(prepared.dispatch_event(note_off(NODE_EVENT_INPUT, 60, 0)));
+
+        assert_eq!(instrument_diagnostics(&prepared).active_voices, 1);
+        assert_eq!(instrument_diagnostics(&prepared).peak_active_voices, 2);
+    }
+
+    #[test]
+    fn instrument_non_active_note_off_changes_nothing() {
+        let mut prepared =
+            PreparedExecutionPlan::prepare(&instrument_plan_with_voice_count(4), 128).unwrap();
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.5, 0)));
+        assert!(prepared.dispatch_event(note_off(NODE_EVENT_INPUT, 61, 0)));
+
+        assert_eq!(instrument_diagnostics(&prepared).active_voices, 1);
+    }
+
+    #[test]
+    fn instrument_repeated_same_note_retriggers_existing_voice() {
+        let mut prepared =
+            PreparedExecutionPlan::prepare(&instrument_plan_with_voice_count(4), 128).unwrap();
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.5, 0)));
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.7, 0)));
+
+        assert_eq!(instrument_diagnostics(&prepared).active_voices, 1);
+        assert_eq!(instrument_diagnostics(&prepared).voice_steals, 0);
+    }
+
+    #[test]
+    fn instrument_released_voices_are_reused_before_active_stealing() {
+        let mut prepared =
+            PreparedExecutionPlan::prepare(&instrument_plan_with_voice_count(2), 128).unwrap();
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.5, 0)));
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 64, 0.5, 0)));
+        assert!(prepared.dispatch_event(note_off(NODE_EVENT_INPUT, 60, 0)));
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 67, 0.5, 0)));
+
+        assert_eq!(instrument_diagnostics(&prepared).active_voices, 2);
+        assert_eq!(instrument_diagnostics(&prepared).voice_steals, 0);
+    }
+
+    #[test]
+    fn instrument_oldest_active_voice_is_stolen_deterministically() {
+        let mut prepared =
+            PreparedExecutionPlan::prepare(&instrument_plan_with_voice_count(2), 128).unwrap();
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.5, 0)));
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 64, 0.5, 0)));
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 67, 0.5, 0)));
+        assert!(prepared.dispatch_event(note_off(NODE_EVENT_INPUT, 60, 0)));
+
+        assert_eq!(instrument_diagnostics(&prepared).active_voices, 2);
+        assert_eq!(instrument_diagnostics(&prepared).voice_steals, 1);
+    }
+
+    #[test]
+    fn instrument_reset_clears_all_voices() {
+        let mut prepared =
+            PreparedExecutionPlan::prepare(&instrument_plan_with_voice_count(4), 128).unwrap();
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.5, 0)));
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 64, 0.5, 0)));
+        prepared.reset();
+
+        assert_eq!(instrument_diagnostics(&prepared).active_voices, 0);
+    }
+
+    #[test]
+    fn rejects_invalid_instrument_voice_count() {
+        let mut plan = instrument_plan_with_voice_count(0);
+
+        assert!(matches!(
+            PreparedExecutionPlan::prepare(&plan, 128),
+            Err(PlanValidationError::InvalidInstrumentVoiceCount)
+        ));
+
+        if let Some(PlanNodeKind::Instrument(node)) = plan
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == NODE_INSTRUMENT)
+            .map(|node| &mut node.kind)
+        {
+            node.voice_count = MAX_INSTRUMENT_VOICES + 1;
+        }
+
+        assert!(matches!(
+            PreparedExecutionPlan::prepare(&plan, 128),
+            Err(PlanValidationError::InvalidInstrumentVoiceCount)
+        ));
+    }
+
+    #[test]
+    fn rejects_non_finite_instrument_voice_configuration() {
+        let mut plan = instrument_plan_with_voice_count(1);
+
+        if let Some(PlanNodeKind::Instrument(node)) = plan
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == NODE_INSTRUMENT)
+            .map(|node| &mut node.kind)
+        {
+            *node = InstrumentNodePlan {
+                output_buffer: node.output_buffer,
+                voice_count: node.voice_count,
+                attack_seconds: f32::NAN,
+                decay_seconds: node.decay_seconds,
+                sustain_level: node.sustain_level,
+                release_seconds: node.release_seconds,
+            };
+        }
+
+        assert!(matches!(
+            PreparedExecutionPlan::prepare(&plan, 128),
+            Err(PlanValidationError::InvalidInstrumentVoiceConfig)
+        ));
     }
 
     fn note_on_from(source_node: u32) -> ScheduledEngineEvent {

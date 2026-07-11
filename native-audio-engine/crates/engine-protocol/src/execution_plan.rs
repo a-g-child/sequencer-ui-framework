@@ -98,6 +98,7 @@ impl ScaleNodePlan {
 #[derive(Clone, Debug, PartialEq)]
 pub struct InstrumentNodePlan {
     pub output_buffer: BufferSlotId,
+    pub voice_count: u16,
     pub attack_seconds: f32,
     pub decay_seconds: f32,
     pub sustain_level: f32,
@@ -358,9 +359,14 @@ pub fn monophonic_instrument_plan(output_channels: u16) -> NativeExecutionPlan {
         plan_revision: 1,
         nodes: vec![
             PlanNode {
+                id: NODE_EVENT_INPUT,
+                kind: PlanNodeKind::EventInput(EventInputNodePlan),
+            },
+            PlanNode {
                 id: NODE_INSTRUMENT,
                 kind: PlanNodeKind::Instrument(InstrumentNodePlan {
                     output_buffer: 1,
+                    voice_count: 1,
                     attack_seconds: 0.0,
                     decay_seconds: 0.0,
                     sustain_level: 1.0,
@@ -378,7 +384,7 @@ pub fn monophonic_instrument_plan(output_channels: u16) -> NativeExecutionPlan {
         buffers: vec![AudioBufferSlot { id: 1, channels: 1 }],
         parameters: vec![],
         event_routes: vec![EventRoute {
-            source_node: NODE_INSTRUMENT,
+            source_node: NODE_EVENT_INPUT,
             destination_node: NODE_INSTRUMENT,
             event_mask: EventRouteMask::NOTE,
             priority: 0,
@@ -409,6 +415,7 @@ pub fn transposed_monophonic_instrument_plan(
                 id: NODE_INSTRUMENT,
                 kind: PlanNodeKind::Instrument(InstrumentNodePlan {
                     output_buffer: 1,
+                    voice_count: 1,
                     attack_seconds: 0.0,
                     decay_seconds: 0.0,
                     sustain_level: 1.0,
@@ -470,6 +477,7 @@ pub fn scaled_monophonic_instrument_plan(
                 id: NODE_INSTRUMENT,
                 kind: PlanNodeKind::Instrument(InstrumentNodePlan {
                     output_buffer: 1,
+                    voice_count: 1,
                     attack_seconds: 0.0,
                     decay_seconds: 0.0,
                     sustain_level: 1.0,

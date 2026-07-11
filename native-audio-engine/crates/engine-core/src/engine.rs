@@ -1375,8 +1375,7 @@ mod tests {
         scaled_monophonic_instrument_plan, scaled_monophonic_voice_plan,
         transposed_monophonic_instrument_plan, transposed_monophonic_voice_plan, EventRoute,
         EventRouteMask, ScaleNodePlan, ScheduledBeatEvent, ScheduledEngineEvent, TempoMapSnapshot,
-        TransportLoop, VoiceNodePlan, NODE_EVENT_INPUT, NODE_INSTRUMENT, NODE_OUTPUT, NODE_VOICE,
-        PARAM_GAIN_GAIN,
+        TransportLoop, VoiceNodePlan, NODE_EVENT_INPUT, NODE_OUTPUT, NODE_VOICE, PARAM_GAIN_GAIN,
     };
 
     fn plan_with_identity(
@@ -1511,8 +1510,11 @@ mod tests {
     fn assert_outputs_close(left: &[f32], right: &[f32]) {
         assert_eq!(left.len(), right.len());
 
-        for (left, right) in left.iter().zip(right.iter()) {
-            assert!((left - right).abs() < 0.000_000_1);
+        for (index, (left, right)) in left.iter().zip(right.iter()).enumerate() {
+            assert!(
+                (left - right).abs() < 0.000_000_1,
+                "sample {index}: {left} != {right}"
+            );
         }
     }
 
@@ -1934,7 +1936,7 @@ mod tests {
             .push(EngineCommand::ScheduleEvent {
                 id: 2,
                 event: ScheduledEngineEvent::NoteOn {
-                    target_node: NODE_INSTRUMENT,
+                    target_node: NODE_EVENT_INPUT,
                     note: 69,
                     velocity: 0.5,
                     at_sample: 64,
@@ -1946,6 +1948,100 @@ mod tests {
 
         assert!(frame_is_silent(&output, 63));
         assert!(frame_has_signal(&output, 65));
+    }
+
+    #[test]
+    fn one_voice_instrument_matches_monophonic_voice_output() {
+        fn render_voice(use_instrument: bool) -> Vec<f32> {
+            let (command_sender, command_receiver) = crate::engine_command_queue();
+            let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+            let plan = if use_instrument {
+                monophonic_instrument_plan(2)
+            } else {
+                monophonic_voice_plan(2)
+            };
+            let target_node = if use_instrument {
+                NODE_EVENT_INPUT
+            } else {
+                NODE_VOICE
+            };
+            let mut engine = AudioEngine::new()
+                .with_execution_plan(&plan, 512)
+                .unwrap()
+                .with_realtime_queues(command_receiver, telemetry_sender);
+
+            command_sender
+                .push(EngineCommand::TransportStart {
+                    id: 1,
+                    at_sample: 0,
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 2,
+                    event: ScheduledEngineEvent::NoteOn {
+                        target_node,
+                        note: 69,
+                        velocity: 0.5,
+                        at_sample: 32,
+                    },
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 3,
+                    event: ScheduledEngineEvent::NoteOff {
+                        target_node,
+                        note: 69,
+                        at_sample: 160,
+                    },
+                })
+                .unwrap();
+
+            process_frames(&mut engine, 256)
+        }
+
+        assert_outputs_close(&render_voice(false), &render_voice(true));
+    }
+
+    #[test]
+    fn transport_stop_clears_instrument_voices() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let plan = monophonic_instrument_plan(2);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 2,
+                event: ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 69,
+                    velocity: 0.5,
+                    at_sample: 0,
+                },
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::TransportStop {
+                id: 3,
+                at_sample: 64,
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 128);
+
+        assert!(frame_has_signal(&output, 63));
+        assert!(frame_is_silent(&output, 65));
     }
 
     #[test]
