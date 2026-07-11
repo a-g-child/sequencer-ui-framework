@@ -9,10 +9,10 @@ use std::{
 
 use engine_dsp::{MonophonicVoice, MonophonicVoiceState, SmoothedParameter};
 use engine_protocol::{
-    ArpeggiatorPattern, ArpeggiatorPhaseMode, AudioBufferSlot, BufferSlotId, EventEndpoint,
-    EventGraphDiagnostics, EventRouteMask, FutureEventLifetime, FutureEventOwner,
-    FutureEventRequest, NativeExecutionPlan, NodeId, ParameterSlotId, PlanNodeKind,
-    ScheduledEngineEvent, TempoMapSnapshot, TransportLoop, ARPEGGIATOR_PORT_INPUT,
+    ArpeggiatorOctaveDirection, ArpeggiatorPattern, ArpeggiatorPhaseMode, AudioBufferSlot,
+    BufferSlotId, EventEndpoint, EventGraphDiagnostics, EventRouteMask, FutureEventLifetime,
+    FutureEventOwner, FutureEventRequest, NativeExecutionPlan, NodeId, ParameterSlotId,
+    PlanNodeKind, ScheduledEngineEvent, TempoMapSnapshot, TransportLoop, ARPEGGIATOR_PORT_INPUT,
     ARPEGGIATOR_PORT_NOTES, ARPEGGIATOR_PORT_TICK, ARPEGGIATOR_PORT_TICK_INPUT, DEFAULT_EVENT_PORT,
     EVENT_DELAY_PORT_DELAYED, EVENT_DELAY_PORT_INPUT, NATIVE_EXECUTION_PLAN_VERSION,
     SCALE_PORT_ACCEPTED, SCALE_PORT_INPUT, SCALE_PORT_REJECTED,
@@ -121,6 +121,8 @@ pub struct ArpeggiatorCompatibility {
     pub phase_mode: ArpeggiatorPhaseMode,
     pub pattern: ArpeggiatorPattern,
     pub maximum_held_notes: u16,
+    pub octave_count: u8,
+    pub octave_direction: ArpeggiatorOctaveDirection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -373,6 +375,7 @@ impl PreparedExecutionPlan {
                         node_plan.step_beats,
                         node_plan.gate_ratio,
                         node_plan.maximum_held_notes,
+                        node_plan.octave_count,
                     )?;
 
                     Ok(RuntimeNode::Arpeggiator(ArpeggiatorNode::new(
@@ -381,6 +384,8 @@ impl PreparedExecutionPlan {
                         node_plan.maximum_held_notes,
                         node_plan.phase_mode,
                         node_plan.pattern,
+                        node_plan.octave_count,
+                        node_plan.octave_direction,
                     )))
                 }
                 PlanNodeKind::Oscillator(node_plan) => {
@@ -1603,6 +1608,8 @@ struct ArpeggiatorNode {
     gate_ratio: f32,
     phase_mode: ArpeggiatorPhaseMode,
     pattern: ArpeggiatorPattern,
+    octave_count: u8,
+    octave_direction: ArpeggiatorOctaveDirection,
     held_count: usize,
     current_index: usize,
     played_order_counter: u64,
@@ -1648,6 +1655,8 @@ impl ArpeggiatorNode {
         maximum_held_notes: u16,
         phase_mode: ArpeggiatorPhaseMode,
         pattern: ArpeggiatorPattern,
+        octave_count: u8,
+        octave_direction: ArpeggiatorOctaveDirection,
     ) -> Self {
         Self {
             held_notes: vec![None; maximum_held_notes as usize].into_boxed_slice(),
@@ -1655,6 +1664,8 @@ impl ArpeggiatorNode {
             gate_ratio,
             phase_mode,
             pattern,
+            octave_count,
+            octave_direction,
             held_count: 0,
             current_index: 0,
             played_order_counter: 0,
@@ -1679,6 +1690,8 @@ impl ArpeggiatorNode {
             && self.gate_ratio == other.gate_ratio
             && self.phase_mode == other.phase_mode
             && self.pattern == other.pattern
+            && self.octave_count == other.octave_count
+            && self.octave_direction == other.octave_direction
             && self.held_notes.len() == other.held_notes.len()
     }
 
@@ -1699,7 +1712,7 @@ impl ArpeggiatorNode {
             self.current_index = 0;
             self.sequence_index = 1;
         } else {
-            self.current_index %= self.pattern_length();
+            self.current_index %= self.expanded_pattern_length();
         }
 
         Ok(())
@@ -1747,35 +1760,38 @@ impl ArpeggiatorNode {
                     return false;
                 }
 
-                let Some(note) = self.next_note(context) else {
-                    return false;
-                };
                 let at_sample = context.sample_position;
-                let tick_beat = context.tempo_map.sample_to_beat(at_sample);
-                let note_off_sample = context
-                    .tempo_map
-                    .beat_to_sample(tick_beat + self.step_beats * self.gate_ratio as f64);
+                let emitted = if let Some(note) = self.next_note(context) {
+                    let tick_beat = context.tempo_map.sample_to_beat(at_sample);
+                    let note_off_sample = context
+                        .tempo_map
+                        .beat_to_sample(tick_beat + self.step_beats * self.gate_ratio as f64);
 
-                let note_on = ScheduledEngineEvent::NoteOn {
-                    target_node: future_emitter.source_node_id(),
-                    note: note.note,
-                    velocity: note.velocity,
-                    at_sample,
-                };
-                let note_off = ScheduledEngineEvent::NoteOff {
-                    target_node: future_emitter.source_node_id(),
-                    note: note.note,
-                    at_sample: note_off_sample,
+                    let note_on = ScheduledEngineEvent::NoteOn {
+                        target_node: future_emitter.source_node_id(),
+                        note: note.note,
+                        velocity: note.velocity,
+                        at_sample,
+                    };
+                    let note_off = ScheduledEngineEvent::NoteOff {
+                        target_node: future_emitter.source_node_id(),
+                        note: note.note,
+                        at_sample: note_off_sample,
+                    };
+                    let emitted = emitter.emit_from(ARPEGGIATOR_PORT_NOTES, note_on).is_ok();
+
+                    let _ = future_emitter.request_from_lifetime(
+                        ARPEGGIATOR_PORT_NOTES,
+                        note_off,
+                        note_off_sample,
+                        FutureEventLifetime::CompletionRequired,
+                        0,
+                    );
+                    emitted
+                } else {
+                    true
                 };
 
-                let emitted = emitter.emit_from(ARPEGGIATOR_PORT_NOTES, note_on).is_ok();
-                let _ = future_emitter.request_from_lifetime(
-                    ARPEGGIATOR_PORT_NOTES,
-                    note_off,
-                    note_off_sample,
-                    FutureEventLifetime::CompletionRequired,
-                    0,
-                );
                 self.sequence_index = self.sequence_index.saturating_add(1);
                 self.schedule_tick(future_emitter);
                 emitted
@@ -1828,7 +1844,6 @@ impl ArpeggiatorNode {
 
         *slot = None;
         self.held_count = self.held_count.saturating_sub(1);
-        self.current_index = self.current_index.min(self.held_count.saturating_sub(1));
         self.sort_held_notes();
         self.invalidate_generation();
         true
@@ -1842,7 +1857,7 @@ impl ArpeggiatorNode {
             return;
         }
 
-        self.current_index %= self.pattern_length();
+        self.current_index %= self.expanded_pattern_length();
     }
 
     fn restart_sequence(&mut self, context: RuntimeEventContext) {
@@ -1887,16 +1902,17 @@ impl ArpeggiatorNode {
             return None;
         }
 
-        let pattern_index = self
+        let expanded_index = self
             .loop_locked_pattern_index(
                 context.sample_position,
                 context.tempo_map,
                 context.transport_loop,
             )
             .unwrap_or(self.current_index);
-        let note = self.note_for_pattern_index(pattern_index)?;
 
-        self.current_index = (pattern_index + 1) % self.pattern_length();
+        self.current_index = (expanded_index + 1) % self.expanded_pattern_length();
+
+        let note = self.note_for_expanded_pattern_index(expanded_index)?;
         Some(note)
     }
 
@@ -1951,13 +1967,79 @@ impl ArpeggiatorNode {
         }
         .saturating_sub(1);
 
-        Some(step_index as usize % self.pattern_length())
+        Some(step_index as usize % self.expanded_pattern_length())
     }
 
     fn pattern_length(&self) -> usize {
         match self.pattern {
             ArpeggiatorPattern::UpDown if self.held_count > 1 => self.held_count * 2 - 2,
             _ => self.held_count,
+        }
+    }
+
+    fn octave_pattern_length(&self) -> usize {
+        match self.octave_direction {
+            ArpeggiatorOctaveDirection::UpDown if self.octave_count > 1 => {
+                self.octave_count as usize * 2 - 2
+            }
+            _ => self.octave_count as usize,
+        }
+    }
+
+    fn expanded_pattern_length(&self) -> usize {
+        self.pattern_length() * self.octave_pattern_length()
+    }
+
+    fn note_for_expanded_pattern_index(&self, index: usize) -> Option<HeldNote> {
+        // Octave expansion is layered: walk the note pattern inside one octave,
+        // then advance the octave layer. A note-pattern UpDown and an octave
+        // UpDown are therefore independent phases, not one flattened phrase.
+        let base_pattern_length = self.pattern_length();
+        let base_index = index % base_pattern_length;
+        let octave_step = index / base_pattern_length;
+        let octave = self.octave_for_pattern_index(octave_step)?;
+        let mut note = self.note_for_pattern_index(base_index)?;
+        let expanded_note = note.note as i16 + octave as i16 * 12;
+
+        if !(0..=127).contains(&expanded_note) {
+            return None;
+        }
+
+        note.note = expanded_note as u8;
+        Some(note)
+    }
+
+    fn octave_for_pattern_index(&self, index: usize) -> Option<i8> {
+        let count = self.octave_count as usize;
+
+        if count == 0 {
+            return None;
+        }
+
+        let octave = match self.octave_direction {
+            ArpeggiatorOctaveDirection::Up => index % count,
+            ArpeggiatorOctaveDirection::Down => index % count,
+            ArpeggiatorOctaveDirection::UpDown => {
+                if count == 1 {
+                    0
+                } else {
+                    let period = self.octave_pattern_length();
+                    let position = index % period;
+
+                    if position < count {
+                        position
+                    } else {
+                        period - position
+                    }
+                }
+            }
+        };
+
+        match self.octave_direction {
+            ArpeggiatorOctaveDirection::Up | ArpeggiatorOctaveDirection::UpDown => {
+                Some(octave as i8)
+            }
+            ArpeggiatorOctaveDirection::Down => Some(-(octave as i8)),
         }
     }
 
@@ -3609,6 +3691,7 @@ fn validate_arpeggiator_config(
     step_beats: f64,
     gate_ratio: f32,
     maximum_held_notes: u16,
+    octave_count: u8,
 ) -> Result<(), PlanValidationError> {
     if !step_beats.is_finite()
         || step_beats <= 0.0
@@ -3617,6 +3700,7 @@ fn validate_arpeggiator_config(
         || gate_ratio >= 1.0
         || maximum_held_notes == 0
         || maximum_held_notes > MAX_ARPEGGIATOR_HELD_NOTES
+        || octave_count == 0
     {
         return Err(PlanValidationError::InvalidArpeggiatorConfig);
     }
@@ -3678,6 +3762,8 @@ fn arpeggiator_compatibility(kind: &PlanNodeKind) -> Option<ArpeggiatorCompatibi
             phase_mode: node.phase_mode,
             pattern: node.pattern,
             maximum_held_notes: node.maximum_held_notes,
+            octave_count: node.octave_count,
+            octave_direction: node.octave_direction,
         }),
         _ => None,
     }
@@ -4447,6 +4533,24 @@ mod tests {
         maximum_held_notes: u16,
         pattern: ArpeggiatorPattern,
     ) -> NativeExecutionPlan {
+        arpeggiator_to_recording_plan_with_pattern_and_octaves(
+            step_beats,
+            gate_ratio,
+            maximum_held_notes,
+            pattern,
+            1,
+            ArpeggiatorOctaveDirection::Up,
+        )
+    }
+
+    fn arpeggiator_to_recording_plan_with_pattern_and_octaves(
+        step_beats: f64,
+        gate_ratio: f32,
+        maximum_held_notes: u16,
+        pattern: ArpeggiatorPattern,
+        octave_count: u8,
+        octave_direction: ArpeggiatorOctaveDirection,
+    ) -> NativeExecutionPlan {
         NativeExecutionPlan {
             version: NATIVE_EXECUTION_PLAN_VERSION,
             plan_id: 1,
@@ -4464,6 +4568,8 @@ mod tests {
                         maximum_held_notes,
                         phase_mode: ArpeggiatorPhaseMode::FreeRunning,
                         pattern,
+                        octave_count,
+                        octave_direction,
                     }),
                 },
                 PlanNode {
@@ -5457,6 +5563,46 @@ mod tests {
             .collect()
     }
 
+    fn arpeggiator_recorded_note_ons_with_octaves(
+        pattern: ArpeggiatorPattern,
+        input_notes: &[u8],
+        tick_count: usize,
+        octave_count: u8,
+        octave_direction: ArpeggiatorOctaveDirection,
+    ) -> Vec<u8> {
+        let plan = arpeggiator_to_recording_plan_with_pattern_and_octaves(
+            8.0 / 24_000.0,
+            2.0 / 8.0,
+            8,
+            pattern,
+            octave_count,
+            octave_direction,
+        );
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        for (index, note) in input_notes.iter().copied().enumerate() {
+            assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, note, 0.5, index as u64)));
+        }
+
+        for index in 0..tick_count {
+            dispatch_next_valid_arpeggiator_tick(&mut prepared);
+
+            if index + 1 < tick_count {
+                discard_generated_note_off(&mut prepared);
+            }
+        }
+
+        recorded_events(&prepared, 2)
+            .iter()
+            .filter_map(|event| match event {
+                ScheduledEngineEvent::NoteOn { note, .. } => Some(*note),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn arpeggiator_descending_pattern_orders_notes_high_to_low() {
         assert_eq!(
@@ -5571,6 +5717,152 @@ mod tests {
     }
 
     #[test]
+    fn arpeggiator_one_octave_matches_existing_pattern_behaviour() {
+        assert_eq!(
+            arpeggiator_recorded_note_ons_with_octaves(
+                ArpeggiatorPattern::Ascending,
+                &[64, 60, 67],
+                5,
+                1,
+                ArpeggiatorOctaveDirection::Up,
+            ),
+            vec![60, 64, 67, 60, 64]
+        );
+    }
+
+    #[test]
+    fn arpeggiator_two_octave_ascending_sequence_layers_octaves_up() {
+        assert_eq!(
+            arpeggiator_recorded_note_ons_with_octaves(
+                ArpeggiatorPattern::Ascending,
+                &[64, 60, 67],
+                7,
+                2,
+                ArpeggiatorOctaveDirection::Up,
+            ),
+            vec![60, 64, 67, 72, 76, 79, 60]
+        );
+    }
+
+    #[test]
+    fn arpeggiator_two_octave_down_sequence_layers_octaves_down() {
+        assert_eq!(
+            arpeggiator_recorded_note_ons_with_octaves(
+                ArpeggiatorPattern::Ascending,
+                &[64, 60, 67],
+                7,
+                2,
+                ArpeggiatorOctaveDirection::Down,
+            ),
+            vec![60, 64, 67, 48, 52, 55, 60]
+        );
+    }
+
+    #[test]
+    fn arpeggiator_octave_up_down_does_not_repeat_octave_endpoints() {
+        assert_eq!(
+            arpeggiator_recorded_note_ons_with_octaves(
+                ArpeggiatorPattern::Ascending,
+                &[60, 64],
+                9,
+                3,
+                ArpeggiatorOctaveDirection::UpDown,
+            ),
+            vec![60, 64, 72, 76, 84, 88, 72, 76, 60]
+        );
+    }
+
+    #[test]
+    fn arpeggiator_octave_out_of_range_notes_are_suppressed_without_shortening_phrase() {
+        let plan = arpeggiator_to_recording_plan_with_pattern_and_octaves(
+            8.0 / 24_000.0,
+            2.0 / 8.0,
+            8,
+            ArpeggiatorPattern::Ascending,
+            2,
+            ArpeggiatorOctaveDirection::Up,
+        );
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 120, 0.5, 0)));
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 123, 0.5, 1)));
+
+        dispatch_next_valid_arpeggiator_tick(&mut prepared);
+        discard_generated_note_off(&mut prepared);
+        dispatch_next_valid_arpeggiator_tick(&mut prepared);
+        discard_generated_note_off(&mut prepared);
+        dispatch_next_valid_arpeggiator_tick(&mut prepared);
+        dispatch_next_valid_arpeggiator_tick(&mut prepared);
+        dispatch_next_valid_arpeggiator_tick(&mut prepared);
+
+        assert_eq!(
+            recorded_events(&prepared, 2)
+                .iter()
+                .filter_map(|event| match event {
+                    ScheduledEngineEvent::NoteOn { note, .. } => Some(*note),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![120, 123, 120]
+        );
+    }
+
+    #[test]
+    fn arpeggiator_loop_locked_octave_phase_resets_after_wrap() {
+        let tempo = TempoMapSnapshot::default();
+        let transport_loop = TransportLoop {
+            enabled: true,
+            start_sample: 0,
+            end_sample: 36_000,
+        };
+        let mut plan = arpeggiator_to_recording_plan_with_pattern_and_octaves(
+            1.0,
+            0.5,
+            4,
+            ArpeggiatorPattern::Ascending,
+            2,
+            ArpeggiatorOctaveDirection::Up,
+        );
+
+        if let PlanNodeKind::Arpeggiator(node) = &mut plan.nodes[1].kind {
+            node.phase_mode = ArpeggiatorPhaseMode::LoopLocked;
+        }
+
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        for (index, note) in [60, 64].into_iter().enumerate() {
+            assert!(prepared.dispatch_event_from_with_tempo_and_loop(
+                event_endpoint(NODE_EVENT_INPUT),
+                note_on(NODE_EVENT_INPUT, note, 0.75, index as u64),
+                tempo,
+                transport_loop
+            ));
+        }
+
+        for index in 0..3 {
+            dispatch_next_valid_arpeggiator_tick_with_loop(&mut prepared, tempo, transport_loop);
+
+            if index < 2 {
+                discard_generated_note_off(&mut prepared);
+            }
+        }
+
+        let actual_notes: Vec<_> = recorded_events(&prepared, 2)
+            .iter()
+            .filter_map(|event| match event {
+                ScheduledEngineEvent::NoteOn { note, .. } => Some(*note),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(actual_notes, vec![60, 64, 60]);
+    }
+
+    #[test]
     fn state_transfer_preserves_arpeggiator_played_order_position() {
         let old_plan = arpeggiator_to_recording_plan_with_pattern(
             8.0 / 24_000.0,
@@ -5676,6 +5968,32 @@ mod tests {
     }
 
     #[test]
+    fn changed_arpeggiator_octave_configuration_is_not_transferred() {
+        let old_plan = arpeggiator_to_recording_plan_with_pattern_and_octaves(
+            8.0 / 24_000.0,
+            2.0 / 8.0,
+            8,
+            ArpeggiatorPattern::Ascending,
+            2,
+            ArpeggiatorOctaveDirection::Up,
+        );
+        let new_plan = arpeggiator_to_recording_plan_with_pattern_and_octaves(
+            8.0 / 24_000.0,
+            2.0 / 8.0,
+            8,
+            ArpeggiatorPattern::Ascending,
+            3,
+            ArpeggiatorOctaveDirection::Up,
+        );
+        let old_prepared = PreparedExecutionPlan::prepare(&old_plan, 128).unwrap();
+        let new_prepared = PreparedExecutionPlan::prepare(&new_plan, 128).unwrap();
+        let transfer =
+            build_state_transfer(&old_prepared.metadata(), &new_prepared.metadata()).unwrap();
+
+        assert!(transfer.entries.is_empty());
+    }
+
+    #[test]
     fn explicit_incompatible_arpeggiator_transfer_rejects() {
         let old_plan = arpeggiator_to_recording_plan_with_pattern(
             8.0 / 24_000.0,
@@ -5759,6 +6077,20 @@ mod tests {
                 Err(PlanValidationError::InvalidArpeggiatorConfig)
             ));
         }
+
+        let plan = arpeggiator_to_recording_plan_with_pattern_and_octaves(
+            0.25,
+            0.5,
+            4,
+            ArpeggiatorPattern::Ascending,
+            0,
+            ArpeggiatorOctaveDirection::Up,
+        );
+
+        assert!(matches!(
+            PreparedExecutionPlan::prepare(&plan, 128),
+            Err(PlanValidationError::InvalidArpeggiatorConfig)
+        ));
     }
 
     #[test]

@@ -1793,6 +1793,8 @@ mod tests {
                         maximum_held_notes: 8,
                         phase_mode,
                         pattern,
+                        octave_count: 1,
+                        octave_direction: engine_protocol::ArpeggiatorOctaveDirection::Up,
                     }),
                 },
                 PlanNode {

@@ -200,6 +200,8 @@ pub struct ArpeggiatorNodePlan {
     pub maximum_held_notes: u16,
     pub phase_mode: ArpeggiatorPhaseMode,
     pub pattern: ArpeggiatorPattern,
+    pub octave_count: u8,
+    pub octave_direction: ArpeggiatorOctaveDirection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -214,6 +216,13 @@ pub enum ArpeggiatorPattern {
     Descending,
     UpDown,
     PlayedOrder,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArpeggiatorOctaveDirection {
+    Up,
+    Down,
+    UpDown,
 }
 
 #[derive(Clone, Debug, PartialEq)]
