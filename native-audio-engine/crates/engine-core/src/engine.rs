@@ -13,6 +13,7 @@ use crate::{
 };
 
 const PENDING_COMMAND_CAPACITY: usize = 1024;
+const DEFAULT_PLAN_CROSSFADE_SAMPLES: u32 = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct DiagnosticSignalState {
@@ -31,6 +32,23 @@ impl DiagnosticSignalState {
     }
 }
 
+struct ActivePlanCrossfade {
+    old_plan: Option<PreparedExecutionPlan>,
+    new_plan: Option<PreparedExecutionPlan>,
+    total_samples: u32,
+    processed_samples: u32,
+}
+
+impl ActivePlanCrossfade {
+    fn remaining_samples(&self) -> u32 {
+        self.total_samples.saturating_sub(self.processed_samples)
+    }
+
+    fn is_complete(&self) -> bool {
+        self.processed_samples >= self.total_samples
+    }
+}
+
 pub struct AudioEngine {
     sample_position: u64,
     callback_count: u64,
@@ -41,6 +59,8 @@ pub struct AudioEngine {
     last_parameter: Option<(u32, f32)>,
     diagnostic_signal: DiagnosticSignalState,
     execution_plan: Option<PreparedExecutionPlan>,
+    crossfade: Option<ActivePlanCrossfade>,
+    deferred_retirement: Option<RetiredExecutionPlan>,
     pending_plans: PendingPlanSet,
     prepared_plan_receiver: Option<PreparedPlanReceiver>,
     retired_plan_sender: Option<RetiredPlanSender>,
@@ -73,6 +93,8 @@ impl AudioEngine {
             last_parameter: None,
             diagnostic_signal: DiagnosticSignalState::disabled(),
             execution_plan: None,
+            crossfade: None,
+            deferred_retirement: None,
             pending_plans: PendingPlanSet::default(),
             prepared_plan_receiver: None,
             retired_plan_sender: None,
@@ -164,6 +186,7 @@ impl AudioEngine {
         self.drain_command_queue();
         self.prepare_block_commands();
         self.drain_plan_transfers();
+        self.flush_deferred_retirement();
         self.apply_block_boundary_swaps(block_start, block_end);
         self.render_block(output, context, block_start, block_end);
 
@@ -211,11 +234,23 @@ impl AudioEngine {
             active_plan_id: self
                 .execution_plan
                 .as_ref()
-                .map(PreparedExecutionPlan::plan_id),
+                .map(PreparedExecutionPlan::plan_id)
+                .or_else(|| {
+                    self.crossfade
+                        .as_ref()
+                        .and_then(|crossfade| crossfade.new_plan.as_ref())
+                        .map(PreparedExecutionPlan::plan_id)
+                }),
             active_plan_revision: self
                 .execution_plan
                 .as_ref()
-                .map(PreparedExecutionPlan::plan_revision),
+                .map(PreparedExecutionPlan::plan_revision)
+                .or_else(|| {
+                    self.crossfade
+                        .as_ref()
+                        .and_then(|crossfade| crossfade.new_plan.as_ref())
+                        .map(PreparedExecutionPlan::plan_revision)
+                }),
             pending_plan_count: self.pending_plans.len() as u32,
             successful_swaps: self.successful_plan_swaps,
             rejected_swaps: self.rejected_plan_swaps,
@@ -267,6 +302,44 @@ impl AudioEngine {
         }
     }
 
+    fn can_accept_retired_plan(&self) -> bool {
+        self.deferred_retirement.is_none()
+            && self
+                .retired_plan_sender
+                .as_ref()
+                .is_some_and(|sender| !sender.is_full())
+    }
+
+    fn flush_deferred_retirement(&mut self) {
+        let Some(retired) = self.deferred_retirement.take() else {
+            return;
+        };
+
+        let Some(sender) = self.retired_plan_sender.as_ref() else {
+            self.deferred_retirement = Some(retired);
+            return;
+        };
+
+        if let Err(retired) = sender.push(retired) {
+            self.deferred_retirement = Some(retired);
+        }
+    }
+
+    fn retire_or_defer(&mut self, retired: RetiredExecutionPlan) {
+        let Some(sender) = self.retired_plan_sender.as_ref() else {
+            if self.deferred_retirement.is_none() {
+                self.deferred_retirement = Some(retired);
+            }
+            return;
+        };
+
+        if let Err(retired) = sender.push(retired) {
+            if self.deferred_retirement.is_none() {
+                self.deferred_retirement = Some(retired);
+            }
+        }
+    }
+
     fn apply_block_boundary_swaps(&mut self, block_start: u64, _block_end: u64) {
         self.pending_commands.clear();
         self.block_commands.clear();
@@ -302,6 +375,15 @@ impl AudioEngine {
         else {
             return;
         };
+
+        if self.crossfade.is_some() {
+            if let Some(transfer) = self.pending_plans.take(transfer_id) {
+                self.retire_unactivated_transfer(transfer);
+            }
+            self.reject_swap_command(id, CommandRejection::SwapInProgress);
+            return;
+        }
+
         let Some(mut transfer) = self.pending_plans.take(transfer_id) else {
             self.reject_swap_command(id, CommandRejection::MissingPreparedPlan);
             return;
@@ -323,32 +405,36 @@ impl AudioEngine {
             return;
         }
 
-        if let Some(old_plan) = self.execution_plan.take() {
-            let retired = RetiredExecutionPlan {
-                plan_id: old_plan.plan_id(),
-                plan_revision: old_plan.plan_revision(),
-                plan: old_plan,
-            };
-
-            let Some(sender) = self.retired_plan_sender.as_ref() else {
-                let _ = self.pending_plans.insert(transfer);
-                self.execution_plan = Some(retired.plan);
-                self.reject_swap_command(id, CommandRejection::RetirementQueueFull);
-                return;
-            };
-
-            if let Err(retired) = sender.push(retired) {
-                let _ = self.pending_plans.insert(transfer);
-                self.execution_plan = Some(retired.plan);
-                self.reject_swap_command(id, CommandRejection::RetirementQueueFull);
-                return;
-            }
-        }
-
         let plan_id = transfer.plan_id;
         let plan_revision = transfer.plan_revision;
 
-        self.execution_plan = Some(transfer.plan);
+        let Some(old_plan) = self.execution_plan.take() else {
+            self.execution_plan = Some(transfer.plan);
+            self.successful_plan_swaps = self.successful_plan_swaps.saturating_add(1);
+            self.command_diagnostics.applied = self.command_diagnostics.applied.saturating_add(1);
+            self.publish_event(EngineEvent::ExecutionPlanSwapped {
+                command_id: id,
+                plan_id,
+                plan_revision,
+                requested_sample,
+                applied_sample,
+            });
+            return;
+        };
+
+        if !self.can_accept_retired_plan() {
+            let _ = self.pending_plans.insert(transfer);
+            self.execution_plan = Some(old_plan);
+            self.reject_swap_command(id, CommandRejection::RetirementQueueFull);
+            return;
+        }
+
+        self.crossfade = Some(ActivePlanCrossfade {
+            old_plan: Some(old_plan),
+            new_plan: Some(transfer.plan),
+            total_samples: DEFAULT_PLAN_CROSSFADE_SAMPLES,
+            processed_samples: 0,
+        });
         self.successful_plan_swaps = self.successful_plan_swaps.saturating_add(1);
         self.command_diagnostics.applied = self.command_diagnostics.applied.saturating_add(1);
         self.publish_event(EngineEvent::ExecutionPlanSwapped {
@@ -374,7 +460,7 @@ impl AudioEngine {
     ) {
         output.fill(0.0);
 
-        if self.execution_plan.is_some() {
+        if self.execution_plan.is_some() || self.crossfade.is_some() {
             self.render_execution_plan(output, context, block_start, block_end);
             return;
         }
@@ -391,12 +477,7 @@ impl AudioEngine {
     ) {
         let frame_count = context.frame_count as usize;
 
-        if self
-            .execution_plan
-            .as_ref()
-            .map(|plan| frame_count > plan.maximum_frames())
-            .unwrap_or(false)
-        {
+        if !self.can_render_plan_output(frame_count, context.output_channels.max(1) as usize) {
             self.stream_errors = self.stream_errors.saturating_add(1);
             self.publish_event(EngineEvent::StreamError { code: 1 });
             self.retain_all_processing_commands();
@@ -414,30 +495,158 @@ impl AudioEngine {
                 .next_command_frame(command_index, block_start, block_end)
                 .unwrap_or(frame_count)
                 .min(frame_count);
+            let next_frame = self
+                .crossfade
+                .as_ref()
+                .map(|crossfade| {
+                    next_frame
+                        .min(current_frame.saturating_add(crossfade.remaining_samples() as usize))
+                })
+                .unwrap_or(next_frame);
 
             if current_frame < next_frame && self.playing {
                 let range = ProcessRange {
                     start_frame: current_frame,
                     end_frame: next_frame,
                 };
-                let plan = self
-                    .execution_plan
-                    .as_mut()
-                    .expect("execution plan should exist while rendering");
 
-                plan.clear_range(range);
-                plan.process(
-                    output,
-                    context.sample_rate,
-                    context.output_channels.max(1) as usize,
-                    range,
-                );
+                if self.crossfade.is_some() {
+                    if !self.render_crossfade_range(output, context, range) {
+                        self.stream_errors = self.stream_errors.saturating_add(1);
+                        self.publish_event(EngineEvent::StreamError { code: 1 });
+                        self.retain_all_processing_commands();
+                        return;
+                    }
+                } else {
+                    let plan = self
+                        .execution_plan
+                        .as_mut()
+                        .expect("execution plan should exist while rendering");
+
+                    plan.clear_range(range);
+                    plan.process(
+                        output,
+                        context.sample_rate,
+                        context.output_channels.max(1) as usize,
+                        range,
+                    );
+                }
+            } else if current_frame < next_frame {
+                self.advance_silent_crossfade(next_frame - current_frame);
             }
 
             current_frame = next_frame;
+
+            if self
+                .crossfade
+                .as_ref()
+                .is_some_and(ActivePlanCrossfade::is_complete)
+            {
+                self.finish_crossfade();
+            }
         }
 
         self.retain_future_commands(command_index, block_end);
+    }
+
+    fn can_render_plan_output(&self, frame_count: usize, output_channels: usize) -> bool {
+        if let Some(crossfade) = self.crossfade.as_ref() {
+            return crossfade.old_plan.as_ref().is_some_and(|plan| {
+                frame_count <= plan.maximum_frames() && output_channels <= plan.output_channels()
+            }) && crossfade.new_plan.as_ref().is_some_and(|plan| {
+                frame_count <= plan.maximum_frames() && output_channels <= plan.output_channels()
+            });
+        }
+
+        self.execution_plan
+            .as_ref()
+            .map(|plan| frame_count <= plan.maximum_frames())
+            .unwrap_or(false)
+    }
+
+    fn render_crossfade_range(
+        &mut self,
+        output: &mut [f32],
+        context: ProcessContext,
+        range: ProcessRange,
+    ) -> bool {
+        let channels = context.output_channels.max(1) as usize;
+        let Some(crossfade) = self.crossfade.as_mut() else {
+            return false;
+        };
+        let Some(old_plan) = crossfade.old_plan.as_mut() else {
+            return false;
+        };
+        let Some(new_plan) = crossfade.new_plan.as_mut() else {
+            return false;
+        };
+        let Some(old_output) = old_plan.process_to_scratch(context.sample_rate, channels, range)
+        else {
+            return false;
+        };
+        let Some(new_output) = new_plan.process_to_scratch(context.sample_rate, channels, range)
+        else {
+            return false;
+        };
+
+        for frame in range.start_frame..range.end_frame {
+            let fade_sample = crossfade.processed_samples + (frame - range.start_frame) as u32;
+            let t = (fade_sample as f32 / crossfade.total_samples.max(1) as f32).clamp(0.0, 1.0);
+            let old_gain = 1.0 - t;
+            let new_gain = t;
+            let frame_start = frame * channels;
+            let frame_end = frame_start + channels;
+
+            for sample_index in frame_start..frame_end {
+                output[sample_index] =
+                    old_output[sample_index] * old_gain + new_output[sample_index] * new_gain;
+            }
+        }
+
+        crossfade.processed_samples = crossfade
+            .processed_samples
+            .saturating_add((range.end_frame - range.start_frame) as u32)
+            .min(crossfade.total_samples);
+        true
+    }
+
+    fn advance_silent_crossfade(&mut self, frame_count: usize) {
+        let Some(crossfade) = self.crossfade.as_mut() else {
+            return;
+        };
+
+        crossfade.processed_samples = crossfade
+            .processed_samples
+            .saturating_add(frame_count as u32)
+            .min(crossfade.total_samples);
+    }
+
+    fn finish_crossfade(&mut self) {
+        let Some(mut crossfade) = self.crossfade.take() else {
+            return;
+        };
+
+        if !crossfade.is_complete() {
+            self.crossfade = Some(crossfade);
+            return;
+        }
+
+        let Some(old_plan) = crossfade.old_plan.take() else {
+            self.crossfade = Some(crossfade);
+            return;
+        };
+        let Some(new_plan) = crossfade.new_plan.take() else {
+            self.crossfade = Some(crossfade);
+            return;
+        };
+        let retired = RetiredExecutionPlan {
+            plan_id: old_plan.plan_id(),
+            plan_revision: old_plan.plan_revision(),
+            plan: old_plan,
+        };
+
+        self.retire_or_defer(retired);
+        self.execution_plan = Some(new_plan);
     }
 
     fn next_command_frame(
@@ -589,6 +798,7 @@ impl AudioEngine {
                 if let Some(plan) = self.execution_plan.as_mut() {
                     plan.reset();
                 }
+                self.clear_crossfade_for_panic();
                 self.publish_event(EngineEvent::TransportStateChanged {
                     playing: false,
                     at_sample: applied_sample,
@@ -622,6 +832,14 @@ impl AudioEngine {
     }
 
     fn set_parameter(&mut self, parameter_id: u32, value: f32, ramp_samples: u32) -> bool {
+        if let Some(new_plan) = self
+            .crossfade
+            .as_mut()
+            .and_then(|crossfade| crossfade.new_plan.as_mut())
+        {
+            return new_plan.set_parameter(parameter_id, value, ramp_samples);
+        }
+
         if let Some(plan) = self.execution_plan.as_mut() {
             return plan.set_parameter(parameter_id, value, ramp_samples);
         }
@@ -638,6 +856,28 @@ impl AudioEngine {
                 true
             }
             _ => false,
+        }
+    }
+
+    fn clear_crossfade_for_panic(&mut self) {
+        let Some(mut crossfade) = self.crossfade.take() else {
+            return;
+        };
+
+        if let Some(old_plan) = crossfade.old_plan.take() {
+            self.retire_or_defer(RetiredExecutionPlan {
+                plan_id: old_plan.plan_id(),
+                plan_revision: old_plan.plan_revision(),
+                plan: old_plan,
+            });
+        }
+
+        if let Some(new_plan) = crossfade.new_plan.take() {
+            self.retire_or_defer(RetiredExecutionPlan {
+                plan_id: new_plan.plan_id(),
+                plan_revision: new_plan.plan_revision(),
+                plan: new_plan,
+            });
         }
     }
 
@@ -768,6 +1008,14 @@ mod tests {
         process_block(engine, &mut output, frames)
     }
 
+    fn assert_outputs_close(left: &[f32], right: &[f32]) {
+        assert_eq!(left.len(), right.len());
+
+        for (left, right) in left.iter().zip(right.iter()) {
+            assert!((left - right).abs() < 0.000_000_1);
+        }
+    }
+
     fn frame_is_silent(output: &[f32], frame: usize) -> bool {
         output[frame * 2] == 0.0 && output[frame * 2 + 1] == 0.0
     }
@@ -779,6 +1027,16 @@ mod tests {
     fn next_swap_event(receiver: &crate::EngineTelemetryReceiver) -> Option<EngineEvent> {
         while let Some(event) = receiver.pop() {
             if matches!(event, EngineEvent::ExecutionPlanSwapped { .. }) {
+                return Some(event);
+            }
+        }
+
+        None
+    }
+
+    fn next_rejection_event(receiver: &crate::EngineTelemetryReceiver) -> Option<EngineEvent> {
+        while let Some(event) = receiver.pop() {
+            if matches!(event, EngineEvent::CommandRejected { .. }) {
                 return Some(event);
             }
         }
@@ -1760,8 +2018,239 @@ mod tests {
         let second = process_frames(&mut engine, 128);
 
         assert!(first[128] != 0.0);
-        assert_eq!(second[0], 0.0);
-        assert_eq!(second[1], 0.0);
+        assert!(second[0] != 0.0);
+        assert!((first[254] - second[0]).abs() < 0.005);
+    }
+
+    #[test]
+    fn crossfade_masks_unmatched_oscillator_swap_discontinuity() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let (prepared_sender, prepared_receiver) = crate::prepared_plan_transfer_queue();
+        let (retired_sender, _retired_receiver) = crate::retired_plan_queue();
+        let plan_a = plan_with_identity(1, 1, 220.0);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan_a, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender)
+            .with_plan_transfer_queues(prepared_receiver, retired_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        assert!(prepared_sender
+            .push(prepared_transfer(34, 2, 1, 440.0))
+            .is_ok());
+        command_sender
+            .push(EngineCommand::SwapExecutionPlan {
+                id: 2,
+                transfer_id: 34,
+                requested_sample: 128,
+            })
+            .unwrap();
+
+        let first = process_frames(&mut engine, 128);
+        let second = process_frames(&mut engine, 128);
+
+        assert!((first[254] - second[0]).abs() < 0.005);
+    }
+
+    #[test]
+    fn crossfade_retires_old_plan_only_after_exact_duration() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let (prepared_sender, prepared_receiver) = crate::prepared_plan_transfer_queue();
+        let (retired_sender, retired_receiver) = crate::retired_plan_queue();
+        let plan_a = plan_with_identity(1, 1, 220.0);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan_a, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender)
+            .with_plan_transfer_queues(prepared_receiver, retired_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        assert!(prepared_sender
+            .push(prepared_transfer(35, 2, 1, 330.0))
+            .is_ok());
+        command_sender
+            .push(EngineCommand::SwapExecutionPlan {
+                id: 2,
+                transfer_id: 35,
+                requested_sample: 128,
+            })
+            .unwrap();
+
+        process_frames(&mut engine, 128);
+        process_frames(&mut engine, 64);
+        assert!(retired_receiver.pop().is_none());
+
+        process_frames(&mut engine, 64);
+        assert_eq!(retired_receiver.pop().unwrap().plan_id, 1);
+        assert!(retired_receiver.pop().is_none());
+    }
+
+    #[test]
+    fn crossfade_output_is_independent_of_callback_grouping() {
+        fn render(groups: &[u32]) -> Vec<f32> {
+            let (command_sender, command_receiver) = crate::engine_command_queue();
+            let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+            let (prepared_sender, prepared_receiver) = crate::prepared_plan_transfer_queue();
+            let (retired_sender, _retired_receiver) = crate::retired_plan_queue();
+            let plan_a = plan_with_identity(1, 1, 220.0);
+            let mut engine = AudioEngine::new()
+                .with_execution_plan(&plan_a, 512)
+                .unwrap()
+                .with_realtime_queues(command_receiver, telemetry_sender)
+                .with_plan_transfer_queues(prepared_receiver, retired_sender);
+            let mut rendered = Vec::new();
+
+            command_sender
+                .push(EngineCommand::TransportStart {
+                    id: 1,
+                    at_sample: 0,
+                })
+                .unwrap();
+            assert!(prepared_sender
+                .push(prepared_transfer(36, 2, 1, 440.0))
+                .is_ok());
+            command_sender
+                .push(EngineCommand::SwapExecutionPlan {
+                    id: 2,
+                    transfer_id: 36,
+                    requested_sample: 128,
+                })
+                .unwrap();
+
+            for frames in groups {
+                rendered.extend(process_frames(&mut engine, *frames));
+            }
+
+            rendered
+        }
+
+        let grouped_a = render(&[128, 128, 128]);
+        let grouped_b = render(&[64, 64, 32, 96, 128]);
+
+        assert_outputs_close(&grouped_a, &grouped_b);
+    }
+
+    #[test]
+    fn second_swap_during_crossfade_is_rejected() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, telemetry_receiver) = crate::engine_telemetry_queue();
+        let (prepared_sender, prepared_receiver) = crate::prepared_plan_transfer_queue();
+        let (retired_sender, retired_receiver) = crate::retired_plan_queue();
+        let plan_a = plan_with_identity(1, 1, 220.0);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan_a, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender)
+            .with_plan_transfer_queues(prepared_receiver, retired_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        assert!(prepared_sender
+            .push(prepared_transfer(37, 2, 1, 330.0))
+            .is_ok());
+        assert!(prepared_sender
+            .push(prepared_transfer(38, 3, 1, 440.0))
+            .is_ok());
+        command_sender
+            .push(EngineCommand::SwapExecutionPlan {
+                id: 2,
+                transfer_id: 37,
+                requested_sample: 128,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SwapExecutionPlan {
+                id: 3,
+                transfer_id: 38,
+                requested_sample: 160,
+            })
+            .unwrap();
+
+        process_frames(&mut engine, 128);
+        process_frames(&mut engine, 64);
+        let telemetry = process_frames_telemetry(&mut engine, 64);
+
+        assert_eq!(telemetry.runtime_plan_status.active_plan_id, Some(2));
+        assert_eq!(telemetry.runtime_plan_status.rejected_swaps, 1);
+        assert_eq!(
+            next_swap_event(&telemetry_receiver),
+            Some(EngineEvent::ExecutionPlanSwapped {
+                command_id: 2,
+                plan_id: 2,
+                plan_revision: 1,
+                requested_sample: 128,
+                applied_sample: 128
+            })
+        );
+        assert_eq!(
+            next_rejection_event(&telemetry_receiver),
+            Some(EngineEvent::CommandRejected {
+                command_id: 3,
+                reason: CommandRejection::SwapInProgress
+            })
+        );
+        assert_eq!(retired_receiver.pop().unwrap().plan_id, 3);
+        assert_eq!(retired_receiver.pop().unwrap().plan_id, 1);
+    }
+
+    #[test]
+    fn panic_during_crossfade_outputs_immediate_silence() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let (prepared_sender, prepared_receiver) = crate::prepared_plan_transfer_queue();
+        let (retired_sender, retired_receiver) = crate::retired_plan_queue();
+        let plan_a = plan_with_identity(1, 1, 220.0);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan_a, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender)
+            .with_plan_transfer_queues(prepared_receiver, retired_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        assert!(prepared_sender
+            .push(prepared_transfer(39, 2, 1, 330.0))
+            .is_ok());
+        command_sender
+            .push(EngineCommand::SwapExecutionPlan {
+                id: 2,
+                transfer_id: 39,
+                requested_sample: 128,
+            })
+            .unwrap();
+
+        process_frames(&mut engine, 128);
+        command_sender
+            .push(EngineCommand::Panic {
+                id: 3,
+                at_sample: 128,
+            })
+            .unwrap();
+        let second = process_frames(&mut engine, 128);
+
+        assert!(second.iter().all(|sample| *sample == 0.0));
+        assert_eq!(retired_receiver.pop().unwrap().plan_id, 1);
+        assert_eq!(retired_receiver.pop().unwrap().plan_id, 2);
     }
 
     #[test]

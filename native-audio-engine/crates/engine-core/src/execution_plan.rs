@@ -58,6 +58,8 @@ pub struct PreparedExecutionPlan {
     parameters: Box<[RuntimeParameter]>,
     execution_order: Box<[usize]>,
     node_metadata: Box<[RuntimeNodeMetadata]>,
+    output_scratch: Box<[f32]>,
+    output_channels: usize,
     output_node_count: usize,
 }
 
@@ -139,6 +141,7 @@ impl PreparedExecutionPlan {
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let mut output_node_count = 0;
+        let mut output_channels = 0;
         let nodes = plan
             .nodes
             .iter()
@@ -174,6 +177,7 @@ impl PreparedExecutionPlan {
                 }
                 PlanNodeKind::Output(node_plan) => {
                     output_node_count += 1;
+                    output_channels = node_plan.output_channels as usize;
                     let input_buffer = buffer_index(plan, node_plan.input_buffer)?;
 
                     if node_plan.output_channels == 0 {
@@ -228,6 +232,8 @@ impl PreparedExecutionPlan {
             parameters,
             execution_order,
             node_metadata,
+            output_scratch: vec![0.0; maximum_frames * output_channels.max(1)].into_boxed_slice(),
+            output_channels: output_channels.max(1),
             output_node_count,
         })
     }
@@ -239,17 +245,54 @@ impl PreparedExecutionPlan {
         output_channels: usize,
         range: ProcessRange,
     ) {
-        let context = NodeProcessContext {
+        process_nodes(
+            &mut self.nodes,
+            &mut self.buffers,
+            &mut self.parameters,
+            &self.execution_order,
+            output,
             sample_rate,
             output_channels,
             range,
-        };
+        );
+    }
 
-        for node_index in self.execution_order.iter().copied() {
-            let node = &mut self.nodes[node_index];
-
-            node.process(&context, &mut self.buffers, &mut self.parameters, output);
+    pub fn process_to_scratch(
+        &mut self,
+        sample_rate: f64,
+        output_channels: usize,
+        range: ProcessRange,
+    ) -> Option<&[f32]> {
+        if output_channels > self.output_channels {
+            return None;
         }
+
+        let channels = output_channels.max(1);
+        let required_samples = range.end_frame.checked_mul(channels)?;
+
+        if required_samples > self.output_scratch.len() {
+            return None;
+        }
+
+        for frame in range.start_frame..range.end_frame {
+            let frame_start = frame * channels;
+            let frame_end = frame_start + channels;
+
+            self.output_scratch[frame_start..frame_end].fill(0.0);
+        }
+
+        process_nodes(
+            &mut self.nodes,
+            &mut self.buffers,
+            &mut self.parameters,
+            &self.execution_order,
+            &mut self.output_scratch[..required_samples],
+            sample_rate,
+            output_channels,
+            range,
+        );
+
+        Some(&self.output_scratch[..required_samples])
     }
 
     pub fn clear_range(&mut self, range: ProcessRange) {
@@ -281,6 +324,10 @@ impl PreparedExecutionPlan {
 
     pub fn output_node_count(&self) -> usize {
         self.output_node_count
+    }
+
+    pub fn output_channels(&self) -> usize {
+        self.output_channels
     }
 
     pub fn maximum_frames(&self) -> usize {
@@ -545,6 +592,13 @@ impl<T: Send, const N: usize> TransferQueue<T, N> {
     fn overflow_count(&self) -> u64 {
         self.overflow_count.load(Ordering::Relaxed)
     }
+
+    fn is_full(&self) -> bool {
+        let head = self.head.load(Ordering::Relaxed);
+        let next_head = (head + 1) % N;
+
+        next_head == self.tail.load(Ordering::Acquire)
+    }
 }
 
 impl<T: Send, const N: usize> Drop for TransferQueue<T, N> {
@@ -610,6 +664,10 @@ impl PreparedPlanReceiver {
 impl RetiredPlanSender {
     pub fn push(&self, retired: RetiredExecutionPlan) -> Result<(), RetiredExecutionPlan> {
         self.queue.push(retired)
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.queue.is_full()
     }
 }
 
@@ -764,6 +822,29 @@ struct RuntimeParameter {
     id: u32,
     default_value: f32,
     smoother: SmoothedParameter,
+}
+
+fn process_nodes(
+    nodes: &mut [RuntimeNode],
+    buffers: &mut AudioBufferArena,
+    parameters: &mut [RuntimeParameter],
+    execution_order: &[usize],
+    output: &mut [f32],
+    sample_rate: f64,
+    output_channels: usize,
+    range: ProcessRange,
+) {
+    let context = NodeProcessContext {
+        sample_rate,
+        output_channels,
+        range,
+    };
+
+    for node_index in execution_order.iter().copied() {
+        let node = &mut nodes[node_index];
+
+        node.process(&context, buffers, parameters, output);
+    }
 }
 
 pub struct AudioBufferArena {
