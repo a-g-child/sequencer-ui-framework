@@ -71,7 +71,60 @@ pub struct FutureEventRequest {
     pub source: EventEndpoint,
     pub event: crate::ScheduledEngineEvent,
     pub at_sample: u64,
+    pub owner: FutureEventOwner,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FutureEventOwner {
+    pub plan_id: u64,
+    pub plan_revision: u64,
+    pub node_id: NodeId,
     pub generation: u64,
+    pub lifetime: FutureEventLifetime,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FutureEventLifetime {
+    RevisionBound,
+    GenerationBound,
+    CompletionRequired,
+}
+
+impl FutureEventOwner {
+    pub const fn revision_bound(plan_id: u64, plan_revision: u64, node_id: NodeId) -> Self {
+        Self {
+            plan_id,
+            plan_revision,
+            node_id,
+            generation: 0,
+            lifetime: FutureEventLifetime::RevisionBound,
+        }
+    }
+
+    pub const fn generation_bound(
+        plan_id: u64,
+        plan_revision: u64,
+        node_id: NodeId,
+        generation: u64,
+    ) -> Self {
+        Self {
+            plan_id,
+            plan_revision,
+            node_id,
+            generation,
+            lifetime: FutureEventLifetime::GenerationBound,
+        }
+    }
+
+    pub const fn completion_required(plan_id: u64, plan_revision: u64, node_id: NodeId) -> Self {
+        Self {
+            plan_id,
+            plan_revision,
+            node_id,
+            generation: 0,
+            lifetime: FutureEventLifetime::CompletionRequired,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

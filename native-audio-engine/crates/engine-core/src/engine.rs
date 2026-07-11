@@ -3,8 +3,8 @@ use std::time::Instant;
 use engine_dsp::{DiagnosticOscillator, PARAM_DIAGNOSTIC_FREQUENCY, PARAM_DIAGNOSTIC_GAIN};
 use engine_protocol::{
     AudioTelemetry, CommandDiagnostics, CommandRejection, EngineCommand, EngineEvent,
-    EventEndpoint, FutureEventRequest, NativeExecutionPlan, RuntimePlanStatus, ScheduledBeatEvent,
-    ScheduledEngineEvent, TempoMapSnapshot, TransportLoop,
+    EventEndpoint, FutureEventLifetime, FutureEventOwner, FutureEventRequest, NativeExecutionPlan,
+    RuntimePlanStatus, ScheduledBeatEvent, ScheduledEngineEvent, TempoMapSnapshot, TransportLoop,
 };
 
 use crate::{
@@ -93,8 +93,7 @@ struct ScheduledEventEntry {
     original_sample: u64,
     loop_iteration: u64,
     beat_event: Option<ScheduledBeatEvent>,
-    plan_revision: Option<PlanRevisionBinding>,
-    future_generation: Option<u64>,
+    future_owner: Option<FutureEventOwner>,
 }
 
 impl ScheduledEventEntry {
@@ -127,8 +126,7 @@ impl ScheduledEventSet {
             original_sample: event.at_sample(),
             loop_iteration: 0,
             beat_event,
-            plan_revision: None,
-            future_generation: None,
+            future_owner: None,
         };
 
         if let Some(slot) = self.entries.iter_mut().find(|slot| slot.is_none()) {
@@ -139,19 +137,14 @@ impl ScheduledEventSet {
         Err(event)
     }
 
-    fn insert_future(
-        &mut self,
-        request: FutureEventRequest,
-        plan_revision: PlanRevisionBinding,
-    ) -> Result<(), FutureEventRequest> {
+    fn insert_future(&mut self, request: FutureEventRequest) -> Result<(), FutureEventRequest> {
         let entry = ScheduledEventEntry {
             source: request.source,
             event: set_scheduled_event_sample(request.event, request.at_sample),
             original_sample: request.at_sample,
             loop_iteration: 0,
             beat_event: None,
-            plan_revision: Some(plan_revision),
-            future_generation: Some(request.generation),
+            future_owner: Some(request.owner),
         };
 
         if let Some(slot) = self.entries.iter_mut().find(|slot| slot.is_none()) {
@@ -306,10 +299,9 @@ fn event_endpoint_for_event(event: ScheduledEngineEvent) -> EventEndpoint {
 fn drain_future_event_requests_from(
     scheduled_events: &mut ScheduledEventSet,
     plan: &mut PreparedExecutionPlan,
-    binding: PlanRevisionBinding,
 ) {
     while let Some(request) = plan.take_future_event_request() {
-        if scheduled_events.insert_future(request, binding).is_err() {
+        if scheduled_events.insert_future(request).is_err() {
             plan.record_future_scheduler_full();
         }
     }
@@ -1099,7 +1091,7 @@ impl AudioEngine {
         while let Some(entry) = self.scheduled_events.take_due_before(sample_position) {
             let should_reschedule = self.apply_scheduled_event(&entry);
 
-            if !should_reschedule || entry.plan_revision.is_some() {
+            if !should_reschedule || entry.future_owner.is_some() {
                 continue;
             }
 
@@ -1108,13 +1100,7 @@ impl AudioEngine {
     }
 
     fn apply_scheduled_event(&mut self, entry: &ScheduledEventEntry) -> bool {
-        if !self.plan_revision_binding_is_active(entry.plan_revision) {
-            self.record_future_plan_revision_discard();
-            return false;
-        }
-
-        if !self.future_event_generation_is_current(entry.source, entry.future_generation) {
-            self.record_future_generation_discard();
+        if !self.future_event_owner_is_active(entry.future_owner) {
             return false;
         }
 
@@ -1141,12 +1127,8 @@ impl AudioEngine {
         event: ScheduledEngineEvent,
     ) -> bool {
         if let Some(plan) = self.execution_plan.as_mut() {
-            let binding = PlanRevisionBinding {
-                plan_id: plan.plan_id(),
-                plan_revision: plan.plan_revision(),
-            };
             let handled = plan.dispatch_event_from(source, event);
-            drain_future_event_requests_from(&mut self.scheduled_events, plan, binding);
+            drain_future_event_requests_from(&mut self.scheduled_events, plan);
             return handled;
         }
 
@@ -1155,25 +1137,12 @@ impl AudioEngine {
             .as_mut()
             .and_then(|crossfade| crossfade.new_plan.as_mut())
         {
-            let binding = PlanRevisionBinding {
-                plan_id: plan.plan_id(),
-                plan_revision: plan.plan_revision(),
-            };
             let handled = plan.dispatch_event_from(source, event);
-            drain_future_event_requests_from(&mut self.scheduled_events, plan, binding);
+            drain_future_event_requests_from(&mut self.scheduled_events, plan);
             return handled;
         }
 
         false
-    }
-
-    fn plan_revision_binding_is_active(&self, binding: Option<PlanRevisionBinding>) -> bool {
-        let Some(binding) = binding else {
-            return true;
-        };
-
-        self.active_plan_binding()
-            .is_some_and(|active| active == binding)
     }
 
     fn active_plan_binding(&self) -> Option<PlanRevisionBinding> {
@@ -1224,25 +1193,46 @@ impl AudioEngine {
         }
     }
 
-    fn future_event_generation_is_current(
-        &self,
-        source: EventEndpoint,
-        generation: Option<u64>,
-    ) -> bool {
-        let Some(generation) = generation else {
+    fn future_event_owner_is_active(&mut self, owner: Option<FutureEventOwner>) -> bool {
+        let Some(owner) = owner else {
             return true;
         };
 
-        self.execution_plan
+        let owner_binding = PlanRevisionBinding {
+            plan_id: owner.plan_id,
+            plan_revision: owner.plan_revision,
+        };
+
+        if self.active_plan_binding() != Some(owner_binding) {
+            self.record_future_plan_revision_discard();
+            return false;
+        }
+
+        if owner.lifetime != FutureEventLifetime::GenerationBound {
+            return true;
+        }
+
+        let source = EventEndpoint {
+            node_id: owner.node_id,
+            port_id: engine_protocol::DEFAULT_EVENT_PORT,
+        };
+        let generation_current = self
+            .execution_plan
             .as_ref()
-            .map(|plan| plan.future_event_generation_is_current(source, generation))
+            .map(|plan| plan.future_event_generation_is_current(source, owner.generation))
             .or_else(|| {
                 self.crossfade
                     .as_ref()
                     .and_then(|crossfade| crossfade.new_plan.as_ref())
-                    .map(|plan| plan.future_event_generation_is_current(source, generation))
+                    .map(|plan| plan.future_event_generation_is_current(source, owner.generation))
             })
-            .unwrap_or(false)
+            .unwrap_or(false);
+
+        if !generation_current {
+            self.record_future_generation_discard();
+        }
+
+        generation_current
     }
 
     fn reschedule_looped_event(&mut self, mut entry: ScheduledEventEntry) {
@@ -2627,6 +2617,54 @@ mod tests {
     }
 
     #[test]
+    fn arpeggiator_stale_tick_is_discarded_by_generation_owner() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let plan = arpeggiated_instrument_plan_with_identity(1, 1, 16, 8);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 2,
+                event: ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 60,
+                    velocity: 0.5,
+                    at_sample: 0,
+                },
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 3,
+                event: ScheduledEngineEvent::NoteOff {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 60,
+                    at_sample: 4,
+                },
+            })
+            .unwrap();
+
+        let telemetry = process_frames_telemetry(&mut engine, 32);
+
+        assert_eq!(
+            telemetry
+                .event_graph_diagnostics
+                .future_events_discarded_generation,
+            1
+        );
+    }
+
+    #[test]
     fn transport_stop_clears_instrument_voices() {
         let (command_sender, command_receiver) = crate::engine_command_queue();
         let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
@@ -2707,6 +2745,47 @@ mod tests {
     }
 
     #[test]
+    fn transport_stop_clears_completion_required_future_events() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let plan = arpeggiated_instrument_plan_with_identity(1, 1, 8, 4);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 2,
+                event: ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 69,
+                    velocity: 0.5,
+                    at_sample: 0,
+                },
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::TransportStop {
+                id: 3,
+                at_sample: 10,
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 64);
+
+        assert!(frame_has_signal(&output, 9));
+        assert!(frame_is_silent(&output, 11));
+        assert!(engine.scheduled_events_empty());
+    }
+
+    #[test]
     fn panic_clears_delayed_future_events() {
         let (command_sender, command_receiver) = crate::engine_command_queue();
         let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
@@ -2743,6 +2822,47 @@ mod tests {
         let output = process_frames(&mut engine, 64);
 
         assert!(output.chunks_exact(2).all(|frame| frame == [0.0, 0.0]));
+        assert!(engine.scheduled_events_empty());
+    }
+
+    #[test]
+    fn panic_clears_completion_required_future_events() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let plan = arpeggiated_instrument_plan_with_identity(1, 1, 8, 4);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 2,
+                event: ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 69,
+                    velocity: 0.5,
+                    at_sample: 0,
+                },
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::Panic {
+                id: 3,
+                at_sample: 10,
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 64);
+
+        assert!(frame_has_signal(&output, 9));
+        assert!(frame_is_silent(&output, 11));
         assert!(engine.scheduled_events_empty());
     }
 

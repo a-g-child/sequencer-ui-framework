@@ -10,11 +10,11 @@ use std::{
 use engine_dsp::{MonophonicVoice, MonophonicVoiceState, SmoothedParameter};
 use engine_protocol::{
     AudioBufferSlot, BufferSlotId, EventEndpoint, EventGraphDiagnostics, EventRouteMask,
-    FutureEventRequest, NativeExecutionPlan, NodeId, ParameterSlotId, PlanNodeKind,
-    ScheduledEngineEvent, ARPEGGIATOR_PORT_INPUT, ARPEGGIATOR_PORT_NOTES, ARPEGGIATOR_PORT_TICK,
-    ARPEGGIATOR_PORT_TICK_INPUT, DEFAULT_EVENT_PORT, EVENT_DELAY_PORT_DELAYED,
-    EVENT_DELAY_PORT_INPUT, NATIVE_EXECUTION_PLAN_VERSION, SCALE_PORT_ACCEPTED, SCALE_PORT_INPUT,
-    SCALE_PORT_REJECTED,
+    FutureEventLifetime, FutureEventOwner, FutureEventRequest, NativeExecutionPlan, NodeId,
+    ParameterSlotId, PlanNodeKind, ScheduledEngineEvent, ARPEGGIATOR_PORT_INPUT,
+    ARPEGGIATOR_PORT_NOTES, ARPEGGIATOR_PORT_TICK, ARPEGGIATOR_PORT_TICK_INPUT, DEFAULT_EVENT_PORT,
+    EVENT_DELAY_PORT_DELAYED, EVENT_DELAY_PORT_INPUT, NATIVE_EXECUTION_PLAN_VERSION,
+    SCALE_PORT_ACCEPTED, SCALE_PORT_INPUT, SCALE_PORT_REJECTED,
 };
 
 pub const MAX_EVENT_DEPTH: u16 = 32;
@@ -711,6 +711,8 @@ impl PreparedExecutionPlan {
                 };
                 let mut future_emitter = FutureEventEmitter {
                     queue: &mut self.future_event_queue,
+                    plan_id: self.plan_id,
+                    plan_revision: self.plan_revision,
                     source_node_id: self
                         .event_graph
                         .source_node_id(route.destination_node_index)
@@ -1479,10 +1481,11 @@ impl ArpeggiatorNode {
                 };
 
                 let emitted = emitter.emit_from(ARPEGGIATOR_PORT_NOTES, note_on).is_ok();
-                let _ = future_emitter.request_from_generation(
+                let _ = future_emitter.request_from_lifetime(
                     ARPEGGIATOR_PORT_NOTES,
                     note_off,
                     at_sample.saturating_add(self.gate_samples as u64),
+                    FutureEventLifetime::CompletionRequired,
                     0,
                 );
                 self.schedule_tick(at_sample, future_emitter);
@@ -1585,7 +1588,7 @@ impl ArpeggiatorNode {
         }
 
         let at_sample = sample_position.saturating_add(self.step_samples as u64);
-        let _ = future_emitter.request_from_generation(
+        let _ = future_emitter.request_from_lifetime(
             ARPEGGIATOR_PORT_TICK,
             ScheduledEngineEvent::ArpeggiatorTick {
                 target_node: future_emitter.source_node_id(),
@@ -1593,6 +1596,7 @@ impl ArpeggiatorNode {
                 at_sample,
             },
             at_sample,
+            FutureEventLifetime::GenerationBound,
             self.generation,
         );
     }
@@ -2507,6 +2511,8 @@ impl EventEmitter<'_> {
 
 struct FutureEventEmitter<'a> {
     queue: &'a mut FixedFutureEventQueue,
+    plan_id: u64,
+    plan_revision: u64,
     source_node_id: NodeId,
     current_sample: u64,
     diagnostics: &'a mut EventGraphDiagnostics,
@@ -2519,16 +2525,42 @@ impl FutureEventEmitter<'_> {
         event: ScheduledEngineEvent,
         at_sample: u64,
     ) -> Result<(), FutureEventRequest> {
-        self.request_from_generation(output_port, event, at_sample, 0)
+        self.request_from_lifetime(
+            output_port,
+            event,
+            at_sample,
+            FutureEventLifetime::RevisionBound,
+            0,
+        )
     }
 
-    fn request_from_generation(
+    fn request_from_lifetime(
         &mut self,
         output_port: u16,
         event: ScheduledEngineEvent,
         at_sample: u64,
+        lifetime: FutureEventLifetime,
         generation: u64,
     ) -> Result<(), FutureEventRequest> {
+        let owner = match lifetime {
+            FutureEventLifetime::RevisionBound => FutureEventOwner::revision_bound(
+                self.plan_id,
+                self.plan_revision,
+                self.source_node_id,
+            ),
+            FutureEventLifetime::GenerationBound => FutureEventOwner::generation_bound(
+                self.plan_id,
+                self.plan_revision,
+                self.source_node_id,
+                generation,
+            ),
+            FutureEventLifetime::CompletionRequired => FutureEventOwner::completion_required(
+                self.plan_id,
+                self.plan_revision,
+                self.source_node_id,
+            ),
+        };
+
         if at_sample <= self.current_sample {
             self.diagnostics.future_events_rejected_late = self
                 .diagnostics
@@ -2541,7 +2573,7 @@ impl FutureEventEmitter<'_> {
                 },
                 event,
                 at_sample,
-                generation,
+                owner,
             });
         }
 
@@ -2552,7 +2584,7 @@ impl FutureEventEmitter<'_> {
             },
             event: set_event_sample(event, at_sample),
             at_sample,
-            generation,
+            owner,
         };
 
         if self.queue.push(request).is_err() {
@@ -3138,7 +3170,7 @@ mod tests {
         chorded_instrument_plan, diagnostic_tone_plan, event_endpoint, monophonic_instrument_plan,
         monophonic_voice_plan, transposed_monophonic_voice_plan, ArpeggiatorNodePlan,
         AudioBufferSlot, ChordNodePlan, EventDelayNodePlan, EventInputNodePlan, EventRoute,
-        EventRouteMask, EventSplitterNodePlan, GainNodePlan, InstrumentNodePlan,
+        EventRouteMask, EventSplitterNodePlan, FutureEventOwner, GainNodePlan, InstrumentNodePlan,
         NativeExecutionPlan, OscillatorNodePlan, OutputNodePlan, PlanNode, PlanNodeKind,
         ScaleNodePlan, ScheduledEngineEvent, TransposeNodePlan, VelocityNodePlan,
         ARPEGGIATOR_PORT_NOTES, ARPEGGIATOR_PORT_TICK, ARPEGGIATOR_PORT_TICK_INPUT,
@@ -4080,6 +4112,10 @@ mod tests {
         );
         assert_eq!(request.at_sample, 24);
         assert_eq!(
+            request.owner,
+            FutureEventOwner::revision_bound(1, 1, NODE_EVENT_DELAY)
+        );
+        assert_eq!(
             request.event,
             ScheduledEngineEvent::NoteOn {
                 target_node: NODE_EVENT_INPUT,
@@ -4105,6 +4141,10 @@ mod tests {
         let request = prepared.take_future_event_request().unwrap();
 
         assert_eq!(request.at_sample, 32);
+        assert_eq!(
+            request.owner,
+            FutureEventOwner::revision_bound(1, 1, NODE_EVENT_DELAY)
+        );
         assert_eq!(
             request.event,
             ScheduledEngineEvent::NoteOff {
@@ -4179,7 +4219,10 @@ mod tests {
             }
         );
         assert_eq!(request.at_sample, 12);
-        assert_eq!(request.generation, 1);
+        assert_eq!(
+            request.owner,
+            FutureEventOwner::generation_bound(1, 1, NODE_ARPEGGIATOR, 1)
+        );
         assert_eq!(
             request.event,
             ScheduledEngineEvent::ArpeggiatorTick {
@@ -4222,7 +4265,10 @@ mod tests {
             }
         );
         assert_eq!(note_off.at_sample, 11);
-        assert_eq!(note_off.generation, 0);
+        assert_eq!(
+            note_off.owner,
+            FutureEventOwner::completion_required(1, 1, NODE_ARPEGGIATOR)
+        );
         assert_eq!(
             note_off.event,
             ScheduledEngineEvent::NoteOff {
@@ -4232,7 +4278,10 @@ mod tests {
             }
         );
         assert_eq!(next_tick.at_sample, 16);
-        assert_eq!(next_tick.generation, 1);
+        assert_eq!(
+            next_tick.owner,
+            FutureEventOwner::generation_bound(1, 1, NODE_ARPEGGIATOR, 1)
+        );
     }
 
     #[test]
