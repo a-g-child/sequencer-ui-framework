@@ -6,6 +6,7 @@ pub const NODE_OUTPUT: u32 = 3;
 pub const NODE_VOICE: u32 = 4;
 pub const NODE_EVENT_INPUT: u32 = 5;
 pub const NODE_TRANSPOSE: u32 = 6;
+pub const NODE_SCALE: u32 = 7;
 
 pub const PARAM_OSCILLATOR_FREQUENCY: u32 = 1;
 pub const PARAM_GAIN_GAIN: u32 = 2;
@@ -59,6 +60,7 @@ pub enum PlanNodeKind {
     EventInput(EventInputNodePlan),
     Oscillator(OscillatorNodePlan),
     Transpose(TransposeNodePlan),
+    Scale(ScaleNodePlan),
     Voice(VoiceNodePlan),
     Gain(GainNodePlan),
     Output(OutputNodePlan),
@@ -77,6 +79,18 @@ pub struct OscillatorNodePlan {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransposeNodePlan {
     pub semitones: i8,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScaleNodePlan {
+    pub root_note: u8,
+    pub pitch_class_mask: u16,
+}
+
+impl ScaleNodePlan {
+    pub const CHROMATIC_MASK: u16 = 0b1111_1111_1111;
+    pub const MAJOR_MASK: u16 = 0b1010_1011_0101;
+    pub const MINOR_MASK: u16 = 0b0101_1010_1101;
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -255,6 +269,67 @@ pub fn transposed_monophonic_voice_plan(
             },
             EventRoute {
                 source_node: NODE_TRANSPOSE,
+                destination_node: NODE_VOICE,
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+        ],
+        audio_execution_order: vec![NODE_VOICE, NODE_OUTPUT],
+    }
+}
+
+pub fn scaled_monophonic_voice_plan(
+    root_note: u8,
+    pitch_class_mask: u16,
+    output_channels: u16,
+) -> NativeExecutionPlan {
+    NativeExecutionPlan {
+        version: NATIVE_EXECUTION_PLAN_VERSION,
+        plan_id: 1,
+        plan_revision: 1,
+        nodes: vec![
+            PlanNode {
+                id: NODE_EVENT_INPUT,
+                kind: PlanNodeKind::EventInput(EventInputNodePlan),
+            },
+            PlanNode {
+                id: NODE_SCALE,
+                kind: PlanNodeKind::Scale(ScaleNodePlan {
+                    root_note,
+                    pitch_class_mask,
+                }),
+            },
+            PlanNode {
+                id: NODE_VOICE,
+                kind: PlanNodeKind::Voice(VoiceNodePlan {
+                    output_buffer: 1,
+                    attack_seconds: 0.0,
+                    decay_seconds: 0.0,
+                    sustain_level: 1.0,
+                    release_seconds: 0.0,
+                }),
+            },
+            PlanNode {
+                id: NODE_OUTPUT,
+                kind: PlanNodeKind::Output(OutputNodePlan {
+                    input_buffer: 1,
+                    output_channels,
+                }),
+            },
+        ],
+        buffers: vec![AudioBufferSlot { id: 1, channels: 1 }],
+        parameters: vec![],
+        event_routes: vec![
+            EventRoute {
+                source_node: NODE_EVENT_INPUT,
+                destination_node: NODE_SCALE,
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+            EventRoute {
+                source_node: NODE_SCALE,
                 destination_node: NODE_VOICE,
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,

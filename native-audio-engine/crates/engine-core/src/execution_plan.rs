@@ -87,6 +87,7 @@ pub enum RuntimeNodeKind {
     EventInput,
     Oscillator,
     Transpose,
+    Scale,
     Voice,
     Gain,
     Output,
@@ -186,6 +187,10 @@ impl PreparedExecutionPlan {
                 }
                 PlanNodeKind::Transpose(node_plan) => Ok(RuntimeNode::Transpose(TransposeNode {
                     semitones: node_plan.semitones,
+                })),
+                PlanNodeKind::Scale(node_plan) => Ok(RuntimeNode::Scale(ScaleNode {
+                    root_note: node_plan.root_note,
+                    pitch_class_mask: node_plan.pitch_class_mask,
                 })),
                 PlanNodeKind::Gain(node_plan) => {
                     let input_buffer = buffer_index(plan, node_plan.input_buffer)?;
@@ -806,6 +811,7 @@ enum RuntimeNode {
     EventInput(EventInputNode),
     Oscillator(OscillatorNode),
     Transpose(TransposeNode),
+    Scale(ScaleNode),
     Voice(VoiceNode),
     Gain(GainNode),
     Output(OutputNode),
@@ -829,6 +835,7 @@ impl RuntimeNode {
             Self::EventInput(_) => {}
             Self::Oscillator(node) => node.process(context, buffers, parameters),
             Self::Transpose(_) => {}
+            Self::Scale(_) => {}
             Self::Voice(node) => node.process(context, buffers),
             Self::Gain(node) => node.process(context, buffers, parameters),
             Self::Output(node) => node.process(context, buffers, output),
@@ -850,6 +857,7 @@ impl RuntimeNode {
             Self::EventInput(_) => RuntimeNodeKind::EventInput,
             Self::Oscillator(_) => RuntimeNodeKind::Oscillator,
             Self::Transpose(_) => RuntimeNodeKind::Transpose,
+            Self::Scale(_) => RuntimeNodeKind::Scale,
             Self::Voice(_) => RuntimeNodeKind::Voice,
             Self::Gain(_) => RuntimeNodeKind::Gain,
             Self::Output(_) => RuntimeNodeKind::Output,
@@ -889,6 +897,7 @@ impl RuntimeNode {
     ) -> bool {
         match self {
             Self::Transpose(node) => node.process_event(event, emitter),
+            Self::Scale(node) => node.process_event(event, emitter),
             Self::Voice(node) => node.process_event(event, emitter),
             #[cfg(test)]
             Self::Forwarding(node) => node.process_event(event, emitter),
@@ -911,6 +920,11 @@ struct OscillatorNode {
 
 struct TransposeNode {
     semitones: i8,
+}
+
+struct ScaleNode {
+    root_note: u8,
+    pitch_class_mask: u16,
 }
 
 struct VoiceNode {
@@ -971,6 +985,36 @@ fn transpose_note(note: u8, semitones: i8) -> Option<u8> {
     let transposed = note as i16 + semitones as i16;
 
     (0..=127).contains(&transposed).then_some(transposed as u8)
+}
+
+impl ScaleNode {
+    fn process_event(
+        &mut self,
+        event: &ScheduledEngineEvent,
+        emitter: &mut EventEmitter<'_>,
+    ) -> bool {
+        // Scale configuration is fixed for a prepared plan. If scale parameters become
+        // dynamic, note-off should follow the note-on mapping instead of rechecking here.
+        let note = match *event {
+            ScheduledEngineEvent::NoteOn { note, .. }
+            | ScheduledEngineEvent::NoteOff { note, .. } => note,
+        };
+
+        if !self.accepts_note(note) {
+            emitter.suppress();
+            return true;
+        }
+
+        emitter.emit(*event).is_ok()
+    }
+
+    fn accepts_note(&self, note: u8) -> bool {
+        let root = self.root_note % 12;
+        let pitch_class = (note % 12).wrapping_add(12).wrapping_sub(root) % 12;
+        let mask = self.pitch_class_mask & 0x0fff;
+
+        mask & (1 << pitch_class) != 0
+    }
 }
 
 impl VoiceNode {
@@ -1527,6 +1571,7 @@ fn runtime_node_kind(kind: &PlanNodeKind) -> Result<RuntimeNodeKind, PlanValidat
         PlanNodeKind::EventInput(_) => Ok(RuntimeNodeKind::EventInput),
         PlanNodeKind::Oscillator(_) => Ok(RuntimeNodeKind::Oscillator),
         PlanNodeKind::Transpose(_) => Ok(RuntimeNodeKind::Transpose),
+        PlanNodeKind::Scale(_) => Ok(RuntimeNodeKind::Scale),
         PlanNodeKind::Voice(_) => Ok(RuntimeNodeKind::Voice),
         PlanNodeKind::Gain(_) => Ok(RuntimeNodeKind::Gain),
         PlanNodeKind::Output(_) => Ok(RuntimeNodeKind::Output),
@@ -1556,6 +1601,7 @@ fn state_transfer_kind_for_node(node_kind: RuntimeNodeKind) -> Option<StateTrans
         RuntimeNodeKind::EventInput => None,
         RuntimeNodeKind::Oscillator => Some(StateTransferKind::OscillatorPhase),
         RuntimeNodeKind::Transpose => None,
+        RuntimeNodeKind::Scale => None,
         RuntimeNodeKind::Voice => None,
         RuntimeNodeKind::Gain => Some(StateTransferKind::GainSmoother),
         RuntimeNodeKind::Output => None,
@@ -1617,9 +1663,9 @@ mod tests {
     use engine_protocol::{
         diagnostic_tone_plan, monophonic_voice_plan, AudioBufferSlot, EventInputNodePlan,
         EventRoute, EventRouteMask, GainNodePlan, NativeExecutionPlan, OscillatorNodePlan,
-        OutputNodePlan, PlanNode, PlanNodeKind, ScheduledEngineEvent, TransposeNodePlan,
-        NODE_EVENT_INPUT, NODE_GAIN, NODE_OSCILLATOR, NODE_OUTPUT, NODE_TRANSPOSE, NODE_VOICE,
-        PARAM_GAIN_GAIN, PARAM_OSCILLATOR_FREQUENCY,
+        OutputNodePlan, PlanNode, PlanNodeKind, ScaleNodePlan, ScheduledEngineEvent,
+        TransposeNodePlan, NODE_EVENT_INPUT, NODE_GAIN, NODE_OSCILLATOR, NODE_OUTPUT, NODE_SCALE,
+        NODE_TRANSPOSE, NODE_VOICE, PARAM_GAIN_GAIN, PARAM_OSCILLATOR_FREQUENCY,
     };
 
     #[test]
@@ -1724,6 +1770,63 @@ mod tests {
                 },
                 EventRoute {
                     source_node: NODE_TRANSPOSE,
+                    destination_node: NODE_VOICE,
+                    event_mask: EventRouteMask::NOTE,
+                    priority: 0,
+                    enabled: true,
+                },
+            ],
+            audio_execution_order: vec![NODE_VOICE, NODE_OUTPUT],
+        }
+    }
+
+    fn scale_to_recording_plan(root_note: u8, pitch_class_mask: u16) -> NativeExecutionPlan {
+        NativeExecutionPlan {
+            version: NATIVE_EXECUTION_PLAN_VERSION,
+            plan_id: 1,
+            plan_revision: 1,
+            nodes: vec![
+                PlanNode {
+                    id: NODE_EVENT_INPUT,
+                    kind: PlanNodeKind::EventInput(EventInputNodePlan),
+                },
+                PlanNode {
+                    id: NODE_SCALE,
+                    kind: PlanNodeKind::Scale(ScaleNodePlan {
+                        root_note,
+                        pitch_class_mask,
+                    }),
+                },
+                PlanNode {
+                    id: NODE_VOICE,
+                    kind: PlanNodeKind::Voice(engine_protocol::VoiceNodePlan {
+                        output_buffer: 1,
+                        attack_seconds: 0.0,
+                        decay_seconds: 0.0,
+                        sustain_level: 1.0,
+                        release_seconds: 0.0,
+                    }),
+                },
+                PlanNode {
+                    id: NODE_OUTPUT,
+                    kind: PlanNodeKind::Output(OutputNodePlan {
+                        input_buffer: 1,
+                        output_channels: 2,
+                    }),
+                },
+            ],
+            buffers: vec![AudioBufferSlot { id: 1, channels: 1 }],
+            parameters: vec![],
+            event_routes: vec![
+                EventRoute {
+                    source_node: NODE_EVENT_INPUT,
+                    destination_node: NODE_SCALE,
+                    event_mask: EventRouteMask::NOTE,
+                    priority: 0,
+                    enabled: true,
+                },
+                EventRoute {
+                    source_node: NODE_SCALE,
                     destination_node: NODE_VOICE,
                     event_mask: EventRouteMask::NOTE,
                     priority: 0,
@@ -2071,6 +2174,142 @@ mod tests {
         assert_eq!(
             prepared.event_route_destination_at(start as usize + 1),
             Some(2)
+        );
+    }
+
+    #[test]
+    fn scale_node_passes_in_scale_note_on_unchanged() {
+        let plan = scale_to_recording_plan(60, ScaleNodePlan::MAJOR_MASK);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 64, 0.8, 321)));
+        assert_eq!(
+            recorded_events(&prepared, 2),
+            &[ScheduledEngineEvent::NoteOn {
+                target_node: NODE_EVENT_INPUT,
+                note: 64,
+                velocity: 0.8,
+                at_sample: 321,
+            }]
+        );
+
+        let diagnostics = prepared.event_graph_diagnostics();
+
+        assert_eq!(diagnostics.events_received, 2);
+        assert_eq!(diagnostics.events_emitted, 1);
+        assert_eq!(diagnostics.events_suppressed, 0);
+    }
+
+    #[test]
+    fn scale_node_suppresses_out_of_scale_note_on() {
+        let plan = scale_to_recording_plan(60, ScaleNodePlan::MAJOR_MASK);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 61, 0.8, 321)));
+        assert!(recorded_events(&prepared, 2).is_empty());
+
+        let diagnostics = prepared.event_graph_diagnostics();
+
+        assert_eq!(diagnostics.events_emitted, 0);
+        assert_eq!(diagnostics.events_suppressed, 1);
+    }
+
+    #[test]
+    fn scale_node_applies_same_policy_to_note_off() {
+        let plan = scale_to_recording_plan(60, ScaleNodePlan::MAJOR_MASK);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_off(NODE_EVENT_INPUT, 67, 100)));
+        assert!(prepared.dispatch_event(note_off(NODE_EVENT_INPUT, 70, 120)));
+        assert_eq!(
+            recorded_events(&prepared, 2),
+            &[ScheduledEngineEvent::NoteOff {
+                target_node: NODE_EVENT_INPUT,
+                note: 67,
+                at_sample: 100,
+            }]
+        );
+
+        let diagnostics = prepared.event_graph_diagnostics();
+
+        assert_eq!(diagnostics.events_emitted, 1);
+        assert_eq!(diagnostics.events_suppressed, 1);
+    }
+
+    #[test]
+    fn transpose_then_scale_can_suppress_transformed_notes() {
+        let mut plan = transpose_to_recording_plan(1);
+
+        plan.nodes.insert(
+            2,
+            PlanNode {
+                id: NODE_SCALE,
+                kind: PlanNodeKind::Scale(ScaleNodePlan {
+                    root_note: 60,
+                    pitch_class_mask: ScaleNodePlan::MAJOR_MASK,
+                }),
+            },
+        );
+        plan.event_routes = vec![
+            EventRoute {
+                source_node: NODE_EVENT_INPUT,
+                destination_node: NODE_TRANSPOSE,
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+            EventRoute {
+                source_node: NODE_TRANSPOSE,
+                destination_node: NODE_SCALE,
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+            EventRoute {
+                source_node: NODE_SCALE,
+                destination_node: NODE_VOICE,
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+        ];
+
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 3);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.5, 99)));
+        assert!(recorded_events(&prepared, 3).is_empty());
+
+        let diagnostics = prepared.event_graph_diagnostics();
+
+        assert_eq!(diagnostics.events_emitted, 1);
+        assert_eq!(diagnostics.events_suppressed, 1);
+    }
+
+    #[test]
+    fn scale_root_changes_accepted_pitch_classes() {
+        let plan = scale_to_recording_plan(62, ScaleNodePlan::MAJOR_MASK);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.5, 0)));
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 62, 0.5, 0)));
+        assert_eq!(
+            recorded_events(&prepared, 2),
+            &[ScheduledEngineEvent::NoteOn {
+                target_node: NODE_EVENT_INPUT,
+                note: 62,
+                velocity: 0.5,
+                at_sample: 0,
+            }]
         );
     }
 
