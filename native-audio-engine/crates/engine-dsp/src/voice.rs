@@ -1,4 +1,4 @@
-use crate::DiagnosticOscillator;
+use crate::{DiagnosticOscillator, DiagnosticOscillatorState};
 
 pub fn midi_note_frequency(note: u8) -> f32 {
     440.0 * 2.0_f32.powf((note as f32 - 69.0) / 12.0)
@@ -23,6 +23,14 @@ pub struct AdsrEnvelope {
     release_seconds: f32,
     stage_start_level: f32,
     stage_elapsed_samples: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AdsrEnvelopeState {
+    pub stage: EnvelopeStage,
+    pub level: f32,
+    pub stage_start_level: f32,
+    pub stage_elapsed_samples: u32,
 }
 
 impl AdsrEnvelope {
@@ -140,6 +148,22 @@ impl AdsrEnvelope {
         self.level
     }
 
+    pub fn state(&self) -> AdsrEnvelopeState {
+        AdsrEnvelopeState {
+            stage: self.stage,
+            level: self.level,
+            stage_start_level: self.stage_start_level,
+            stage_elapsed_samples: self.stage_elapsed_samples,
+        }
+    }
+
+    pub fn restore_state(&mut self, state: AdsrEnvelopeState) {
+        self.stage = state.stage;
+        self.level = state.level;
+        self.stage_start_level = state.stage_start_level;
+        self.stage_elapsed_samples = state.stage_elapsed_samples;
+    }
+
     fn enter_decay_or_sustain(&mut self, sample_rate: f64) {
         if seconds_to_samples(self.decay_seconds, sample_rate) == 0 {
             self.level = self.sustain_level;
@@ -160,6 +184,14 @@ pub struct MonophonicVoice {
     envelope: AdsrEnvelope,
     velocity: f32,
     active_note: Option<u8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MonophonicVoiceState {
+    pub oscillator: DiagnosticOscillatorState,
+    pub envelope: AdsrEnvelopeState,
+    pub velocity: f32,
+    pub active_note: Option<u8>,
 }
 
 impl MonophonicVoice {
@@ -226,6 +258,22 @@ impl MonophonicVoice {
         }
 
         sample
+    }
+
+    pub fn state(&self) -> MonophonicVoiceState {
+        MonophonicVoiceState {
+            oscillator: self.oscillator.state(),
+            envelope: self.envelope.state(),
+            velocity: self.velocity,
+            active_note: self.active_note,
+        }
+    }
+
+    pub fn restore_state(&mut self, state: MonophonicVoiceState) {
+        self.oscillator.restore_state(state.oscillator);
+        self.envelope.restore_state(state.envelope);
+        self.velocity = state.velocity;
+        self.active_note = state.active_note;
     }
 }
 

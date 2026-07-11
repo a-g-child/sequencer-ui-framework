@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use engine_dsp::{MonophonicVoice, SmoothedParameter};
+use engine_dsp::{MonophonicVoice, MonophonicVoiceState, SmoothedParameter};
 use engine_protocol::{
     AudioBufferSlot, BufferSlotId, EventGraphDiagnostics, EventRouteMask, NativeExecutionPlan,
     NodeId, ParameterSlotId, PlanNodeKind, ScheduledEngineEvent, NATIVE_EXECUTION_PLAN_VERSION,
@@ -40,6 +40,7 @@ pub enum StateTransferError {
     UnknownNewNode,
     NodeTypeMismatch,
     IncompatibleTransferKind,
+    IncompatibleInstrumentPool,
     DuplicateOldNode,
     DuplicateNewNode,
 }
@@ -49,6 +50,7 @@ pub enum StateTransferPlanningError {
     DuplicateOldStableId,
     DuplicateNewStableId,
     NodeTypeChanged { stable_id: u64 },
+    IncompatibleInstrumentPool { stable_id: u64 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,16 +75,31 @@ pub struct PreparedExecutionPlan {
     output_node_count: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PreparedExecutionPlanMetadata {
     pub nodes: Box<[RuntimeNodeMetadata]>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RuntimeNodeMetadata {
     pub stable_id: u64,
     pub runtime_index: u32,
     pub node_kind: RuntimeNodeKind,
+    pub instrument: Option<InstrumentRuntimeMetadata>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InstrumentRuntimeMetadata {
+    pub voice_count: u16,
+    pub voice_config: VoiceConfig,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VoiceConfig {
+    pub attack_seconds: f32,
+    pub decay_seconds: f32,
+    pub sustain_level: f32,
+    pub release_seconds: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -151,6 +168,7 @@ pub struct StateTransferEntry {
 pub enum StateTransferKind {
     OscillatorPhase,
     GainSmoother,
+    InstrumentPool,
 }
 
 impl PreparedExecutionPlan {
@@ -209,12 +227,12 @@ impl PreparedExecutionPlan {
                     let output_buffer = buffer_index(plan, node_plan.output_buffer)?;
 
                     require_channels(plan, node_plan.output_buffer, 1)?;
-                    validate_voice_config(
-                        node_plan.attack_seconds,
-                        node_plan.decay_seconds,
-                        node_plan.sustain_level,
-                        node_plan.release_seconds,
-                    )?;
+                    validate_voice_config(VoiceConfig {
+                        attack_seconds: node_plan.attack_seconds,
+                        decay_seconds: node_plan.decay_seconds,
+                        sustain_level: node_plan.sustain_level,
+                        release_seconds: node_plan.release_seconds,
+                    })?;
 
                     Ok(RuntimeNode::Voice(MonoInstrumentNode {
                         voice: MonophonicVoice::new(
@@ -235,28 +253,30 @@ impl PreparedExecutionPlan {
                 })),
                 PlanNodeKind::Instrument(node_plan) => {
                     let output_buffer = buffer_index(plan, node_plan.output_buffer)?;
+                    let voice_config = VoiceConfig {
+                        attack_seconds: node_plan.attack_seconds,
+                        decay_seconds: node_plan.decay_seconds,
+                        sustain_level: node_plan.sustain_level,
+                        release_seconds: node_plan.release_seconds,
+                    };
 
                     require_channels(plan, node_plan.output_buffer, 1)?;
                     validate_instrument_voice_count(node_plan.voice_count)?;
-                    validate_voice_config(
-                        node_plan.attack_seconds,
-                        node_plan.decay_seconds,
-                        node_plan.sustain_level,
-                        node_plan.release_seconds,
-                    )?;
+                    validate_voice_config(voice_config)?;
 
                     Ok(RuntimeNode::Instrument(InstrumentNode {
                         voices: (0..node_plan.voice_count)
                             .map(|_| {
                                 InstrumentVoice::new(
-                                    node_plan.attack_seconds,
-                                    node_plan.decay_seconds,
-                                    node_plan.sustain_level,
-                                    node_plan.release_seconds,
+                                    voice_config.attack_seconds,
+                                    voice_config.decay_seconds,
+                                    voice_config.sustain_level,
+                                    voice_config.release_seconds,
                                 )
                             })
                             .collect::<Vec<_>>()
                             .into_boxed_slice(),
+                        voice_config,
                         output_buffer,
                         allocation_sequence: 0,
                         release_sequence: 0,
@@ -326,6 +346,7 @@ impl PreparedExecutionPlan {
                     stable_id: node.id as u64,
                     runtime_index: index as u32,
                     node_kind,
+                    instrument: instrument_runtime_metadata(&node.kind),
                 })
             })
             .collect::<Result<Vec<_>, PlanValidationError>>()?
@@ -593,6 +614,12 @@ impl PreparedExecutionPlan {
 
                     self.parameters[new_parameter].smoother.restore_state(state);
                 }
+                StateTransferKind::InstrumentPool => {
+                    let old_node = &old_plan.nodes[old_index];
+                    let new_node = &mut self.nodes[new_index];
+
+                    new_node.transfer_instrument_pool_from(old_node)?;
+                }
             }
         }
 
@@ -634,6 +661,12 @@ pub fn build_state_transfer(
         let Some(kind) = state_transfer_kind_for_node(new_node.node_kind) else {
             continue;
         };
+
+        if kind == StateTransferKind::InstrumentPool && old_node.instrument != new_node.instrument {
+            return Err(StateTransferPlanningError::IncompatibleInstrumentPool {
+                stable_id: new_node.stable_id,
+            });
+        }
 
         entries.push((
             new_node.stable_id,
@@ -979,6 +1012,27 @@ impl RuntimeNode {
         }
     }
 
+    fn instrument_pool_compatible_with(&self, other: &RuntimeNode) -> bool {
+        match (self, other) {
+            (Self::Instrument(old_node), Self::Instrument(new_node)) => {
+                old_node.compatible_with(new_node)
+            }
+            _ => false,
+        }
+    }
+
+    fn transfer_instrument_pool_from(
+        &mut self,
+        old_node: &RuntimeNode,
+    ) -> Result<(), StateTransferError> {
+        match (old_node, self) {
+            (RuntimeNode::Instrument(old_node), RuntimeNode::Instrument(new_node)) => {
+                new_node.transfer_from(old_node)
+            }
+            _ => Err(StateTransferError::IncompatibleTransferKind),
+        }
+    }
+
     fn process_event(
         &mut self,
         event: &ScheduledEngineEvent,
@@ -1019,6 +1073,7 @@ struct ScaleNode {
 
 struct InstrumentNode {
     voices: Box<[InstrumentVoice]>,
+    voice_config: VoiceConfig,
     output_buffer: usize,
     allocation_sequence: u64,
     release_sequence: u64,
@@ -1028,6 +1083,14 @@ struct InstrumentNode {
 
 struct InstrumentVoice {
     voice: MonophonicVoice,
+    note: Option<u8>,
+    started_at: u64,
+    released_at: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct InstrumentVoiceState {
+    voice: MonophonicVoiceState,
     note: Option<u8>,
     started_at: u64,
     released_at: Option<u64>,
@@ -1201,6 +1264,25 @@ impl InstrumentNode {
         }
     }
 
+    fn compatible_with(&self, other: &InstrumentNode) -> bool {
+        self.voices.len() == other.voices.len() && self.voice_config == other.voice_config
+    }
+
+    fn transfer_from(&mut self, old_node: &InstrumentNode) -> Result<(), StateTransferError> {
+        if !old_node.compatible_with(self) {
+            return Err(StateTransferError::IncompatibleInstrumentPool);
+        }
+
+        for (new_voice, old_voice) in self.voices.iter_mut().zip(old_node.voices.iter()) {
+            new_voice.restore_state(old_voice.state());
+        }
+
+        self.allocation_sequence = old_node.allocation_sequence;
+        self.release_sequence = old_node.release_sequence;
+        self.peak_active_voices = old_node.peak_active_voices;
+        Ok(())
+    }
+
     fn select_voice_for_note_on(&self, note: u8) -> Option<usize> {
         self.voices
             .iter()
@@ -1274,6 +1356,22 @@ impl InstrumentVoice {
         self.voice.panic();
         self.note = None;
         self.released_at = None;
+    }
+
+    fn state(&self) -> InstrumentVoiceState {
+        InstrumentVoiceState {
+            voice: self.voice.state(),
+            note: self.note,
+            started_at: self.started_at,
+            released_at: self.released_at,
+        }
+    }
+
+    fn restore_state(&mut self, state: InstrumentVoiceState) {
+        self.voice.restore_state(state.voice);
+        self.note = state.note;
+        self.started_at = state.started_at;
+        self.released_at = state.released_at;
     }
 }
 
@@ -1834,16 +1932,11 @@ fn validate_instrument_voice_count(voice_count: u16) -> Result<(), PlanValidatio
     Ok(())
 }
 
-fn validate_voice_config(
-    attack_seconds: f32,
-    decay_seconds: f32,
-    sustain_level: f32,
-    release_seconds: f32,
-) -> Result<(), PlanValidationError> {
-    if !attack_seconds.is_finite()
-        || !decay_seconds.is_finite()
-        || !sustain_level.is_finite()
-        || !release_seconds.is_finite()
+fn validate_voice_config(config: VoiceConfig) -> Result<(), PlanValidationError> {
+    if !config.attack_seconds.is_finite()
+        || !config.decay_seconds.is_finite()
+        || !config.sustain_level.is_finite()
+        || !config.release_seconds.is_finite()
     {
         return Err(PlanValidationError::InvalidInstrumentVoiceConfig);
     }
@@ -1862,6 +1955,21 @@ fn runtime_node_kind(kind: &PlanNodeKind) -> Result<RuntimeNodeKind, PlanValidat
         PlanNodeKind::Gain(_) => Ok(RuntimeNodeKind::Gain),
         PlanNodeKind::Output(_) => Ok(RuntimeNodeKind::Output),
         PlanNodeKind::Unsupported { .. } => Err(PlanValidationError::UnsupportedNodeType),
+    }
+}
+
+fn instrument_runtime_metadata(kind: &PlanNodeKind) -> Option<InstrumentRuntimeMetadata> {
+    match kind {
+        PlanNodeKind::Instrument(node) => Some(InstrumentRuntimeMetadata {
+            voice_count: node.voice_count,
+            voice_config: VoiceConfig {
+                attack_seconds: node.attack_seconds,
+                decay_seconds: node.decay_seconds,
+                sustain_level: node.sustain_level,
+                release_seconds: node.release_seconds,
+            },
+        }),
+        _ => None,
     }
 }
 
@@ -1888,7 +1996,7 @@ fn state_transfer_kind_for_node(node_kind: RuntimeNodeKind) -> Option<StateTrans
         RuntimeNodeKind::Oscillator => Some(StateTransferKind::OscillatorPhase),
         RuntimeNodeKind::Transpose => None,
         RuntimeNodeKind::Scale => None,
-        RuntimeNodeKind::Instrument => None,
+        RuntimeNodeKind::Instrument => Some(StateTransferKind::InstrumentPool),
         RuntimeNodeKind::Voice => None,
         RuntimeNodeKind::Gain => Some(StateTransferKind::GainSmoother),
         RuntimeNodeKind::Output => None,
@@ -1937,6 +2045,11 @@ fn validate_state_transfer(
         match (entry.kind, old_node.node_type()) {
             (StateTransferKind::OscillatorPhase, RuntimeNodeKind::Oscillator)
             | (StateTransferKind::GainSmoother, RuntimeNodeKind::Gain) => {}
+            (StateTransferKind::InstrumentPool, RuntimeNodeKind::Instrument) => {
+                if !old_node.instrument_pool_compatible_with(new_node) {
+                    return Err(StateTransferError::IncompatibleInstrumentPool);
+                }
+            }
             _ => return Err(StateTransferError::IncompatibleTransferKind),
         }
     }
@@ -2008,6 +2121,28 @@ mod tests {
         prepared
             .instrument_diagnostics(NODE_INSTRUMENT)
             .expect("instrument diagnostics should exist")
+    }
+
+    fn instrument_node(prepared: &PreparedExecutionPlan) -> &InstrumentNode {
+        prepared
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                RuntimeNode::Instrument(node) => Some(node),
+                _ => None,
+            })
+            .expect("instrument node should exist")
+    }
+
+    fn set_instrument_release(plan: &mut NativeExecutionPlan, release_seconds: f32) {
+        if let Some(PlanNodeKind::Instrument(node)) = plan
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == NODE_INSTRUMENT)
+            .map(|node| &mut node.kind)
+        {
+            node.release_seconds = release_seconds;
+        }
     }
 
     #[test]
@@ -2969,6 +3104,95 @@ mod tests {
     }
 
     #[test]
+    fn transfers_matching_instrument_pool_state() {
+        let mut old_plan = instrument_plan_with_voice_count(2);
+        let mut new_plan = instrument_plan_with_voice_count(2);
+
+        set_instrument_release(&mut old_plan, 1.0);
+        set_instrument_release(&mut new_plan, 1.0);
+
+        let mut old_prepared = PreparedExecutionPlan::prepare(&old_plan, 128).unwrap();
+        let mut new_prepared = PreparedExecutionPlan::prepare(&new_plan, 128).unwrap();
+        let mut output = vec![0.0; 64 * 2];
+
+        assert!(old_prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.5, 0)));
+        assert!(old_prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 64, 0.75, 0)));
+        assert!(old_prepared.dispatch_event(note_off(NODE_EVENT_INPUT, 60, 0)));
+        old_prepared.process(
+            &mut output,
+            48_000.0,
+            2,
+            ProcessRange {
+                start_frame: 0,
+                end_frame: 32,
+            },
+        );
+
+        let transfer =
+            build_state_transfer(&old_prepared.metadata(), &new_prepared.metadata()).unwrap();
+
+        assert_eq!(
+            transfer.entries.as_ref(),
+            &[StateTransferEntry {
+                old_node_index: 1,
+                new_node_index: 1,
+                kind: StateTransferKind::InstrumentPool,
+            }]
+        );
+
+        new_prepared
+            .apply_state_transfer_from(&old_prepared, &transfer)
+            .unwrap();
+
+        let old_instrument = instrument_node(&old_prepared);
+        let new_instrument = instrument_node(&new_prepared);
+
+        assert_eq!(
+            new_instrument.allocation_sequence,
+            old_instrument.allocation_sequence
+        );
+        assert_eq!(
+            new_instrument.release_sequence,
+            old_instrument.release_sequence
+        );
+        assert_eq!(
+            new_instrument
+                .voices
+                .iter()
+                .map(InstrumentVoice::state)
+                .collect::<Vec<_>>(),
+            old_instrument
+                .voices
+                .iter()
+                .map(InstrumentVoice::state)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn transferred_instrument_preserves_deterministic_stealing_order() {
+        let old_plan = instrument_plan_with_voice_count(2);
+        let new_plan = instrument_plan_with_voice_count(2);
+        let mut old_prepared = PreparedExecutionPlan::prepare(&old_plan, 128).unwrap();
+        let mut new_prepared = PreparedExecutionPlan::prepare(&new_plan, 128).unwrap();
+        let transfer =
+            build_state_transfer(&old_prepared.metadata(), &new_prepared.metadata()).unwrap();
+
+        assert!(old_prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.5, 0)));
+        assert!(old_prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 64, 0.5, 0)));
+
+        new_prepared
+            .apply_state_transfer_from(&old_prepared, &transfer)
+            .unwrap();
+
+        assert!(new_prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 67, 0.5, 0)));
+        assert!(new_prepared.dispatch_event(note_off(NODE_EVENT_INPUT, 60, 0)));
+
+        assert_eq!(instrument_diagnostics(&new_prepared).active_voices, 2);
+        assert_eq!(instrument_diagnostics(&new_prepared).voice_steals, 1);
+    }
+
+    #[test]
     fn rejects_invalid_state_transfer_maps() {
         let old_plan = diagnostic_tone_plan(440.0, 0.0, 2);
         let new_plan = diagnostic_tone_plan(440.0, 0.0, 2);
@@ -3066,6 +3290,24 @@ mod tests {
             new_prepared.apply_state_transfer_from(&old_prepared, &duplicate_new),
             Err(StateTransferError::DuplicateNewNode)
         );
+
+        let old_instrument =
+            PreparedExecutionPlan::prepare(&instrument_plan_with_voice_count(1), 128).unwrap();
+        let mut new_instrument =
+            PreparedExecutionPlan::prepare(&instrument_plan_with_voice_count(2), 128).unwrap();
+        let incompatible_pool = PlanStateTransfer {
+            entries: vec![StateTransferEntry {
+                old_node_index: 1,
+                new_node_index: 1,
+                kind: StateTransferKind::InstrumentPool,
+            }]
+            .into_boxed_slice(),
+        };
+
+        assert_eq!(
+            new_instrument.apply_state_transfer_from(&old_instrument, &incompatible_pool),
+            Err(StateTransferError::IncompatibleInstrumentPool)
+        );
     }
 
     fn metadata(nodes: &[(u64, u32, RuntimeNodeKind)]) -> PreparedExecutionPlanMetadata {
@@ -3078,6 +3320,7 @@ mod tests {
                         stable_id,
                         runtime_index,
                         node_kind,
+                        instrument: None,
                     },
                 )
                 .collect::<Vec<_>>()
@@ -3109,6 +3352,54 @@ mod tests {
                     kind: StateTransferKind::GainSmoother,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn builds_state_transfer_for_matching_instrument_pool_ids() {
+        let old_prepared =
+            PreparedExecutionPlan::prepare(&instrument_plan_with_voice_count(4), 128).unwrap();
+        let new_prepared =
+            PreparedExecutionPlan::prepare(&instrument_plan_with_voice_count(4), 128).unwrap();
+
+        let transfer =
+            build_state_transfer(&old_prepared.metadata(), &new_prepared.metadata()).unwrap();
+
+        assert_eq!(
+            transfer.entries.as_ref(),
+            &[StateTransferEntry {
+                old_node_index: 1,
+                new_node_index: 1,
+                kind: StateTransferKind::InstrumentPool,
+            }]
+        );
+    }
+
+    #[test]
+    fn state_transfer_planner_rejects_incompatible_instrument_pools() {
+        let old_prepared =
+            PreparedExecutionPlan::prepare(&instrument_plan_with_voice_count(2), 128).unwrap();
+        let mut new_plan = instrument_plan_with_voice_count(2);
+
+        set_instrument_release(&mut new_plan, 0.5);
+
+        let new_prepared = PreparedExecutionPlan::prepare(&new_plan, 128).unwrap();
+
+        assert_eq!(
+            build_state_transfer(&old_prepared.metadata(), &new_prepared.metadata()),
+            Err(StateTransferPlanningError::IncompatibleInstrumentPool {
+                stable_id: NODE_INSTRUMENT as u64
+            })
+        );
+
+        let different_voice_count =
+            PreparedExecutionPlan::prepare(&instrument_plan_with_voice_count(3), 128).unwrap();
+
+        assert_eq!(
+            build_state_transfer(&old_prepared.metadata(), &different_voice_count.metadata()),
+            Err(StateTransferPlanningError::IncompatibleInstrumentPool {
+                stable_id: NODE_INSTRUMENT as u64
+            })
         );
     }
 

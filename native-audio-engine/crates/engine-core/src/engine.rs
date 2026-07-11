@@ -1369,13 +1369,14 @@ impl AudioEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PlanStateTransfer, StateTransferEntry, StateTransferKind};
+    use crate::{build_state_transfer, PlanStateTransfer, StateTransferEntry, StateTransferKind};
     use engine_protocol::{
         diagnostic_tone_plan, monophonic_instrument_plan, monophonic_voice_plan,
         scaled_monophonic_instrument_plan, scaled_monophonic_voice_plan,
         transposed_monophonic_instrument_plan, transposed_monophonic_voice_plan, EventRoute,
-        EventRouteMask, ScaleNodePlan, ScheduledBeatEvent, ScheduledEngineEvent, TempoMapSnapshot,
-        TransportLoop, VoiceNodePlan, NODE_EVENT_INPUT, NODE_OUTPUT, NODE_VOICE, PARAM_GAIN_GAIN,
+        EventRouteMask, PlanNodeKind, ScaleNodePlan, ScheduledBeatEvent, ScheduledEngineEvent,
+        TempoMapSnapshot, TransportLoop, VoiceNodePlan, NODE_EVENT_INPUT, NODE_OUTPUT, NODE_VOICE,
+        PARAM_GAIN_GAIN,
     };
 
     fn plan_with_identity(
@@ -1396,6 +1397,28 @@ mod tests {
 
         plan.plan_id = plan_id;
         plan.plan_revision = plan_revision;
+        plan
+    }
+
+    fn instrument_plan_with_identity(
+        plan_id: u64,
+        plan_revision: u64,
+        voice_count: u16,
+    ) -> NativeExecutionPlan {
+        let mut plan = monophonic_instrument_plan(2);
+
+        plan.plan_id = plan_id;
+        plan.plan_revision = plan_revision;
+
+        if let Some(PlanNodeKind::Instrument(node)) = plan
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == engine_protocol::NODE_INSTRUMENT)
+            .map(|node| &mut node.kind)
+        {
+            node.voice_count = voice_count;
+        }
+
         plan
     }
 
@@ -1438,6 +1461,19 @@ mod tests {
         state_transfer: PlanStateTransfer,
     ) -> crate::PreparedPlanTransfer {
         let plan = plan_with_identity_and_gain(plan_id, plan_revision, frequency_hz, gain);
+        let prepared = PreparedExecutionPlan::prepare(&plan, 512).unwrap();
+
+        crate::PreparedPlanTransfer::new(transfer_id, prepared, state_transfer)
+    }
+
+    fn prepared_instrument_transfer_with_state(
+        transfer_id: u64,
+        plan_id: u64,
+        plan_revision: u64,
+        voice_count: u16,
+        state_transfer: PlanStateTransfer,
+    ) -> crate::PreparedPlanTransfer {
+        let plan = instrument_plan_with_identity(plan_id, plan_revision, voice_count);
         let prepared = PreparedExecutionPlan::prepare(&plan, 512).unwrap();
 
         crate::PreparedPlanTransfer::new(transfer_id, prepared, state_transfer)
@@ -3430,6 +3466,83 @@ mod tests {
         for (left, right) in uninterrupted.iter().zip(swapped.iter()) {
             assert!((left - right).abs() < 0.000_000_1);
         }
+    }
+
+    #[test]
+    fn state_transfer_preserves_instrument_pool_across_plan_swap() {
+        fn render(swapped: bool) -> Vec<f32> {
+            let (command_sender, command_receiver) = crate::engine_command_queue();
+            let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+            let (prepared_sender, prepared_receiver) = crate::prepared_plan_transfer_queue();
+            let (retired_sender, _retired_receiver) = crate::retired_plan_queue();
+            let plan_a = instrument_plan_with_identity(1, 1, 2);
+            let mut engine = AudioEngine::new()
+                .with_execution_plan(&plan_a, 512)
+                .unwrap()
+                .with_realtime_queues(command_receiver, telemetry_sender)
+                .with_plan_transfer_queues(prepared_receiver, retired_sender);
+            let mut rendered = Vec::new();
+
+            command_sender
+                .push(EngineCommand::TransportStart {
+                    id: 1,
+                    at_sample: 0,
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 2,
+                    event: ScheduledEngineEvent::NoteOn {
+                        target_node: NODE_EVENT_INPUT,
+                        note: 60,
+                        velocity: 0.5,
+                        at_sample: 0,
+                    },
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 3,
+                    event: ScheduledEngineEvent::NoteOn {
+                        target_node: NODE_EVENT_INPUT,
+                        note: 64,
+                        velocity: 0.75,
+                        at_sample: 32,
+                    },
+                })
+                .unwrap();
+
+            if swapped {
+                let plan_b = instrument_plan_with_identity(2, 1, 2);
+                let old_prepared = PreparedExecutionPlan::prepare(&plan_a, 512).unwrap();
+                let new_prepared = PreparedExecutionPlan::prepare(&plan_b, 512).unwrap();
+                let transfer =
+                    build_state_transfer(&old_prepared.metadata(), &new_prepared.metadata())
+                        .unwrap();
+
+                assert!(prepared_sender
+                    .push(prepared_instrument_transfer_with_state(
+                        32, 2, 1, 2, transfer
+                    ))
+                    .is_ok());
+                command_sender
+                    .push(EngineCommand::SwapExecutionPlan {
+                        id: 4,
+                        transfer_id: 32,
+                        requested_sample: 128,
+                    })
+                    .unwrap();
+            }
+
+            rendered.extend(process_frames(&mut engine, 128));
+            rendered.extend(process_frames(&mut engine, 128));
+            rendered
+        }
+
+        let uninterrupted = render(false);
+        let swapped = render(true);
+
+        assert_outputs_close(&uninterrupted, &swapped);
     }
 
     #[test]

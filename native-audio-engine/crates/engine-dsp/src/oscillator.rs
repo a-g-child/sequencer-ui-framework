@@ -12,6 +12,13 @@ pub struct DiagnosticOscillator {
     gain: SmoothedParameter,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DiagnosticOscillatorState {
+    pub phase: f64,
+    pub frequency_hz: f32,
+    pub gain: crate::SmoothedParameterState,
+}
+
 impl Default for DiagnosticOscillator {
     fn default() -> Self {
         Self::new(440.0, 0.05)
@@ -62,6 +69,20 @@ impl DiagnosticOscillator {
         self.phase -= self.phase.floor();
 
         sample
+    }
+
+    pub fn state(&self) -> DiagnosticOscillatorState {
+        DiagnosticOscillatorState {
+            phase: self.phase,
+            frequency_hz: self.frequency_hz,
+            gain: self.gain.state(),
+        }
+    }
+
+    pub fn restore_state(&mut self, state: DiagnosticOscillatorState) {
+        self.phase = state.phase;
+        self.frequency_hz = state.frequency_hz;
+        self.gain.restore_state(state.gain);
     }
 }
 
