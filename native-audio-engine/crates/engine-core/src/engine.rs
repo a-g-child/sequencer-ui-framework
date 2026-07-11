@@ -3,8 +3,8 @@ use std::time::Instant;
 use engine_dsp::{DiagnosticOscillator, PARAM_DIAGNOSTIC_FREQUENCY, PARAM_DIAGNOSTIC_GAIN};
 use engine_protocol::{
     AudioTelemetry, CommandDiagnostics, CommandRejection, EngineCommand, EngineEvent,
-    NativeExecutionPlan, RuntimePlanStatus, ScheduledBeatEvent, ScheduledEngineEvent,
-    TempoMapSnapshot, TransportLoop,
+    EventEndpoint, FutureEventRequest, NativeExecutionPlan, RuntimePlanStatus, ScheduledBeatEvent,
+    ScheduledEngineEvent, TempoMapSnapshot, TransportLoop,
 };
 
 use crate::{
@@ -88,10 +88,12 @@ impl DeferredRetirements {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ScheduledEventEntry {
+    source: EventEndpoint,
     event: ScheduledEngineEvent,
     original_sample: u64,
     loop_iteration: u64,
     beat_event: Option<ScheduledBeatEvent>,
+    plan_revision: Option<PlanRevisionBinding>,
 }
 
 impl ScheduledEventEntry {
@@ -119,10 +121,12 @@ impl ScheduledEventSet {
         beat_event: Option<ScheduledBeatEvent>,
     ) -> Result<(), ScheduledEngineEvent> {
         let entry = ScheduledEventEntry {
+            source: event_endpoint_for_event(event),
             event,
             original_sample: event.at_sample(),
             loop_iteration: 0,
             beat_event,
+            plan_revision: None,
         };
 
         if let Some(slot) = self.entries.iter_mut().find(|slot| slot.is_none()) {
@@ -131,6 +135,28 @@ impl ScheduledEventSet {
         }
 
         Err(event)
+    }
+
+    fn insert_future(
+        &mut self,
+        request: FutureEventRequest,
+        plan_revision: PlanRevisionBinding,
+    ) -> Result<(), FutureEventRequest> {
+        let entry = ScheduledEventEntry {
+            source: request.source,
+            event: set_scheduled_event_sample(request.event, request.at_sample),
+            original_sample: request.at_sample,
+            loop_iteration: 0,
+            beat_event: None,
+            plan_revision: Some(plan_revision),
+        };
+
+        if let Some(slot) = self.entries.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(entry);
+            return Ok(());
+        }
+
+        Err(request)
     }
 
     fn insert_entry(&mut self, entry: ScheduledEventEntry) -> Result<(), ScheduledEventEntry> {
@@ -181,6 +207,12 @@ impl ScheduledEventSet {
             entry.loop_iteration = 0;
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PlanRevisionBinding {
+    plan_id: u64,
+    plan_revision: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -245,6 +277,28 @@ fn set_scheduled_event_sample(event: ScheduledEngineEvent, at_sample: u64) -> Sc
             note,
             at_sample,
         },
+    }
+}
+
+fn event_endpoint_for_event(event: ScheduledEngineEvent) -> EventEndpoint {
+    match event {
+        ScheduledEngineEvent::NoteOn { target_node, .. }
+        | ScheduledEngineEvent::NoteOff { target_node, .. } => EventEndpoint {
+            node_id: target_node,
+            port_id: engine_protocol::DEFAULT_EVENT_PORT,
+        },
+    }
+}
+
+fn drain_future_event_requests_from(
+    scheduled_events: &mut ScheduledEventSet,
+    plan: &mut PreparedExecutionPlan,
+    binding: PlanRevisionBinding,
+) {
+    while let Some(request) = plan.take_future_event_request() {
+        if scheduled_events.insert_future(request, binding).is_err() {
+            plan.record_future_scheduler_full();
+        }
     }
 }
 
@@ -1030,17 +1084,27 @@ impl AudioEngine {
         }
 
         while let Some(entry) = self.scheduled_events.take_due_before(sample_position) {
-            self.apply_scheduled_event(entry.event);
+            let should_reschedule = self.apply_scheduled_event(&entry);
+
+            if !should_reschedule {
+                continue;
+            }
+
             self.reschedule_looped_event(entry);
         }
     }
 
-    fn apply_scheduled_event(&mut self, event: ScheduledEngineEvent) {
-        if self.dispatch_event_to_execution_plan(event) {
-            return;
+    fn apply_scheduled_event(&mut self, entry: &ScheduledEventEntry) -> bool {
+        if !self.plan_revision_binding_is_active(entry.plan_revision) {
+            self.record_future_plan_revision_discard();
+            return false;
         }
 
-        match event {
+        if self.dispatch_event_to_execution_plan(entry.source, entry.event) {
+            return true;
+        }
+
+        match entry.event {
             ScheduledEngineEvent::NoteOn { note, velocity, .. } => {
                 self.scheduled_test_voice.note_on(note, velocity);
             }
@@ -1048,11 +1112,23 @@ impl AudioEngine {
                 self.scheduled_test_voice.note_off();
             }
         }
+
+        true
     }
 
-    fn dispatch_event_to_execution_plan(&mut self, event: ScheduledEngineEvent) -> bool {
+    fn dispatch_event_to_execution_plan(
+        &mut self,
+        source: EventEndpoint,
+        event: ScheduledEngineEvent,
+    ) -> bool {
         if let Some(plan) = self.execution_plan.as_mut() {
-            return plan.dispatch_event(event);
+            let binding = PlanRevisionBinding {
+                plan_id: plan.plan_id(),
+                plan_revision: plan.plan_revision(),
+            };
+            let handled = plan.dispatch_event_from(source, event);
+            drain_future_event_requests_from(&mut self.scheduled_events, plan, binding);
+            return handled;
         }
 
         if let Some(plan) = self
@@ -1060,10 +1136,58 @@ impl AudioEngine {
             .as_mut()
             .and_then(|crossfade| crossfade.new_plan.as_mut())
         {
-            return plan.dispatch_event(event);
+            let binding = PlanRevisionBinding {
+                plan_id: plan.plan_id(),
+                plan_revision: plan.plan_revision(),
+            };
+            let handled = plan.dispatch_event_from(source, event);
+            drain_future_event_requests_from(&mut self.scheduled_events, plan, binding);
+            return handled;
         }
 
         false
+    }
+
+    fn plan_revision_binding_is_active(&self, binding: Option<PlanRevisionBinding>) -> bool {
+        let Some(binding) = binding else {
+            return true;
+        };
+
+        self.active_plan_binding()
+            .is_some_and(|active| active == binding)
+    }
+
+    fn active_plan_binding(&self) -> Option<PlanRevisionBinding> {
+        self.execution_plan
+            .as_ref()
+            .map(|plan| PlanRevisionBinding {
+                plan_id: plan.plan_id(),
+                plan_revision: plan.plan_revision(),
+            })
+            .or_else(|| {
+                self.crossfade
+                    .as_ref()
+                    .and_then(|crossfade| crossfade.new_plan.as_ref())
+                    .map(|plan| PlanRevisionBinding {
+                        plan_id: plan.plan_id(),
+                        plan_revision: plan.plan_revision(),
+                    })
+            })
+    }
+
+    fn record_future_plan_revision_discard(&mut self) {
+        if let Some(plan) = self.execution_plan.as_mut() {
+            plan.record_future_plan_revision_discard();
+            return;
+        }
+
+        if let Some(plan) = self
+            .crossfade
+            .as_mut()
+            .and_then(|crossfade| crossfade.new_plan.as_mut())
+        {
+            plan.record_future_plan_revision_discard();
+        }
     }
 
     fn reschedule_looped_event(&mut self, mut entry: ScheduledEventEntry) {
@@ -1359,6 +1483,21 @@ impl AudioEngine {
                 diagnostics.events_dropped_budget = diagnostics
                     .events_dropped_budget
                     .saturating_add(plan_diagnostics.events_dropped_budget);
+                diagnostics.future_events_requested = diagnostics
+                    .future_events_requested
+                    .saturating_add(plan_diagnostics.future_events_requested);
+                diagnostics.future_events_rejected_late = diagnostics
+                    .future_events_rejected_late
+                    .saturating_add(plan_diagnostics.future_events_rejected_late);
+                diagnostics.future_events_dropped_capacity = diagnostics
+                    .future_events_dropped_capacity
+                    .saturating_add(plan_diagnostics.future_events_dropped_capacity);
+                diagnostics.future_events_dropped_scheduler_full = diagnostics
+                    .future_events_dropped_scheduler_full
+                    .saturating_add(plan_diagnostics.future_events_dropped_scheduler_full);
+                diagnostics.future_events_discarded_plan_revision = diagnostics
+                    .future_events_discarded_plan_revision
+                    .saturating_add(plan_diagnostics.future_events_discarded_plan_revision);
             }
         }
 
@@ -1373,10 +1512,12 @@ mod tests {
     use engine_protocol::{
         chorded_instrument_plan, diagnostic_tone_plan, event_endpoint, monophonic_instrument_plan,
         monophonic_voice_plan, scaled_monophonic_instrument_plan, scaled_monophonic_voice_plan,
-        transposed_monophonic_instrument_plan, transposed_monophonic_voice_plan, EventRoute,
-        EventRouteMask, PlanNodeKind, ScaleNodePlan, ScheduledBeatEvent, ScheduledEngineEvent,
-        TempoMapSnapshot, TransportLoop, VelocityNodePlan, VoiceNodePlan, NODE_EVENT_INPUT,
-        NODE_OUTPUT, NODE_VOICE, PARAM_GAIN_GAIN,
+        transposed_monophonic_instrument_plan, transposed_monophonic_voice_plan, AudioBufferSlot,
+        EventDelayNodePlan, EventEndpoint, EventInputNodePlan, EventRoute, EventRouteMask,
+        InstrumentNodePlan, OutputNodePlan, PlanNode, PlanNodeKind, ScaleNodePlan,
+        ScheduledBeatEvent, ScheduledEngineEvent, TempoMapSnapshot, TransportLoop,
+        VelocityNodePlan, VoiceNodePlan, EVENT_DELAY_PORT_DELAYED, NODE_EVENT_DELAY,
+        NODE_EVENT_INPUT, NODE_INSTRUMENT, NODE_OUTPUT, NODE_VOICE, PARAM_GAIN_GAIN,
     };
 
     fn plan_with_identity(
@@ -1420,6 +1561,68 @@ mod tests {
         }
 
         plan
+    }
+
+    fn delayed_instrument_plan_with_identity(
+        plan_id: u64,
+        plan_revision: u64,
+        delay_samples: u32,
+    ) -> NativeExecutionPlan {
+        NativeExecutionPlan {
+            version: engine_protocol::NATIVE_EXECUTION_PLAN_VERSION,
+            plan_id,
+            plan_revision,
+            nodes: vec![
+                PlanNode {
+                    id: NODE_EVENT_INPUT,
+                    kind: PlanNodeKind::EventInput(EventInputNodePlan),
+                },
+                PlanNode {
+                    id: NODE_EVENT_DELAY,
+                    kind: PlanNodeKind::EventDelay(EventDelayNodePlan { delay_samples }),
+                },
+                PlanNode {
+                    id: NODE_INSTRUMENT,
+                    kind: PlanNodeKind::Instrument(InstrumentNodePlan {
+                        output_buffer: 1,
+                        voice_count: 4,
+                        attack_seconds: 0.0,
+                        decay_seconds: 0.0,
+                        sustain_level: 1.0,
+                        release_seconds: 0.0,
+                    }),
+                },
+                PlanNode {
+                    id: NODE_OUTPUT,
+                    kind: PlanNodeKind::Output(OutputNodePlan {
+                        input_buffer: 1,
+                        output_channels: 2,
+                    }),
+                },
+            ],
+            buffers: vec![AudioBufferSlot { id: 1, channels: 1 }],
+            parameters: vec![],
+            event_routes: vec![
+                EventRoute {
+                    source: event_endpoint(NODE_EVENT_INPUT),
+                    destination: event_endpoint(NODE_EVENT_DELAY),
+                    event_mask: EventRouteMask::NOTE,
+                    priority: 0,
+                    enabled: true,
+                },
+                EventRoute {
+                    source: EventEndpoint {
+                        node_id: NODE_EVENT_DELAY,
+                        port_id: EVENT_DELAY_PORT_DELAYED,
+                    },
+                    destination: event_endpoint(NODE_INSTRUMENT),
+                    event_mask: EventRouteMask::NOTE,
+                    priority: 0,
+                    enabled: true,
+                },
+            ],
+            audio_execution_order: vec![NODE_INSTRUMENT, NODE_OUTPUT],
+        }
     }
 
     fn chorded_instrument_plan_with_identity(
@@ -2102,6 +2305,142 @@ mod tests {
     }
 
     #[test]
+    fn event_delay_fires_at_requested_future_sample() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let plan = delayed_instrument_plan_with_identity(1, 1, 8);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 2,
+                event: ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 69,
+                    velocity: 0.5,
+                    at_sample: 8,
+                },
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 32);
+
+        assert!(frame_is_silent(&output, 15));
+        assert!(frame_has_signal(&output, 16));
+        assert_eq!(
+            engine
+                .current_event_graph_diagnostics()
+                .future_events_requested,
+            1
+        );
+    }
+
+    #[test]
+    fn event_delay_preserves_note_off_payload_and_timing() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let plan = delayed_instrument_plan_with_identity(1, 1, 8);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 2,
+                event: ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 69,
+                    velocity: 0.5,
+                    at_sample: 8,
+                },
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 3,
+                event: ScheduledEngineEvent::NoteOff {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 69,
+                    at_sample: 24,
+                },
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 64);
+
+        assert!(frame_has_signal(&output, 25));
+        assert!(frame_is_silent(&output, 33));
+        assert_eq!(
+            engine
+                .current_event_graph_diagnostics()
+                .future_events_requested,
+            2
+        );
+    }
+
+    #[test]
+    fn event_delay_output_is_independent_of_callback_grouping() {
+        let (command_sender_a, command_receiver_a) = crate::engine_command_queue();
+        let (telemetry_sender_a, _telemetry_receiver_a) = crate::engine_telemetry_queue();
+        let (command_sender_b, command_receiver_b) = crate::engine_command_queue();
+        let (telemetry_sender_b, _telemetry_receiver_b) = crate::engine_telemetry_queue();
+        let plan = delayed_instrument_plan_with_identity(1, 1, 8);
+        let mut single_block = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver_a, telemetry_sender_a);
+        let mut grouped = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver_b, telemetry_sender_b);
+
+        for sender in [&command_sender_a, &command_sender_b] {
+            sender
+                .push(EngineCommand::TransportStart {
+                    id: 1,
+                    at_sample: 0,
+                })
+                .unwrap();
+            sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 2,
+                    event: ScheduledEngineEvent::NoteOn {
+                        target_node: NODE_EVENT_INPUT,
+                        note: 69,
+                        velocity: 0.5,
+                        at_sample: 8,
+                    },
+                })
+                .unwrap();
+        }
+
+        let single_output = process_frames(&mut single_block, 64);
+        let mut grouped_output = Vec::new();
+
+        for _ in 0..4 {
+            grouped_output.extend(process_frames(&mut grouped, 16));
+        }
+
+        assert_outputs_close(&single_output, &grouped_output);
+    }
+
+    #[test]
     fn transport_stop_clears_instrument_voices() {
         let (command_sender, command_receiver) = crate::engine_command_queue();
         let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
@@ -2139,6 +2478,157 @@ mod tests {
 
         assert!(frame_has_signal(&output, 63));
         assert!(frame_is_silent(&output, 65));
+    }
+
+    #[test]
+    fn transport_stop_clears_delayed_future_events() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let plan = delayed_instrument_plan_with_identity(1, 1, 32);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 2,
+                event: ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 69,
+                    velocity: 0.5,
+                    at_sample: 8,
+                },
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::TransportStop {
+                id: 3,
+                at_sample: 16,
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 64);
+
+        assert!(output.chunks_exact(2).all(|frame| frame == [0.0, 0.0]));
+        assert!(engine.scheduled_events_empty());
+    }
+
+    #[test]
+    fn panic_clears_delayed_future_events() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let plan = delayed_instrument_plan_with_identity(1, 1, 32);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 2,
+                event: ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 69,
+                    velocity: 0.5,
+                    at_sample: 8,
+                },
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::Panic {
+                id: 3,
+                at_sample: 16,
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 64);
+
+        assert!(output.chunks_exact(2).all(|frame| frame == [0.0, 0.0]));
+        assert!(engine.scheduled_events_empty());
+    }
+
+    #[test]
+    fn future_events_are_discarded_after_plan_revision_change() {
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&delayed_instrument_plan_with_identity(1, 1, 32), 512)
+            .unwrap();
+        let replacement =
+            PreparedExecutionPlan::prepare(&delayed_instrument_plan_with_identity(1, 2, 32), 512)
+                .unwrap();
+
+        engine.playing = true;
+
+        assert!(engine.dispatch_event_to_execution_plan(
+            event_endpoint(NODE_EVENT_INPUT),
+            ScheduledEngineEvent::NoteOn {
+                target_node: NODE_EVENT_INPUT,
+                note: 69,
+                velocity: 0.5,
+                at_sample: 8,
+            }
+        ));
+
+        engine.execution_plan = Some(replacement);
+        engine.apply_scheduled_events_until(40);
+
+        assert_eq!(
+            engine
+                .current_event_graph_diagnostics()
+                .future_events_discarded_plan_revision,
+            1
+        );
+    }
+
+    #[test]
+    fn future_event_scheduler_full_is_reported_separately() {
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&delayed_instrument_plan_with_identity(1, 1, 1), 512)
+            .unwrap();
+
+        for sample in 10_000..10_000 + SCHEDULED_EVENT_CAPACITY as u64 {
+            engine
+                .scheduled_events
+                .insert(
+                    ScheduledEngineEvent::NoteOn {
+                        target_node: NODE_EVENT_INPUT,
+                        note: 60,
+                        velocity: 0.1,
+                        at_sample: sample,
+                    },
+                    None,
+                )
+                .unwrap();
+        }
+
+        assert!(engine.dispatch_event_to_execution_plan(
+            event_endpoint(NODE_EVENT_INPUT),
+            ScheduledEngineEvent::NoteOn {
+                target_node: NODE_EVENT_INPUT,
+                note: 69,
+                velocity: 0.5,
+                at_sample: 8,
+            }
+        ));
+
+        assert_eq!(
+            engine
+                .current_event_graph_diagnostics()
+                .future_events_dropped_scheduler_full,
+            1
+        );
     }
 
     #[test]

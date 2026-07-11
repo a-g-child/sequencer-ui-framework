@@ -46,4 +46,9 @@ pub struct EventGraphDiagnostics {
     pub events_dropped_capacity: u64,
     pub events_dropped_depth: u64,
     pub events_dropped_budget: u64,
+    pub future_events_requested: u64,
+    pub future_events_rejected_late: u64,
+    pub future_events_dropped_capacity: u64,
+    pub future_events_dropped_scheduler_full: u64,
+    pub future_events_discarded_plan_revision: u64,
 }

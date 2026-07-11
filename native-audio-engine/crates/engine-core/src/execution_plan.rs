@@ -10,13 +10,14 @@ use std::{
 use engine_dsp::{MonophonicVoice, MonophonicVoiceState, SmoothedParameter};
 use engine_protocol::{
     AudioBufferSlot, BufferSlotId, EventEndpoint, EventGraphDiagnostics, EventRouteMask,
-    NativeExecutionPlan, NodeId, ParameterSlotId, PlanNodeKind, ScheduledEngineEvent,
-    DEFAULT_EVENT_PORT, NATIVE_EXECUTION_PLAN_VERSION, SCALE_PORT_ACCEPTED, SCALE_PORT_INPUT,
-    SCALE_PORT_REJECTED,
+    FutureEventRequest, NativeExecutionPlan, NodeId, ParameterSlotId, PlanNodeKind,
+    ScheduledEngineEvent, DEFAULT_EVENT_PORT, EVENT_DELAY_PORT_DELAYED, EVENT_DELAY_PORT_INPUT,
+    NATIVE_EXECUTION_PLAN_VERSION, SCALE_PORT_ACCEPTED, SCALE_PORT_INPUT, SCALE_PORT_REJECTED,
 };
 
 pub const MAX_EVENT_DEPTH: u16 = 32;
 pub const MAX_EVENTS_PER_BLOCK: usize = 1024;
+pub const MAX_FUTURE_EVENTS_PER_DISPATCH: usize = 1024;
 pub const MAX_CHORD_INTERVALS: usize = 16;
 pub const MAX_INSTRUMENT_VOICES: u16 = 128;
 
@@ -37,6 +38,7 @@ pub enum PlanValidationError {
     UnknownEventDestinationPort,
     IncompatibleEventRoute,
     DuplicateEventPort,
+    InvalidEventDelay,
     InvalidChordIntervals,
     DuplicateChordInterval,
     InvalidVelocityTransform,
@@ -78,6 +80,7 @@ pub struct PreparedExecutionPlan {
     execution_order: Box<[usize]>,
     event_graph: PreparedEventGraph,
     event_work_queue: FixedEventQueue,
+    future_event_queue: FixedFutureEventQueue,
     event_graph_diagnostics: EventGraphDiagnostics,
     node_metadata: Box<[RuntimeNodeMetadata]>,
     output_scratch: Box<[f32]>,
@@ -129,6 +132,7 @@ pub struct InstrumentDiagnostics {
 pub enum RuntimeNodeKind {
     EventInput,
     EventSplitter,
+    EventDelay,
     Oscillator,
     Transpose,
     Scale,
@@ -201,6 +205,18 @@ const SCALE_EVENT_PORTS: [EventPortMetadata; 3] = [
     },
     EventPortMetadata {
         id: SCALE_PORT_REJECTED,
+        direction: EventPortDirection::Output,
+        mask: EventRouteMask::NOTE,
+    },
+];
+const EVENT_DELAY_PORTS: [EventPortMetadata; 2] = [
+    EventPortMetadata {
+        id: EVENT_DELAY_PORT_INPUT,
+        direction: EventPortDirection::Input,
+        mask: EventRouteMask::NOTE,
+    },
+    EventPortMetadata {
+        id: EVENT_DELAY_PORT_DELAYED,
         direction: EventPortDirection::Output,
         mask: EventRouteMask::NOTE,
     },
@@ -298,6 +314,15 @@ impl PreparedExecutionPlan {
             .map(|node| match &node.kind {
                 PlanNodeKind::EventInput(_) => Ok(RuntimeNode::EventInput(EventInputNode)),
                 PlanNodeKind::EventSplitter(_) => Ok(RuntimeNode::EventSplitter(EventSplitterNode)),
+                PlanNodeKind::EventDelay(node_plan) => {
+                    if node_plan.delay_samples == 0 {
+                        return Err(PlanValidationError::InvalidEventDelay);
+                    }
+
+                    Ok(RuntimeNode::EventDelay(EventDelayNode {
+                        delay_samples: node_plan.delay_samples,
+                    }))
+                }
                 PlanNodeKind::Oscillator(node_plan) => {
                     let output_buffer = buffer_index(plan, node_plan.output_buffer)?;
                     let frequency_parameter = parameter_index(plan, node_plan.frequency_parameter)?;
@@ -466,6 +491,7 @@ impl PreparedExecutionPlan {
             execution_order,
             event_graph,
             event_work_queue: FixedEventQueue::default(),
+            future_event_queue: FixedFutureEventQueue::default(),
             event_graph_diagnostics: EventGraphDiagnostics::default(),
             node_metadata,
             output_scratch: vec![0.0; maximum_frames * output_channels.max(1)].into_boxed_slice(),
@@ -559,13 +585,22 @@ impl PreparedExecutionPlan {
     }
 
     pub fn dispatch_event(&mut self, event: ScheduledEngineEvent) -> bool {
-        let source_node = event_source_node(event);
+        self.dispatch_event_from(event_endpoint_for_event(event), event)
+    }
+
+    pub fn dispatch_event_from(
+        &mut self,
+        source: EventEndpoint,
+        event: ScheduledEngineEvent,
+    ) -> bool {
+        self.future_event_queue.clear();
+        let source_node = source.node_id;
         let Some(source_node_index) = self.event_graph.source_node_index(source_node) else {
             return false;
         };
         let Some(source_endpoint_index) = self
             .event_graph
-            .source_endpoint_index(source_node_index, DEFAULT_EVENT_PORT)
+            .source_endpoint_index(source_node_index, source.port_id)
         else {
             self.event_graph_diagnostics.events_received = self
                 .event_graph_diagnostics
@@ -617,13 +652,28 @@ impl PreparedExecutionPlan {
                     .route_dispatches
                     .saturating_add(1);
 
+                let mut immediate_diagnostics = EventGraphDiagnostics::default();
+                let mut future_diagnostics = EventGraphDiagnostics::default();
                 let mut emitter = EventEmitter {
                     queue: &mut self.event_work_queue,
                     event_graph: &self.event_graph,
                     source_node_index: route.destination_node_index,
+                    source_node_id: self
+                        .event_graph
+                        .source_node_id(route.destination_node_index)
+                        .unwrap_or_default(),
                     parent_input_port: route.destination_port_id,
                     parent_depth: runtime_event.depth,
-                    diagnostics: &mut self.event_graph_diagnostics,
+                    diagnostics: &mut immediate_diagnostics,
+                };
+                let mut future_emitter = FutureEventEmitter {
+                    queue: &mut self.future_event_queue,
+                    source_node_id: self
+                        .event_graph
+                        .source_node_id(route.destination_node_index)
+                        .unwrap_or_default(),
+                    current_sample: runtime_event.event.at_sample(),
+                    diagnostics: &mut future_diagnostics,
                 };
                 let context = RuntimeEventContext {
                     input_port: route.destination_port_id,
@@ -634,11 +684,37 @@ impl PreparedExecutionPlan {
                     &runtime_event.event,
                     context,
                     &mut emitter,
+                    &mut future_emitter,
                 );
+                add_event_graph_diagnostics(
+                    &mut self.event_graph_diagnostics,
+                    immediate_diagnostics,
+                );
+                add_event_graph_diagnostics(&mut self.event_graph_diagnostics, future_diagnostics);
             }
         }
 
         handled
+    }
+
+    pub fn take_future_event_request(&mut self) -> Option<FutureEventRequest> {
+        self.future_event_queue.pop()
+    }
+
+    pub fn record_future_scheduler_full(&mut self) {
+        self.event_graph_diagnostics
+            .future_events_dropped_scheduler_full = self
+            .event_graph_diagnostics
+            .future_events_dropped_scheduler_full
+            .saturating_add(1);
+    }
+
+    pub fn record_future_plan_revision_discard(&mut self) {
+        self.event_graph_diagnostics
+            .future_events_discarded_plan_revision = self
+            .event_graph_diagnostics
+            .future_events_discarded_plan_revision
+            .saturating_add(1);
     }
 
     pub fn event_graph_diagnostics(&self) -> EventGraphDiagnostics {
@@ -1070,6 +1146,7 @@ struct NodeProcessContext {
 enum RuntimeNode {
     EventInput(EventInputNode),
     EventSplitter(EventSplitterNode),
+    EventDelay(EventDelayNode),
     Oscillator(OscillatorNode),
     Transpose(TransposeNode),
     Scale(ScaleNode),
@@ -1098,6 +1175,7 @@ impl RuntimeNode {
         match self {
             Self::EventInput(_) => {}
             Self::EventSplitter(_) => {}
+            Self::EventDelay(_) => {}
             Self::Oscillator(node) => node.process(context, buffers, parameters),
             Self::Transpose(_) => {}
             Self::Scale(_) => {}
@@ -1125,6 +1203,7 @@ impl RuntimeNode {
         match self {
             Self::EventInput(_) => RuntimeNodeKind::EventInput,
             Self::EventSplitter(_) => RuntimeNodeKind::EventSplitter,
+            Self::EventDelay(_) => RuntimeNodeKind::EventDelay,
             Self::Oscillator(_) => RuntimeNodeKind::Oscillator,
             Self::Transpose(_) => RuntimeNodeKind::Transpose,
             Self::Scale(_) => RuntimeNodeKind::Scale,
@@ -1189,9 +1268,11 @@ impl RuntimeNode {
         event: &ScheduledEngineEvent,
         context: RuntimeEventContext,
         emitter: &mut EventEmitter<'_>,
+        future_emitter: &mut FutureEventEmitter<'_>,
     ) -> bool {
         match self {
             Self::EventSplitter(node) => node.process_event(event, context, emitter),
+            Self::EventDelay(node) => node.process_event(event, context, future_emitter),
             Self::Transpose(node) => node.process_event(event, emitter),
             Self::Scale(node) => node.process_event(event, emitter),
             Self::Velocity(node) => node.process_event(event, emitter),
@@ -1211,7 +1292,28 @@ impl RuntimeNode {
 
 struct EventInputNode;
 
+struct EventDelayNode {
+    delay_samples: u32,
+}
+
 struct EventSplitterNode;
+
+impl EventDelayNode {
+    fn process_event(
+        &mut self,
+        event: &ScheduledEngineEvent,
+        context: RuntimeEventContext,
+        future_emitter: &mut FutureEventEmitter<'_>,
+    ) -> bool {
+        let at_sample = context
+            .sample_position
+            .saturating_add(self.delay_samples as u64);
+
+        future_emitter
+            .request_from(EVENT_DELAY_PORT_DELAYED, *event, at_sample)
+            .is_ok()
+    }
+}
 
 impl EventSplitterNode {
     const OUTPUT_A: u16 = 1;
@@ -1918,6 +2020,13 @@ impl PreparedEventGraph {
             })
     }
 
+    fn source_node_id(&self, source_node_index: u32) -> Option<NodeId> {
+        self.source_node_indexes
+            .get(source_node_index as usize)
+            .copied()
+            .flatten()
+    }
+
     fn route_range(&self, source_endpoint_index: u32) -> RouteRange {
         self.source_ranges
             .get(source_endpoint_index as usize)
@@ -1997,11 +2106,60 @@ impl FixedEventQueue {
     }
 }
 
+struct FixedFutureEventQueue {
+    entries: Box<[Option<FutureEventRequest>]>,
+    head: usize,
+    len: usize,
+}
+
+impl Default for FixedFutureEventQueue {
+    fn default() -> Self {
+        Self {
+            entries: vec![None; MAX_FUTURE_EVENTS_PER_DISPATCH].into_boxed_slice(),
+            head: 0,
+            len: 0,
+        }
+    }
+}
+
+impl FixedFutureEventQueue {
+    fn clear(&mut self) {
+        self.entries.fill(None);
+        self.head = 0;
+        self.len = 0;
+    }
+
+    fn push(&mut self, request: FutureEventRequest) -> Result<(), FutureEventRequest> {
+        if self.len >= self.entries.len() {
+            return Err(request);
+        }
+
+        let index = (self.head + self.len) % self.entries.len();
+
+        self.entries[index] = Some(request);
+        self.len += 1;
+        Ok(())
+    }
+
+    fn pop(&mut self) -> Option<FutureEventRequest> {
+        if self.len == 0 {
+            return None;
+        }
+
+        let request = self.entries[self.head].take();
+
+        self.head = (self.head + 1) % self.entries.len();
+        self.len -= 1;
+        request
+    }
+}
+
 #[allow(dead_code)]
 struct EventEmitter<'a> {
     queue: &'a mut FixedEventQueue,
     event_graph: &'a PreparedEventGraph,
     source_node_index: u32,
+    source_node_id: NodeId,
     parent_input_port: u16,
     parent_depth: u16,
     diagnostics: &'a mut EventGraphDiagnostics,
@@ -2053,11 +2211,124 @@ impl EventEmitter<'_> {
     }
 }
 
-fn event_source_node(event: ScheduledEngineEvent) -> NodeId {
+struct FutureEventEmitter<'a> {
+    queue: &'a mut FixedFutureEventQueue,
+    source_node_id: NodeId,
+    current_sample: u64,
+    diagnostics: &'a mut EventGraphDiagnostics,
+}
+
+impl FutureEventEmitter<'_> {
+    fn request_from(
+        &mut self,
+        output_port: u16,
+        event: ScheduledEngineEvent,
+        at_sample: u64,
+    ) -> Result<(), FutureEventRequest> {
+        if at_sample <= self.current_sample {
+            self.diagnostics.future_events_rejected_late = self
+                .diagnostics
+                .future_events_rejected_late
+                .saturating_add(1);
+            return Err(FutureEventRequest {
+                source: EventEndpoint {
+                    node_id: self.source_node_id,
+                    port_id: output_port,
+                },
+                event,
+                at_sample,
+            });
+        }
+
+        let request = FutureEventRequest {
+            source: EventEndpoint {
+                node_id: self.source_node_id,
+                port_id: output_port,
+            },
+            event: set_event_sample(event, at_sample),
+            at_sample,
+        };
+
+        if self.queue.push(request).is_err() {
+            self.diagnostics.future_events_dropped_capacity = self
+                .diagnostics
+                .future_events_dropped_capacity
+                .saturating_add(1);
+            return Err(request);
+        }
+
+        self.diagnostics.future_events_requested =
+            self.diagnostics.future_events_requested.saturating_add(1);
+        Ok(())
+    }
+}
+
+fn event_endpoint_for_event(event: ScheduledEngineEvent) -> EventEndpoint {
     match event {
         ScheduledEngineEvent::NoteOn { target_node, .. }
-        | ScheduledEngineEvent::NoteOff { target_node, .. } => target_node,
+        | ScheduledEngineEvent::NoteOff { target_node, .. } => EventEndpoint {
+            node_id: target_node,
+            port_id: DEFAULT_EVENT_PORT,
+        },
     }
+}
+
+fn set_event_sample(event: ScheduledEngineEvent, at_sample: u64) -> ScheduledEngineEvent {
+    match event {
+        ScheduledEngineEvent::NoteOn {
+            target_node,
+            note,
+            velocity,
+            ..
+        } => ScheduledEngineEvent::NoteOn {
+            target_node,
+            note,
+            velocity,
+            at_sample,
+        },
+        ScheduledEngineEvent::NoteOff {
+            target_node, note, ..
+        } => ScheduledEngineEvent::NoteOff {
+            target_node,
+            note,
+            at_sample,
+        },
+    }
+}
+
+fn add_event_graph_diagnostics(total: &mut EventGraphDiagnostics, delta: EventGraphDiagnostics) {
+    total.events_received = total.events_received.saturating_add(delta.events_received);
+    total.route_dispatches = total
+        .route_dispatches
+        .saturating_add(delta.route_dispatches);
+    total.events_emitted = total.events_emitted.saturating_add(delta.events_emitted);
+    total.events_suppressed = total
+        .events_suppressed
+        .saturating_add(delta.events_suppressed);
+    total.events_dropped_capacity = total
+        .events_dropped_capacity
+        .saturating_add(delta.events_dropped_capacity);
+    total.events_dropped_depth = total
+        .events_dropped_depth
+        .saturating_add(delta.events_dropped_depth);
+    total.events_dropped_budget = total
+        .events_dropped_budget
+        .saturating_add(delta.events_dropped_budget);
+    total.future_events_requested = total
+        .future_events_requested
+        .saturating_add(delta.future_events_requested);
+    total.future_events_rejected_late = total
+        .future_events_rejected_late
+        .saturating_add(delta.future_events_rejected_late);
+    total.future_events_dropped_capacity = total
+        .future_events_dropped_capacity
+        .saturating_add(delta.future_events_dropped_capacity);
+    total.future_events_dropped_scheduler_full = total
+        .future_events_dropped_scheduler_full
+        .saturating_add(delta.future_events_dropped_scheduler_full);
+    total.future_events_discarded_plan_revision = total
+        .future_events_discarded_plan_revision
+        .saturating_add(delta.future_events_discarded_plan_revision);
 }
 
 #[cfg(test)]
@@ -2245,6 +2516,7 @@ fn validate_event_port_declarations(plan: &NativeExecutionPlan) -> Result<(), Pl
 fn event_ports_for_node(kind: &PlanNodeKind) -> &'static [EventPortMetadata] {
     match kind {
         PlanNodeKind::EventSplitter(_) => &EVENT_SPLITTER_PORTS,
+        PlanNodeKind::EventDelay(_) => &EVENT_DELAY_PORTS,
         PlanNodeKind::Scale(_) => &SCALE_EVENT_PORTS,
         _ => &DEFAULT_EVENT_PORTS,
     }
@@ -2395,6 +2667,7 @@ fn runtime_node_kind(kind: &PlanNodeKind) -> Result<RuntimeNodeKind, PlanValidat
     match kind {
         PlanNodeKind::EventInput(_) => Ok(RuntimeNodeKind::EventInput),
         PlanNodeKind::EventSplitter(_) => Ok(RuntimeNodeKind::EventSplitter),
+        PlanNodeKind::EventDelay(_) => Ok(RuntimeNodeKind::EventDelay),
         PlanNodeKind::Oscillator(_) => Ok(RuntimeNodeKind::Oscillator),
         PlanNodeKind::Transpose(_) => Ok(RuntimeNodeKind::Transpose),
         PlanNodeKind::Scale(_) => Ok(RuntimeNodeKind::Scale),
@@ -2444,6 +2717,7 @@ fn state_transfer_kind_for_node(node_kind: RuntimeNodeKind) -> Option<StateTrans
     match node_kind {
         RuntimeNodeKind::EventInput => None,
         RuntimeNodeKind::EventSplitter => None,
+        RuntimeNodeKind::EventDelay => None,
         RuntimeNodeKind::Oscillator => Some(StateTransferKind::OscillatorPhase),
         RuntimeNodeKind::Transpose => None,
         RuntimeNodeKind::Scale => None,
@@ -2516,13 +2790,13 @@ mod tests {
     use engine_protocol::{
         chorded_instrument_plan, diagnostic_tone_plan, event_endpoint, monophonic_instrument_plan,
         monophonic_voice_plan, transposed_monophonic_voice_plan, AudioBufferSlot, ChordNodePlan,
-        EventInputNodePlan, EventRoute, EventRouteMask, EventSplitterNodePlan, GainNodePlan,
-        InstrumentNodePlan, NativeExecutionPlan, OscillatorNodePlan, OutputNodePlan, PlanNode,
-        PlanNodeKind, ScaleNodePlan, ScheduledEngineEvent, TransposeNodePlan, VelocityNodePlan,
-        DEFAULT_EVENT_PORT, NODE_CHORD, NODE_EVENT_INPUT, NODE_EVENT_SPLITTER, NODE_GAIN,
-        NODE_INSTRUMENT, NODE_OSCILLATOR, NODE_OUTPUT, NODE_SCALE, NODE_TRANSPOSE, NODE_VELOCITY,
-        NODE_VOICE, PARAM_GAIN_GAIN, PARAM_OSCILLATOR_FREQUENCY, SCALE_PORT_ACCEPTED,
-        SCALE_PORT_REJECTED,
+        EventDelayNodePlan, EventInputNodePlan, EventRoute, EventRouteMask, EventSplitterNodePlan,
+        GainNodePlan, InstrumentNodePlan, NativeExecutionPlan, OscillatorNodePlan, OutputNodePlan,
+        PlanNode, PlanNodeKind, ScaleNodePlan, ScheduledEngineEvent, TransposeNodePlan,
+        VelocityNodePlan, DEFAULT_EVENT_PORT, EVENT_DELAY_PORT_DELAYED, NODE_CHORD,
+        NODE_EVENT_DELAY, NODE_EVENT_INPUT, NODE_EVENT_SPLITTER, NODE_GAIN, NODE_INSTRUMENT,
+        NODE_OSCILLATOR, NODE_OUTPUT, NODE_SCALE, NODE_TRANSPOSE, NODE_VELOCITY, NODE_VOICE,
+        PARAM_GAIN_GAIN, PARAM_OSCILLATOR_FREQUENCY, SCALE_PORT_ACCEPTED, SCALE_PORT_REJECTED,
     };
 
     #[test]
@@ -3102,6 +3376,63 @@ mod tests {
         }
     }
 
+    fn event_delay_to_recording_plan(delay_samples: u32) -> NativeExecutionPlan {
+        NativeExecutionPlan {
+            version: NATIVE_EXECUTION_PLAN_VERSION,
+            plan_id: 1,
+            plan_revision: 1,
+            nodes: vec![
+                PlanNode {
+                    id: NODE_EVENT_INPUT,
+                    kind: PlanNodeKind::EventInput(EventInputNodePlan),
+                },
+                PlanNode {
+                    id: NODE_EVENT_DELAY,
+                    kind: PlanNodeKind::EventDelay(EventDelayNodePlan { delay_samples }),
+                },
+                PlanNode {
+                    id: NODE_VOICE,
+                    kind: PlanNodeKind::Voice(engine_protocol::VoiceNodePlan {
+                        output_buffer: 1,
+                        attack_seconds: 0.0,
+                        decay_seconds: 0.0,
+                        sustain_level: 1.0,
+                        release_seconds: 0.0,
+                    }),
+                },
+                PlanNode {
+                    id: NODE_OUTPUT,
+                    kind: PlanNodeKind::Output(OutputNodePlan {
+                        input_buffer: 1,
+                        output_channels: 2,
+                    }),
+                },
+            ],
+            buffers: vec![AudioBufferSlot { id: 1, channels: 1 }],
+            parameters: vec![],
+            event_routes: vec![
+                EventRoute {
+                    source: event_endpoint(NODE_EVENT_INPUT),
+                    destination: event_endpoint(NODE_EVENT_DELAY),
+                    event_mask: EventRouteMask::NOTE,
+                    priority: 0,
+                    enabled: true,
+                },
+                EventRoute {
+                    source: EventEndpoint {
+                        node_id: NODE_EVENT_DELAY,
+                        port_id: EVENT_DELAY_PORT_DELAYED,
+                    },
+                    destination: event_endpoint(NODE_VOICE),
+                    event_mask: EventRouteMask::NOTE,
+                    priority: 0,
+                    enabled: true,
+                },
+            ],
+            audio_execution_order: vec![NODE_VOICE, NODE_OUTPUT],
+        }
+    }
+
     fn note_on(source_node: u32, note: u8, velocity: f32, at_sample: u64) -> ScheduledEngineEvent {
         ScheduledEngineEvent::NoteOn {
             target_node: source_node,
@@ -3302,6 +3633,103 @@ mod tests {
             PreparedExecutionPlan::prepare(&plan, 128),
             Err(PlanValidationError::UnknownEventDestinationPort)
         ));
+    }
+
+    #[test]
+    fn event_delay_requests_future_note_on_from_delayed_output() {
+        let plan = event_delay_to_recording_plan(8);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.75, 16)));
+
+        let request = prepared.take_future_event_request().unwrap();
+
+        assert_eq!(
+            request.source,
+            EventEndpoint {
+                node_id: NODE_EVENT_DELAY,
+                port_id: EVENT_DELAY_PORT_DELAYED,
+            }
+        );
+        assert_eq!(request.at_sample, 24);
+        assert_eq!(
+            request.event,
+            ScheduledEngineEvent::NoteOn {
+                target_node: NODE_EVENT_INPUT,
+                note: 60,
+                velocity: 0.75,
+                at_sample: 24,
+            }
+        );
+        assert!(prepared.take_future_event_request().is_none());
+        assert_eq!(
+            prepared.event_graph_diagnostics().future_events_requested,
+            1
+        );
+    }
+
+    #[test]
+    fn event_delay_requests_future_note_off_with_same_delay() {
+        let plan = event_delay_to_recording_plan(12);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        assert!(prepared.dispatch_event(note_off(NODE_EVENT_INPUT, 64, 20)));
+
+        let request = prepared.take_future_event_request().unwrap();
+
+        assert_eq!(request.at_sample, 32);
+        assert_eq!(
+            request.event,
+            ScheduledEngineEvent::NoteOff {
+                target_node: NODE_EVENT_INPUT,
+                note: 64,
+                at_sample: 32,
+            }
+        );
+    }
+
+    #[test]
+    fn event_delay_rejects_zero_delay_during_preparation() {
+        let plan = event_delay_to_recording_plan(0);
+
+        assert!(matches!(
+            PreparedExecutionPlan::prepare(&plan, 128),
+            Err(PlanValidationError::InvalidEventDelay)
+        ));
+    }
+
+    #[test]
+    fn future_event_queue_capacity_rejects_deterministically() {
+        let mut plan = event_delay_to_recording_plan(1);
+
+        plan.event_routes = (0..=MAX_FUTURE_EVENTS_PER_DISPATCH)
+            .map(|index| EventRoute {
+                source: event_endpoint(NODE_EVENT_INPUT),
+                destination: event_endpoint(NODE_EVENT_DELAY),
+                event_mask: EventRouteMask::NOTE,
+                priority: index as u16,
+                enabled: true,
+            })
+            .collect();
+
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.5, 0)));
+
+        let mut request_count = 0;
+
+        while prepared.take_future_event_request().is_some() {
+            request_count += 1;
+        }
+
+        let diagnostics = prepared.event_graph_diagnostics();
+
+        assert_eq!(request_count, MAX_FUTURE_EVENTS_PER_DISPATCH);
+        assert_eq!(
+            diagnostics.future_events_requested,
+            MAX_FUTURE_EVENTS_PER_DISPATCH as u64
+        );
+        assert_eq!(diagnostics.future_events_dropped_capacity, 1);
     }
 
     #[test]

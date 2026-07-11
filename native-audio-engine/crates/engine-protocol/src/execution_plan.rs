@@ -11,11 +11,14 @@ pub const NODE_INSTRUMENT: u32 = 8;
 pub const NODE_CHORD: u32 = 9;
 pub const NODE_VELOCITY: u32 = 10;
 pub const NODE_EVENT_SPLITTER: u32 = 11;
+pub const NODE_EVENT_DELAY: u32 = 12;
 
 pub const DEFAULT_EVENT_PORT: u16 = 0;
 pub const SCALE_PORT_INPUT: u16 = 0;
 pub const SCALE_PORT_ACCEPTED: u16 = 0;
 pub const SCALE_PORT_REJECTED: u16 = 1;
+pub const EVENT_DELAY_PORT_INPUT: u16 = 0;
+pub const EVENT_DELAY_PORT_DELAYED: u16 = 1;
 
 pub const PARAM_OSCILLATOR_FREQUENCY: u32 = 1;
 pub const PARAM_GAIN_GAIN: u32 = 2;
@@ -58,6 +61,13 @@ pub struct EventRoute {
     pub enabled: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FutureEventRequest {
+    pub source: EventEndpoint,
+    pub event: crate::ScheduledEngineEvent,
+    pub at_sample: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EventRouteMask {
     pub note: bool,
@@ -81,6 +91,7 @@ pub struct PlanNode {
 pub enum PlanNodeKind {
     EventInput(EventInputNodePlan),
     EventSplitter(EventSplitterNodePlan),
+    EventDelay(EventDelayNodePlan),
     Oscillator(OscillatorNodePlan),
     Transpose(TransposeNodePlan),
     Scale(ScaleNodePlan),
@@ -100,6 +111,11 @@ pub struct EventInputNodePlan;
 /// transforming musical state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EventSplitterNodePlan;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EventDelayNodePlan {
+    pub delay_samples: u32,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct OscillatorNodePlan {
