@@ -39,4 +39,5 @@ pub enum CommandRejection {
     DuplicatePreparedPlan,
     PendingPlanFull,
     RetirementQueueFull,
+    InvalidStateTransfer,
 }

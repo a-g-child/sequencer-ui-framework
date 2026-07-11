@@ -6,6 +6,14 @@ pub struct SmoothedParameter {
     remaining_samples: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SmoothedParameterState {
+    pub current: f32,
+    pub target: f32,
+    pub increment: f32,
+    pub remaining_samples: u32,
+}
+
 impl SmoothedParameter {
     pub fn new(value: f32) -> Self {
         Self {
@@ -45,6 +53,22 @@ impl SmoothedParameter {
         }
 
         self.current
+    }
+
+    pub fn state(&self) -> SmoothedParameterState {
+        SmoothedParameterState {
+            current: self.current,
+            target: self.target,
+            increment: self.increment,
+            remaining_samples: self.remaining_samples,
+        }
+    }
+
+    pub fn restore_state(&mut self, state: SmoothedParameterState) {
+        self.current = state.current;
+        self.target = state.target;
+        self.increment = state.increment;
+        self.remaining_samples = state.remaining_samples;
     }
 }
 

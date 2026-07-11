@@ -236,12 +236,11 @@ fn run(options: HostOptions) -> Result<(), engine_audio_io::AudioDriverError> {
                     .unwrap_or(0);
 
                 if prepared_plan_sender
-                    .push(engine_core::PreparedPlanTransfer {
+                    .push(engine_core::PreparedPlanTransfer::new(
                         transfer_id,
-                        plan_id: plan.plan_id,
-                        plan_revision: plan.plan_revision,
-                        plan: prepared,
-                    })
+                        prepared,
+                        engine_core::PlanStateTransfer::empty(),
+                    ))
                     .is_ok()
                 {
                     let _ = command_sender.push(EngineCommand::SwapExecutionPlan {

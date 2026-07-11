@@ -28,6 +28,16 @@ pub enum PlanValidationError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StateTransferError {
+    UnknownOldNode,
+    UnknownNewNode,
+    NodeTypeMismatch,
+    IncompatibleTransferKind,
+    DuplicateOldNode,
+    DuplicateNewNode,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProcessRange {
     pub start_frame: usize,
     pub end_frame: usize,
@@ -41,6 +51,45 @@ pub struct PreparedExecutionPlan {
     parameters: Box<[RuntimeParameter]>,
     execution_order: Box<[usize]>,
     output_node_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlanStateTransfer {
+    pub entries: Box<[StateTransferEntry]>,
+}
+
+impl PlanStateTransfer {
+    pub fn empty() -> Self {
+        Self {
+            entries: Vec::new().into_boxed_slice(),
+        }
+    }
+}
+
+impl Default for PlanStateTransfer {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StateTransferEntry {
+    pub old_node_index: u32,
+    pub new_node_index: u32,
+    pub kind: StateTransferKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StateTransferKind {
+    OscillatorPhase,
+    GainSmoother,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeNodeType {
+    Oscillator,
+    Gain,
+    Output,
 }
 
 impl PreparedExecutionPlan {
@@ -209,6 +258,48 @@ impl PreparedExecutionPlan {
     pub fn plan_revision(&self) -> u64 {
         self.plan_revision
     }
+
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn apply_state_transfer_from(
+        &mut self,
+        old_plan: &PreparedExecutionPlan,
+        transfer: &PlanStateTransfer,
+    ) -> Result<(), StateTransferError> {
+        validate_state_transfer(old_plan, self, transfer)?;
+
+        for entry in transfer.entries.iter().copied() {
+            let old_index = entry.old_node_index as usize;
+            let new_index = entry.new_node_index as usize;
+
+            match entry.kind {
+                StateTransferKind::OscillatorPhase => {
+                    let phase = old_plan.nodes[old_index]
+                        .oscillator_phase()
+                        .ok_or(StateTransferError::IncompatibleTransferKind)?;
+
+                    self.nodes[new_index]
+                        .set_oscillator_phase(phase)
+                        .ok_or(StateTransferError::IncompatibleTransferKind)?;
+                }
+                StateTransferKind::GainSmoother => {
+                    let old_parameter = old_plan.nodes[old_index]
+                        .gain_parameter()
+                        .ok_or(StateTransferError::IncompatibleTransferKind)?;
+                    let new_parameter = self.nodes[new_index]
+                        .gain_parameter()
+                        .ok_or(StateTransferError::IncompatibleTransferKind)?;
+                    let state = old_plan.parameters[old_parameter].smoother.state();
+
+                    self.parameters[new_parameter].smoother.restore_state(state);
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 pub const PREPARED_PLAN_TRANSFER_CAPACITY: usize = 4;
@@ -218,7 +309,24 @@ pub struct PreparedPlanTransfer {
     pub transfer_id: u64,
     pub plan_id: u64,
     pub plan_revision: u64,
+    pub state_transfer: PlanStateTransfer,
     pub plan: PreparedExecutionPlan,
+}
+
+impl PreparedPlanTransfer {
+    pub fn new(
+        transfer_id: u64,
+        plan: PreparedExecutionPlan,
+        state_transfer: PlanStateTransfer,
+    ) -> Self {
+        Self {
+            transfer_id,
+            plan_id: plan.plan_id(),
+            plan_revision: plan.plan_revision(),
+            state_transfer,
+            plan,
+        }
+    }
 }
 
 pub struct RetiredExecutionPlan {
@@ -444,6 +552,38 @@ impl RuntimeNode {
             node.phase = 0.0;
         }
     }
+
+    fn node_type(&self) -> RuntimeNodeType {
+        match self {
+            Self::Oscillator(_) => RuntimeNodeType::Oscillator,
+            Self::Gain(_) => RuntimeNodeType::Gain,
+            Self::Output(_) => RuntimeNodeType::Output,
+        }
+    }
+
+    fn oscillator_phase(&self) -> Option<f64> {
+        match self {
+            Self::Oscillator(node) => Some(node.phase),
+            _ => None,
+        }
+    }
+
+    fn set_oscillator_phase(&mut self, phase: f64) -> Option<()> {
+        match self {
+            Self::Oscillator(node) => {
+                node.phase = phase;
+                Some(())
+            }
+            _ => None,
+        }
+    }
+
+    fn gain_parameter(&self) -> Option<usize> {
+        match self {
+            Self::Gain(node) => Some(node.gain_parameter),
+            _ => None,
+        }
+    }
 }
 
 struct OscillatorNode {
@@ -664,6 +804,55 @@ fn require_channels(
     Ok(())
 }
 
+fn validate_state_transfer(
+    old_plan: &PreparedExecutionPlan,
+    new_plan: &PreparedExecutionPlan,
+    transfer: &PlanStateTransfer,
+) -> Result<(), StateTransferError> {
+    for (index, entry) in transfer.entries.iter().enumerate() {
+        if transfer
+            .entries
+            .iter()
+            .skip(index + 1)
+            .any(|candidate| candidate.old_node_index == entry.old_node_index)
+        {
+            return Err(StateTransferError::DuplicateOldNode);
+        }
+
+        if transfer
+            .entries
+            .iter()
+            .skip(index + 1)
+            .any(|candidate| candidate.new_node_index == entry.new_node_index)
+        {
+            return Err(StateTransferError::DuplicateNewNode);
+        }
+    }
+
+    for entry in transfer.entries.iter().copied() {
+        let old_node = old_plan
+            .nodes
+            .get(entry.old_node_index as usize)
+            .ok_or(StateTransferError::UnknownOldNode)?;
+        let new_node = new_plan
+            .nodes
+            .get(entry.new_node_index as usize)
+            .ok_or(StateTransferError::UnknownNewNode)?;
+
+        if old_node.node_type() != new_node.node_type() {
+            return Err(StateTransferError::NodeTypeMismatch);
+        }
+
+        match (entry.kind, old_node.node_type()) {
+            (StateTransferKind::OscillatorPhase, RuntimeNodeType::Oscillator)
+            | (StateTransferKind::GainSmoother, RuntimeNodeType::Gain) => {}
+            _ => return Err(StateTransferError::IncompatibleTransferKind),
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -796,5 +985,154 @@ mod tests {
             PreparedExecutionPlan::prepare(&plan, 128),
             Err(PlanValidationError::MultipleOutputs)
         ));
+    }
+
+    #[test]
+    fn transfers_matching_oscillator_phase_and_gain_smoother_state() {
+        let old_plan = diagnostic_tone_plan(440.0, 0.0, 2);
+        let new_plan = diagnostic_tone_plan(440.0, 0.0, 2);
+        let mut old_prepared = PreparedExecutionPlan::prepare(&old_plan, 128).unwrap();
+        let mut new_prepared = PreparedExecutionPlan::prepare(&new_plan, 128).unwrap();
+        let mut output = vec![0.0; 128 * 2];
+
+        old_prepared.set_parameter(PARAM_GAIN_GAIN, 1.0, 128);
+        old_prepared.process(
+            &mut output,
+            48_000.0,
+            2,
+            ProcessRange {
+                start_frame: 0,
+                end_frame: 64,
+            },
+        );
+
+        let transfer = PlanStateTransfer {
+            entries: vec![
+                StateTransferEntry {
+                    old_node_index: 0,
+                    new_node_index: 0,
+                    kind: StateTransferKind::OscillatorPhase,
+                },
+                StateTransferEntry {
+                    old_node_index: 1,
+                    new_node_index: 1,
+                    kind: StateTransferKind::GainSmoother,
+                },
+            ]
+            .into_boxed_slice(),
+        };
+
+        new_prepared
+            .apply_state_transfer_from(&old_prepared, &transfer)
+            .unwrap();
+
+        assert_eq!(
+            new_prepared.nodes[0].oscillator_phase(),
+            old_prepared.nodes[0].oscillator_phase()
+        );
+        assert_eq!(
+            new_prepared.parameters[1].smoother.state(),
+            old_prepared.parameters[1].smoother.state()
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_state_transfer_maps() {
+        let old_plan = diagnostic_tone_plan(440.0, 0.0, 2);
+        let new_plan = diagnostic_tone_plan(440.0, 0.0, 2);
+        let old_prepared = PreparedExecutionPlan::prepare(&old_plan, 128).unwrap();
+        let mut new_prepared = PreparedExecutionPlan::prepare(&new_plan, 128).unwrap();
+
+        let unknown_old = PlanStateTransfer {
+            entries: vec![StateTransferEntry {
+                old_node_index: 99,
+                new_node_index: 0,
+                kind: StateTransferKind::OscillatorPhase,
+            }]
+            .into_boxed_slice(),
+        };
+        assert_eq!(
+            new_prepared.apply_state_transfer_from(&old_prepared, &unknown_old),
+            Err(StateTransferError::UnknownOldNode)
+        );
+
+        let unknown_new = PlanStateTransfer {
+            entries: vec![StateTransferEntry {
+                old_node_index: 0,
+                new_node_index: 99,
+                kind: StateTransferKind::OscillatorPhase,
+            }]
+            .into_boxed_slice(),
+        };
+        assert_eq!(
+            new_prepared.apply_state_transfer_from(&old_prepared, &unknown_new),
+            Err(StateTransferError::UnknownNewNode)
+        );
+
+        let node_type_mismatch = PlanStateTransfer {
+            entries: vec![StateTransferEntry {
+                old_node_index: 0,
+                new_node_index: 1,
+                kind: StateTransferKind::OscillatorPhase,
+            }]
+            .into_boxed_slice(),
+        };
+        assert_eq!(
+            new_prepared.apply_state_transfer_from(&old_prepared, &node_type_mismatch),
+            Err(StateTransferError::NodeTypeMismatch)
+        );
+
+        let incompatible_kind = PlanStateTransfer {
+            entries: vec![StateTransferEntry {
+                old_node_index: 0,
+                new_node_index: 0,
+                kind: StateTransferKind::GainSmoother,
+            }]
+            .into_boxed_slice(),
+        };
+        assert_eq!(
+            new_prepared.apply_state_transfer_from(&old_prepared, &incompatible_kind),
+            Err(StateTransferError::IncompatibleTransferKind)
+        );
+
+        let duplicate_old = PlanStateTransfer {
+            entries: vec![
+                StateTransferEntry {
+                    old_node_index: 0,
+                    new_node_index: 0,
+                    kind: StateTransferKind::OscillatorPhase,
+                },
+                StateTransferEntry {
+                    old_node_index: 0,
+                    new_node_index: 1,
+                    kind: StateTransferKind::GainSmoother,
+                },
+            ]
+            .into_boxed_slice(),
+        };
+        assert_eq!(
+            new_prepared.apply_state_transfer_from(&old_prepared, &duplicate_old),
+            Err(StateTransferError::DuplicateOldNode)
+        );
+
+        let duplicate_new = PlanStateTransfer {
+            entries: vec![
+                StateTransferEntry {
+                    old_node_index: 0,
+                    new_node_index: 0,
+                    kind: StateTransferKind::OscillatorPhase,
+                },
+                StateTransferEntry {
+                    old_node_index: 1,
+                    new_node_index: 0,
+                    kind: StateTransferKind::GainSmoother,
+                },
+            ]
+            .into_boxed_slice(),
+        };
+        assert_eq!(
+            new_prepared.apply_state_transfer_from(&old_prepared, &duplicate_new),
+            Err(StateTransferError::DuplicateNewNode)
+        );
     }
 }
