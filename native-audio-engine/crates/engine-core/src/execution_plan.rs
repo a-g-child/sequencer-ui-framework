@@ -58,6 +58,7 @@ pub enum StateTransferError {
     NodeTypeMismatch,
     IncompatibleTransferKind,
     IncompatibleInstrumentPool,
+    IncompatibleArpeggiator,
     DuplicateOldNode,
     DuplicateNewNode,
 }
@@ -104,12 +105,22 @@ pub struct RuntimeNodeMetadata {
     pub runtime_index: u32,
     pub node_kind: RuntimeNodeKind,
     pub instrument: Option<InstrumentRuntimeMetadata>,
+    pub arpeggiator: Option<ArpeggiatorCompatibility>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct InstrumentRuntimeMetadata {
     pub voice_count: u16,
     pub voice_config: VoiceConfig,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ArpeggiatorCompatibility {
+    pub step_beats: f64,
+    pub gate_ratio: f32,
+    pub phase_mode: ArpeggiatorPhaseMode,
+    pub pattern: ArpeggiatorPattern,
+    pub maximum_held_notes: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -303,6 +314,7 @@ pub enum StateTransferKind {
     OscillatorPhase,
     GainSmoother,
     InstrumentPool,
+    Arpeggiator,
 }
 
 impl PreparedExecutionPlan {
@@ -525,6 +537,7 @@ impl PreparedExecutionPlan {
                     runtime_index: index as u32,
                     node_kind,
                     instrument: instrument_runtime_metadata(&node.kind),
+                    arpeggiator: arpeggiator_compatibility(&node.kind),
                 })
             })
             .collect::<Result<Vec<_>, PlanValidationError>>()?
@@ -837,6 +850,47 @@ impl PreparedExecutionPlan {
         }
     }
 
+    pub fn regenerate_future_events_after_state_transfer(
+        &mut self,
+        current_sample: u64,
+        tempo_map: TempoMapSnapshot,
+        transport_loop: TransportLoop,
+    ) {
+        let plan_id = self.plan_id;
+        let plan_revision = self.plan_revision;
+
+        for (node_index, node) in self.nodes.iter().enumerate() {
+            let node_id = self
+                .node_metadata
+                .get(node_index)
+                .map(|metadata| metadata.stable_id as NodeId)
+                .unwrap_or_default();
+
+            let Some(request) = node.future_request_for_next_tick(
+                plan_id,
+                plan_revision,
+                node_id,
+                current_sample,
+                tempo_map,
+                transport_loop,
+            ) else {
+                continue;
+            };
+
+            if self.future_event_queue.push(request).is_err() {
+                self.event_graph_diagnostics.future_events_dropped_capacity = self
+                    .event_graph_diagnostics
+                    .future_events_dropped_capacity
+                    .saturating_add(1);
+            } else {
+                self.event_graph_diagnostics.future_events_requested = self
+                    .event_graph_diagnostics
+                    .future_events_requested
+                    .saturating_add(1);
+            }
+        }
+    }
+
     pub fn record_future_scheduler_full(&mut self) {
         self.event_graph_diagnostics
             .future_events_dropped_scheduler_full = self
@@ -994,6 +1048,12 @@ impl PreparedExecutionPlan {
 
                     new_node.transfer_instrument_pool_from(old_node)?;
                 }
+                StateTransferKind::Arpeggiator => {
+                    let old_node = &old_plan.nodes[old_index];
+                    let new_node = &mut self.nodes[new_index];
+
+                    new_node.transfer_arpeggiator_from(old_node)?;
+                }
             }
         }
 
@@ -1040,6 +1100,10 @@ pub fn build_state_transfer(
             return Err(StateTransferPlanningError::IncompatibleInstrumentPool {
                 stable_id: new_node.stable_id,
             });
+        }
+
+        if kind == StateTransferKind::Arpeggiator && old_node.arpeggiator != new_node.arpeggiator {
+            continue;
         }
 
         entries.push((
@@ -1411,12 +1475,33 @@ impl RuntimeNode {
         }
     }
 
+    fn arpeggiator_compatible_with(&self, other: &RuntimeNode) -> bool {
+        match (self, other) {
+            (Self::Arpeggiator(old_node), Self::Arpeggiator(new_node)) => {
+                old_node.compatible_with(new_node)
+            }
+            _ => false,
+        }
+    }
+
     fn transfer_instrument_pool_from(
         &mut self,
         old_node: &RuntimeNode,
     ) -> Result<(), StateTransferError> {
         match (old_node, self) {
             (RuntimeNode::Instrument(old_node), RuntimeNode::Instrument(new_node)) => {
+                new_node.transfer_from(old_node)
+            }
+            _ => Err(StateTransferError::IncompatibleTransferKind),
+        }
+    }
+
+    fn transfer_arpeggiator_from(
+        &mut self,
+        old_node: &RuntimeNode,
+    ) -> Result<(), StateTransferError> {
+        match (old_node, self) {
+            (RuntimeNode::Arpeggiator(old_node), RuntimeNode::Arpeggiator(new_node)) => {
                 new_node.transfer_from(old_node)
             }
             _ => Err(StateTransferError::IncompatibleTransferKind),
@@ -1477,6 +1562,28 @@ impl RuntimeNode {
                 committed_horizon,
                 previous_tempo,
                 new_tempo,
+                transport_loop,
+            ),
+            _ => None,
+        }
+    }
+
+    fn future_request_for_next_tick(
+        &self,
+        plan_id: u64,
+        plan_revision: u64,
+        node_id: NodeId,
+        current_sample: u64,
+        tempo_map: TempoMapSnapshot,
+        transport_loop: TransportLoop,
+    ) -> Option<FutureEventRequest> {
+        match self {
+            Self::Arpeggiator(node) => node.future_request_for_next_tick(
+                plan_id,
+                plan_revision,
+                node_id,
+                current_sample,
+                tempo_map,
                 transport_loop,
             ),
             _ => None,
@@ -1565,6 +1672,37 @@ impl ArpeggiatorNode {
         self.sequence_index = 1;
         self.origin_beat = 0.0;
         self.generation = self.generation.saturating_add(1);
+    }
+
+    fn compatible_with(&self, other: &Self) -> bool {
+        self.step_beats == other.step_beats
+            && self.gate_ratio == other.gate_ratio
+            && self.phase_mode == other.phase_mode
+            && self.pattern == other.pattern
+            && self.held_notes.len() == other.held_notes.len()
+    }
+
+    fn transfer_from(&mut self, old_node: &Self) -> Result<(), StateTransferError> {
+        if !old_node.compatible_with(self) {
+            return Err(StateTransferError::IncompatibleArpeggiator);
+        }
+
+        self.held_notes.copy_from_slice(&old_node.held_notes);
+        self.held_count = old_node.held_count;
+        self.current_index = old_node.current_index;
+        self.played_order_counter = old_node.played_order_counter;
+        self.sequence_index = old_node.sequence_index;
+        self.origin_beat = old_node.origin_beat;
+        self.generation = old_node.generation.saturating_add(1);
+
+        if self.held_count == 0 {
+            self.current_index = 0;
+            self.sequence_index = 1;
+        } else {
+            self.current_index %= self.pattern_length();
+        }
+
+        Ok(())
     }
 
     fn process_event(
@@ -1897,6 +2035,41 @@ impl ArpeggiatorNode {
             FutureEventLifetime::GenerationBound,
             self.generation,
         );
+    }
+
+    fn future_request_for_next_tick(
+        &self,
+        plan_id: u64,
+        plan_revision: u64,
+        node_id: NodeId,
+        current_sample: u64,
+        tempo_map: TempoMapSnapshot,
+        transport_loop: TransportLoop,
+    ) -> Option<FutureEventRequest> {
+        let at_sample = self.next_tick_sample(current_sample, tempo_map, transport_loop)?;
+
+        if at_sample <= current_sample {
+            return None;
+        }
+
+        Some(FutureEventRequest {
+            source: EventEndpoint {
+                node_id,
+                port_id: ARPEGGIATOR_PORT_TICK,
+            },
+            event: ScheduledEngineEvent::ArpeggiatorTick {
+                target_node: node_id,
+                generation: self.generation,
+                at_sample,
+            },
+            at_sample,
+            owner: FutureEventOwner::generation_bound(
+                plan_id,
+                plan_revision,
+                node_id,
+                self.generation,
+            ),
+        })
     }
 
     fn next_tick_sample(
@@ -3497,6 +3670,19 @@ fn instrument_runtime_metadata(kind: &PlanNodeKind) -> Option<InstrumentRuntimeM
     }
 }
 
+fn arpeggiator_compatibility(kind: &PlanNodeKind) -> Option<ArpeggiatorCompatibility> {
+    match kind {
+        PlanNodeKind::Arpeggiator(node) => Some(ArpeggiatorCompatibility {
+            step_beats: node.step_beats,
+            gate_ratio: node.gate_ratio,
+            phase_mode: node.phase_mode,
+            pattern: node.pattern,
+            maximum_held_notes: node.maximum_held_notes,
+        }),
+        _ => None,
+    }
+}
+
 fn reject_duplicate_stable_ids(
     nodes: &[RuntimeNodeMetadata],
     error: StateTransferPlanningError,
@@ -3519,7 +3705,7 @@ fn state_transfer_kind_for_node(node_kind: RuntimeNodeKind) -> Option<StateTrans
         RuntimeNodeKind::EventInput => None,
         RuntimeNodeKind::EventSplitter => None,
         RuntimeNodeKind::EventDelay => None,
-        RuntimeNodeKind::Arpeggiator => None,
+        RuntimeNodeKind::Arpeggiator => Some(StateTransferKind::Arpeggiator),
         RuntimeNodeKind::Oscillator => Some(StateTransferKind::OscillatorPhase),
         RuntimeNodeKind::Transpose => None,
         RuntimeNodeKind::Scale => None,
@@ -3574,6 +3760,11 @@ fn validate_state_transfer(
         match (entry.kind, old_node.node_type()) {
             (StateTransferKind::OscillatorPhase, RuntimeNodeKind::Oscillator)
             | (StateTransferKind::GainSmoother, RuntimeNodeKind::Gain) => {}
+            (StateTransferKind::Arpeggiator, RuntimeNodeKind::Arpeggiator) => {
+                if !old_node.arpeggiator_compatible_with(new_node) {
+                    return Err(StateTransferError::IncompatibleArpeggiator);
+                }
+            }
             (StateTransferKind::InstrumentPool, RuntimeNodeKind::Instrument) => {
                 if !old_node.instrument_pool_compatible_with(new_node) {
                     return Err(StateTransferError::IncompatibleInstrumentPool);
@@ -5380,6 +5571,142 @@ mod tests {
     }
 
     #[test]
+    fn state_transfer_preserves_arpeggiator_played_order_position() {
+        let old_plan = arpeggiator_to_recording_plan_with_pattern(
+            8.0 / 24_000.0,
+            2.0 / 8.0,
+            8,
+            ArpeggiatorPattern::PlayedOrder,
+        );
+        let mut new_plan = old_plan.clone();
+
+        new_plan.plan_revision = 2;
+
+        let mut old_prepared = PreparedExecutionPlan::prepare(&old_plan, 128).unwrap();
+        let mut new_prepared = PreparedExecutionPlan::prepare(&new_plan, 128).unwrap();
+
+        install_recording_node(&mut old_prepared, 2);
+        install_recording_node(&mut new_prepared, 2);
+
+        for (index, note) in [64, 60, 67].into_iter().enumerate() {
+            assert!(old_prepared.dispatch_event(note_on(
+                NODE_EVENT_INPUT,
+                note,
+                0.5,
+                index as u64
+            )));
+        }
+
+        dispatch_next_valid_arpeggiator_tick(&mut old_prepared);
+
+        let first_note_off = old_prepared.take_future_event_request().unwrap();
+        let stale_next_tick = old_prepared.take_future_event_request().unwrap();
+        let transfer =
+            build_state_transfer(&old_prepared.metadata(), &new_prepared.metadata()).unwrap();
+
+        assert_eq!(
+            transfer.entries.as_ref(),
+            &[StateTransferEntry {
+                old_node_index: 1,
+                new_node_index: 1,
+                kind: StateTransferKind::Arpeggiator,
+            }]
+        );
+
+        new_prepared
+            .apply_state_transfer_from(&old_prepared, &transfer)
+            .unwrap();
+
+        assert!(!new_prepared.dispatch_event_from(stale_next_tick.source, stale_next_tick.event));
+        assert!(new_prepared.dispatch_event_from(first_note_off.source, first_note_off.event));
+
+        new_prepared.regenerate_future_events_after_state_transfer(
+            8,
+            TempoMapSnapshot::default(),
+            TransportLoop::default(),
+        );
+
+        let regenerated_tick = new_prepared.take_future_event_request().unwrap();
+
+        assert_eq!(regenerated_tick.at_sample, 16);
+        assert_eq!(
+            regenerated_tick.owner,
+            FutureEventOwner::generation_bound(1, 2, NODE_ARPEGGIATOR, 4)
+        );
+        assert!(new_prepared.dispatch_event_from(regenerated_tick.source, regenerated_tick.event));
+
+        assert_eq!(
+            recorded_events(&new_prepared, 2),
+            &[
+                ScheduledEngineEvent::NoteOff {
+                    target_node: NODE_ARPEGGIATOR,
+                    note: 64,
+                    at_sample: 10,
+                },
+                ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_ARPEGGIATOR,
+                    note: 60,
+                    velocity: 0.5,
+                    at_sample: 16,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn incompatible_arpeggiator_pattern_is_not_transferred() {
+        let old_plan = arpeggiator_to_recording_plan_with_pattern(
+            8.0 / 24_000.0,
+            2.0 / 8.0,
+            8,
+            ArpeggiatorPattern::Ascending,
+        );
+        let new_plan = arpeggiator_to_recording_plan_with_pattern(
+            8.0 / 24_000.0,
+            2.0 / 8.0,
+            8,
+            ArpeggiatorPattern::Descending,
+        );
+        let old_prepared = PreparedExecutionPlan::prepare(&old_plan, 128).unwrap();
+        let new_prepared = PreparedExecutionPlan::prepare(&new_plan, 128).unwrap();
+        let transfer =
+            build_state_transfer(&old_prepared.metadata(), &new_prepared.metadata()).unwrap();
+
+        assert!(transfer.entries.is_empty());
+    }
+
+    #[test]
+    fn explicit_incompatible_arpeggiator_transfer_rejects() {
+        let old_plan = arpeggiator_to_recording_plan_with_pattern(
+            8.0 / 24_000.0,
+            2.0 / 8.0,
+            8,
+            ArpeggiatorPattern::Ascending,
+        );
+        let new_plan = arpeggiator_to_recording_plan_with_pattern(
+            8.0 / 24_000.0,
+            2.0 / 8.0,
+            8,
+            ArpeggiatorPattern::Descending,
+        );
+        let old_prepared = PreparedExecutionPlan::prepare(&old_plan, 128).unwrap();
+        let mut new_prepared = PreparedExecutionPlan::prepare(&new_plan, 128).unwrap();
+        let transfer = PlanStateTransfer {
+            entries: vec![StateTransferEntry {
+                old_node_index: 1,
+                new_node_index: 1,
+                kind: StateTransferKind::Arpeggiator,
+            }]
+            .into_boxed_slice(),
+        };
+
+        assert_eq!(
+            new_prepared.apply_state_transfer_from(&old_prepared, &transfer),
+            Err(StateTransferError::IncompatibleArpeggiator)
+        );
+    }
+
+    #[test]
     fn arpeggiator_note_off_allows_generated_gate_note_off_to_complete() {
         let plan = arpeggiator_to_recording_plan(8.0 / 24_000.0, 3.0 / 8.0, 4);
         let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
@@ -6881,6 +7208,7 @@ mod tests {
                         runtime_index,
                         node_kind,
                         instrument: None,
+                        arpeggiator: None,
                     },
                 )
                 .collect::<Vec<_>>()

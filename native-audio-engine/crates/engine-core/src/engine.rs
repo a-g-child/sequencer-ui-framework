@@ -686,6 +686,13 @@ impl AudioEngine {
             return;
         }
 
+        transfer.plan.regenerate_future_events_after_state_transfer(
+            applied_sample,
+            self.tempo_map,
+            self.transport_loop,
+        );
+        drain_future_event_requests_from(&mut self.scheduled_events, &mut transfer.plan);
+
         let plan_id = transfer.plan_id;
         let plan_revision = transfer.plan_revision;
 
@@ -1246,6 +1253,10 @@ impl AudioEngine {
             plan_id: owner.plan_id,
             plan_revision: owner.plan_revision,
         };
+
+        if owner.lifetime == FutureEventLifetime::CompletionRequired {
+            return true;
+        }
 
         if self.active_plan_binding() != Some(owner_binding) {
             self.record_future_plan_revision_discard();
@@ -3101,6 +3112,106 @@ mod tests {
                 .future_events_discarded_plan_revision,
             1
         );
+    }
+
+    #[test]
+    fn arpeggiator_state_transfer_regenerates_next_tick_after_swap() {
+        let plan_a = arpeggiated_instrument_plan_with_phase_and_pattern(
+            1,
+            1,
+            8.0 / 24_000.0,
+            2.0 / 8.0,
+            engine_protocol::ArpeggiatorPhaseMode::FreeRunning,
+            engine_protocol::ArpeggiatorPattern::PlayedOrder,
+        );
+        let plan_b = arpeggiated_instrument_plan_with_phase_and_pattern(
+            2,
+            1,
+            8.0 / 24_000.0,
+            2.0 / 8.0,
+            engine_protocol::ArpeggiatorPhaseMode::FreeRunning,
+            engine_protocol::ArpeggiatorPattern::PlayedOrder,
+        );
+        let old_prepared = PreparedExecutionPlan::prepare(&plan_a, 512).unwrap();
+        let new_prepared = PreparedExecutionPlan::prepare(&plan_b, 512).unwrap();
+        let transfer =
+            build_state_transfer(&old_prepared.metadata(), &new_prepared.metadata()).unwrap();
+        let (retired_sender, _retired_receiver) = crate::retired_plan_queue();
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan_a, 512)
+            .unwrap()
+            .with_plan_transfer_queues(crate::prepared_plan_transfer_queue().1, retired_sender);
+
+        engine.playing = true;
+
+        for (index, note) in [64, 60, 67].into_iter().enumerate() {
+            assert!(engine.dispatch_event_to_execution_plan(
+                event_endpoint(NODE_EVENT_INPUT),
+                ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note,
+                    velocity: 0.5,
+                    at_sample: index as u64,
+                }
+            ));
+        }
+
+        engine.apply_scheduled_events_until(8);
+        assert_eq!(
+            engine
+                .current_event_graph_diagnostics()
+                .future_events_discarded_generation,
+            2
+        );
+        assert!(engine
+            .pending_plans
+            .insert(crate::PreparedPlanTransfer::new(91, new_prepared, transfer))
+            .is_ok());
+
+        engine.apply_swap_command(
+            EngineCommand::SwapExecutionPlan {
+                id: 8,
+                transfer_id: 91,
+                requested_sample: 9,
+            },
+            9,
+        );
+        engine.apply_scheduled_events_until(10);
+
+        assert_eq!(
+            engine
+                .current_event_graph_diagnostics()
+                .future_events_discarded_plan_revision,
+            0
+        );
+
+        engine.apply_scheduled_events_until(16);
+
+        assert_eq!(
+            engine
+                .current_event_graph_diagnostics()
+                .future_events_discarded_plan_revision,
+            1
+        );
+        assert!(engine
+            .scheduled_events
+            .entries
+            .iter()
+            .flatten()
+            .any(|entry| {
+                entry.event
+                    == ScheduledEngineEvent::NoteOff {
+                        target_node: NODE_ARPEGGIATOR,
+                        note: 60,
+                        at_sample: 18,
+                    }
+                    && entry.future_owner
+                        == Some(FutureEventOwner::completion_required(
+                            2,
+                            1,
+                            NODE_ARPEGGIATOR,
+                        ))
+            }));
     }
 
     #[test]
