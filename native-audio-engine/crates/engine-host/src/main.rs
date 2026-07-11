@@ -1,5 +1,6 @@
 use std::{
     env,
+    io::{self, BufReader},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -18,6 +19,8 @@ use engine_core::{
 };
 use engine_protocol::{diagnostic_tone_plan, EngineCommand, EngineEvent};
 
+mod session;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DriverKind {
     Cpal,
@@ -26,6 +29,7 @@ enum DriverKind {
 
 #[derive(Clone, Debug)]
 struct HostOptions {
+    session_stdio: bool,
     list_devices: bool,
     driver: DriverKind,
     device_id: Option<String>,
@@ -43,6 +47,7 @@ struct HostOptions {
 impl Default for HostOptions {
     fn default() -> Self {
         Self {
+            session_stdio: false,
             list_devices: false,
             driver: DriverKind::Null,
             device_id: None,
@@ -65,6 +70,19 @@ fn main() {
         print_usage();
         std::process::exit(2);
     });
+
+    if options.session_stdio {
+        let stdin = io::stdin();
+        let stdout = io::stdout();
+
+        if let Err(error) = session::run_stdio_session(BufReader::new(stdin.lock()), stdout.lock())
+        {
+            eprintln!("engine-host session error: {error}");
+            std::process::exit(1);
+        }
+
+        return;
+    }
 
     if let Err(error) = run(options) {
         eprintln!("engine-host error: {:?}: {}", error.code, error.message);
@@ -303,6 +321,7 @@ fn parse_options(args: Vec<String>) -> Result<HostOptions, String> {
 
     while index < args.len() {
         match args[index].as_str() {
+            "--session-stdio" => options.session_stdio = true,
             "--list-devices" => options.list_devices = true,
             "--driver" => {
                 index += 1;
@@ -398,6 +417,7 @@ where
 fn print_usage() {
     eprintln!(
         "usage:
+  engine-host --session-stdio
   engine-host --list-devices --driver cpal
   engine-host --driver cpal --device default --sample-rate 48000 --channels 2
   engine-host --driver null --sample-rate 48000 --buffer-frames 128 --channels 2
