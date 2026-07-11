@@ -41,4 +41,5 @@ pub enum CommandRejection {
     RetirementQueueFull,
     InvalidStateTransfer,
     SwapInProgress,
+    SchedulerFull,
 }

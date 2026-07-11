@@ -3,7 +3,8 @@ use std::time::Instant;
 use engine_dsp::{DiagnosticOscillator, PARAM_DIAGNOSTIC_FREQUENCY, PARAM_DIAGNOSTIC_GAIN};
 use engine_protocol::{
     AudioTelemetry, CommandDiagnostics, CommandRejection, EngineCommand, EngineEvent,
-    NativeExecutionPlan, RuntimePlanStatus,
+    NativeExecutionPlan, RuntimePlanStatus, ScheduledBeatEvent, ScheduledEngineEvent,
+    TempoMapSnapshot, TransportLoop,
 };
 
 use crate::{
@@ -13,6 +14,8 @@ use crate::{
 };
 
 const PENDING_COMMAND_CAPACITY: usize = 1024;
+const SCHEDULED_EVENT_CAPACITY: usize = 2048;
+const COMMITTED_SCHEDULING_HORIZON_SAMPLES: u64 = 128;
 const DEFAULT_PLAN_CROSSFADE_SAMPLES: u32 = 128;
 const DEFERRED_RETIREMENT_CAPACITY: usize = RETIRED_PLAN_TRANSFER_CAPACITY * 2;
 
@@ -83,6 +86,168 @@ impl DeferredRetirements {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ScheduledEventEntry {
+    event: ScheduledEngineEvent,
+    original_sample: u64,
+    loop_iteration: u64,
+    beat_event: Option<ScheduledBeatEvent>,
+}
+
+impl ScheduledEventEntry {
+    fn effective_sample(&self) -> u64 {
+        self.event.at_sample()
+    }
+}
+
+struct ScheduledEventSet {
+    entries: [Option<ScheduledEventEntry>; SCHEDULED_EVENT_CAPACITY],
+}
+
+impl Default for ScheduledEventSet {
+    fn default() -> Self {
+        Self {
+            entries: [None; SCHEDULED_EVENT_CAPACITY],
+        }
+    }
+}
+
+impl ScheduledEventSet {
+    fn insert(
+        &mut self,
+        event: ScheduledEngineEvent,
+        beat_event: Option<ScheduledBeatEvent>,
+    ) -> Result<(), ScheduledEngineEvent> {
+        let entry = ScheduledEventEntry {
+            event,
+            original_sample: event.at_sample(),
+            loop_iteration: 0,
+            beat_event,
+        };
+
+        if let Some(slot) = self.entries.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(entry);
+            return Ok(());
+        }
+
+        Err(event)
+    }
+
+    fn insert_entry(&mut self, entry: ScheduledEventEntry) -> Result<(), ScheduledEventEntry> {
+        if let Some(slot) = self.entries.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(entry);
+            return Ok(());
+        }
+
+        Err(entry)
+    }
+
+    fn take_due_before(&mut self, sample: u64) -> Option<ScheduledEventEntry> {
+        let index = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                let entry = entry.as_ref()?;
+
+                (entry.effective_sample() <= sample).then_some((index, entry.effective_sample()))
+            })
+            .min_by_key(|(_, effective_sample)| *effective_sample)
+            .map(|(index, _)| index)?;
+
+        self.entries[index].take()
+    }
+
+    fn clear(&mut self) {
+        self.entries.fill(None);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.iter().all(Option::is_none)
+    }
+
+    fn retime_beat_events_outside_horizon(&mut self, tempo: TempoMapSnapshot, horizon_sample: u64) {
+        for entry in self.entries.iter_mut().filter_map(Option::as_mut) {
+            if entry.event.at_sample() < horizon_sample {
+                continue;
+            }
+
+            let Some(beat_event) = entry.beat_event else {
+                continue;
+            };
+
+            entry.event = beat_event.to_sample_event(tempo);
+            entry.original_sample = entry.event.at_sample();
+            entry.loop_iteration = 0;
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ScheduledTestVoice {
+    enabled: bool,
+    active: bool,
+    oscillator: DiagnosticOscillator,
+}
+
+impl ScheduledTestVoice {
+    fn disabled() -> Self {
+        Self {
+            enabled: false,
+            active: false,
+            oscillator: DiagnosticOscillator::default(),
+        }
+    }
+
+    fn enable(&mut self) {
+        self.enabled = true;
+    }
+
+    fn note_on(&mut self, note: u8, velocity: f32) {
+        self.active = true;
+        self.oscillator.set_frequency(midi_note_frequency(note));
+        self.oscillator.set_gain_target(velocity.clamp(0.0, 1.0), 0);
+    }
+
+    fn note_off(&mut self) {
+        self.active = false;
+        self.oscillator.set_gain_target(0.0, 0);
+    }
+
+    fn panic(&mut self) {
+        self.active = false;
+        self.oscillator.reset();
+        self.oscillator.set_gain_target(0.0, 0);
+    }
+}
+
+fn midi_note_frequency(note: u8) -> f32 {
+    440.0 * 2.0_f32.powf((note as f32 - 69.0) / 12.0)
+}
+
+fn set_scheduled_event_sample(event: ScheduledEngineEvent, at_sample: u64) -> ScheduledEngineEvent {
+    match event {
+        ScheduledEngineEvent::NoteOn {
+            target_node,
+            note,
+            velocity,
+            ..
+        } => ScheduledEngineEvent::NoteOn {
+            target_node,
+            note,
+            velocity,
+            at_sample,
+        },
+        ScheduledEngineEvent::NoteOff {
+            target_node, note, ..
+        } => ScheduledEngineEvent::NoteOff {
+            target_node,
+            note,
+            at_sample,
+        },
+    }
+}
+
 pub struct AudioEngine {
     sample_position: u64,
     callback_count: u64,
@@ -92,6 +257,10 @@ pub struct AudioEngine {
     playing: bool,
     last_parameter: Option<(u32, f32)>,
     diagnostic_signal: DiagnosticSignalState,
+    scheduled_test_voice: ScheduledTestVoice,
+    tempo_map: TempoMapSnapshot,
+    transport_loop: TransportLoop,
+    scheduled_events: ScheduledEventSet,
     execution_plan: Option<PreparedExecutionPlan>,
     crossfade: Option<ActivePlanCrossfade>,
     deferred_retirements: DeferredRetirements,
@@ -126,6 +295,14 @@ impl AudioEngine {
             playing: false,
             last_parameter: None,
             diagnostic_signal: DiagnosticSignalState::disabled(),
+            scheduled_test_voice: ScheduledTestVoice::disabled(),
+            tempo_map: TempoMapSnapshot::default(),
+            transport_loop: TransportLoop {
+                enabled: false,
+                start_sample: 0,
+                end_sample: 0,
+            },
+            scheduled_events: ScheduledEventSet::default(),
             execution_plan: None,
             crossfade: None,
             deferred_retirements: DeferredRetirements::default(),
@@ -146,6 +323,11 @@ impl AudioEngine {
 
     pub fn with_diagnostic_signal(mut self) -> Self {
         self.diagnostic_signal.enabled = true;
+        self
+    }
+
+    pub fn with_scheduled_test_voice(mut self) -> Self {
+        self.scheduled_test_voice.enable();
         self
     }
 
@@ -209,6 +391,14 @@ impl AudioEngine {
 
     pub fn command_diagnostics(&self) -> CommandDiagnostics {
         self.command_diagnostics
+    }
+
+    pub fn tempo_map(&self) -> TempoMapSnapshot {
+        self.tempo_map
+    }
+
+    pub fn scheduled_events_empty(&self) -> bool {
+        self.scheduled_events.is_empty()
     }
 
     pub fn process(&mut self, output: &mut [f32], context: ProcessContext) -> AudioTelemetry {
@@ -496,6 +686,11 @@ impl AudioEngine {
             return;
         }
 
+        if self.scheduled_test_voice.enabled {
+            self.render_scheduled_test_voice(output, context, block_start, block_end);
+            return;
+        }
+
         self.render_diagnostic_signal(output, context, block_start, block_end);
     }
 
@@ -526,6 +721,10 @@ impl AudioEngine {
                 .next_command_frame(command_index, block_start, block_end)
                 .unwrap_or(frame_count)
                 .min(frame_count);
+            let next_frame = self
+                .next_scheduled_event_frame(block_start, block_end)
+                .map(|frame| next_frame.min(frame))
+                .unwrap_or(next_frame);
             let next_frame = self
                 .crossfade
                 .as_ref()
@@ -567,6 +766,7 @@ impl AudioEngine {
             }
 
             current_frame = next_frame;
+            self.apply_scheduled_events_until(block_start.saturating_add(current_frame as u64));
 
             if self
                 .crossfade
@@ -575,6 +775,58 @@ impl AudioEngine {
             {
                 self.finish_crossfade();
             }
+        }
+
+        self.retain_future_commands(command_index, block_end);
+    }
+
+    fn render_scheduled_test_voice(
+        &mut self,
+        output: &mut [f32],
+        context: ProcessContext,
+        block_start: u64,
+        block_end: u64,
+    ) {
+        let channels = context.output_channels.max(1) as usize;
+        let frame_count = context.frame_count as usize;
+        let mut command_index = 0;
+        let mut current_frame = 0;
+
+        while current_frame < frame_count {
+            let sample_position = block_start.saturating_add(current_frame as u64);
+            command_index = self.apply_commands_until(command_index, block_start, sample_position);
+            self.apply_scheduled_events_until(sample_position);
+
+            let next_frame = self
+                .next_command_frame(command_index, block_start, block_end)
+                .unwrap_or(frame_count)
+                .min(frame_count);
+            let next_frame = self
+                .next_scheduled_event_frame(block_start, block_end)
+                .map(|frame| next_frame.min(frame))
+                .unwrap_or(next_frame);
+
+            if current_frame < next_frame
+                && self.playing
+                && self.scheduled_test_voice.active
+                && !self.diagnostic_signal.panic_muted
+            {
+                for frame in current_frame..next_frame {
+                    let sample = self
+                        .scheduled_test_voice
+                        .oscillator
+                        .next_sample(context.sample_rate);
+                    let frame_start = frame * channels;
+                    let frame_end = frame_start + channels;
+
+                    for output_sample in &mut output[frame_start..frame_end] {
+                        *output_sample = sample;
+                    }
+                }
+            }
+
+            current_frame = next_frame;
+            self.apply_scheduled_events_until(block_start.saturating_add(current_frame as u64));
         }
 
         self.retain_future_commands(command_index, block_end);
@@ -692,6 +944,21 @@ impl AudioEngine {
             .map(|command| command.at_sample().saturating_sub(block_start) as usize)
     }
 
+    fn next_scheduled_event_frame(&self, block_start: u64, block_end: u64) -> Option<usize> {
+        if !self.playing {
+            return None;
+        }
+
+        self.scheduled_events
+            .entries
+            .iter()
+            .filter_map(|entry| entry.as_ref())
+            .map(ScheduledEventEntry::effective_sample)
+            .filter(|sample| *sample >= block_start && *sample < block_end)
+            .min()
+            .map(|sample| sample.saturating_sub(block_start) as usize)
+    }
+
     fn render_diagnostic_signal(
         &mut self,
         output: &mut [f32],
@@ -707,6 +974,7 @@ impl AudioEngine {
             let sample_position = block_start.saturating_add(frame as u64);
 
             command_index = self.apply_commands_until(command_index, block_start, sample_position);
+            self.apply_scheduled_events_until(sample_position);
 
             if self.playing && self.diagnostic_signal.enabled && !self.diagnostic_signal.panic_muted
             {
@@ -722,6 +990,8 @@ impl AudioEngine {
                 }
             }
         }
+
+        self.apply_scheduled_events_until(block_end);
 
         self.retain_future_commands(command_index, block_end);
     }
@@ -751,6 +1021,55 @@ impl AudioEngine {
         }
 
         command_index
+    }
+
+    fn apply_scheduled_events_until(&mut self, sample_position: u64) {
+        if !self.playing {
+            return;
+        }
+
+        while let Some(entry) = self.scheduled_events.take_due_before(sample_position) {
+            self.apply_scheduled_event(entry.event);
+            self.reschedule_looped_event(entry);
+        }
+    }
+
+    fn apply_scheduled_event(&mut self, event: ScheduledEngineEvent) {
+        match event {
+            ScheduledEngineEvent::NoteOn { note, velocity, .. } => {
+                self.scheduled_test_voice.note_on(note, velocity);
+            }
+            ScheduledEngineEvent::NoteOff { .. } => {
+                self.scheduled_test_voice.note_off();
+            }
+        }
+    }
+
+    fn reschedule_looped_event(&mut self, mut entry: ScheduledEventEntry) {
+        if !self.transport_loop.enabled
+            || self.transport_loop.end_sample <= self.transport_loop.start_sample
+        {
+            return;
+        }
+
+        if entry.original_sample < self.transport_loop.start_sample
+            || entry.original_sample >= self.transport_loop.end_sample
+        {
+            return;
+        }
+
+        let loop_length = self
+            .transport_loop
+            .end_sample
+            .saturating_sub(self.transport_loop.start_sample);
+        let next_iteration = entry.loop_iteration.saturating_add(1);
+        let next_sample = entry
+            .original_sample
+            .saturating_add(loop_length.saturating_mul(next_iteration));
+
+        entry.loop_iteration = next_iteration;
+        entry.event = set_scheduled_event_sample(entry.event, next_sample);
+        let _ = self.scheduled_events.insert_entry(entry);
     }
 
     fn retain_future_commands(&mut self, command_index: usize, block_end: u64) {
@@ -817,6 +1136,8 @@ impl AudioEngine {
             }
             EngineCommand::TransportStop { .. } => {
                 self.playing = false;
+                self.scheduled_events.clear();
+                self.scheduled_test_voice.note_off();
                 self.publish_event(EngineEvent::TransportStateChanged {
                     playing: false,
                     at_sample: applied_sample,
@@ -826,6 +1147,8 @@ impl AudioEngine {
                 self.playing = false;
                 self.diagnostic_signal.panic_muted = true;
                 self.diagnostic_signal.oscillator.reset();
+                self.scheduled_events.clear();
+                self.scheduled_test_voice.panic();
                 if let Some(plan) = self.execution_plan.as_mut() {
                     plan.reset();
                 }
@@ -847,6 +1170,42 @@ impl AudioEngine {
                 }
 
                 self.last_parameter = Some((parameter_id, value));
+            }
+            EngineCommand::SetTempoMap { tempo, .. } => {
+                self.tempo_map = tempo;
+                self.scheduled_events.retime_beat_events_outside_horizon(
+                    self.tempo_map,
+                    applied_sample.saturating_add(COMMITTED_SCHEDULING_HORIZON_SAMPLES),
+                );
+            }
+            EngineCommand::SetTransportLoop { transport_loop, .. } => {
+                self.transport_loop = transport_loop;
+            }
+            EngineCommand::ScheduleEvent { event, .. } => {
+                if !self.playing {
+                    return;
+                }
+
+                if self.scheduled_events.insert(event, None).is_err() {
+                    self.reject_command(command.id(), CommandRejection::SchedulerFull);
+                    return;
+                }
+            }
+            EngineCommand::ScheduleBeatEvent { event, .. } => {
+                if !self.playing {
+                    return;
+                }
+
+                let sample_event = event.to_sample_event(self.tempo_map);
+
+                if self
+                    .scheduled_events
+                    .insert(sample_event, Some(event))
+                    .is_err()
+                {
+                    self.reject_command(command.id(), CommandRejection::SchedulerFull);
+                    return;
+                }
             }
             EngineCommand::SwapExecutionPlan { id, .. } => {
                 self.reject_swap_command(id, CommandRejection::MissingPreparedPlan);
@@ -946,7 +1305,10 @@ impl AudioEngine {
 mod tests {
     use super::*;
     use crate::{PlanStateTransfer, StateTransferEntry, StateTransferKind};
-    use engine_protocol::{diagnostic_tone_plan, PARAM_GAIN_GAIN};
+    use engine_protocol::{
+        diagnostic_tone_plan, ScheduledBeatEvent, ScheduledEngineEvent, TempoMapSnapshot,
+        TransportLoop, PARAM_GAIN_GAIN,
+    };
 
     fn plan_with_identity(
         plan_id: u64,
@@ -1037,6 +1399,23 @@ mod tests {
         let mut output = vec![0.0_f32; frames as usize * 2];
 
         process_block(engine, &mut output, frames)
+    }
+
+    fn scheduled_note_on(at_sample: u64) -> ScheduledEngineEvent {
+        ScheduledEngineEvent::NoteOn {
+            target_node: 1,
+            note: 69,
+            velocity: 0.5,
+            at_sample,
+        }
+    }
+
+    fn scheduled_note_off(at_sample: u64) -> ScheduledEngineEvent {
+        ScheduledEngineEvent::NoteOff {
+            target_node: 1,
+            note: 69,
+            at_sample,
+        }
     }
 
     fn assert_outputs_close(left: &[f32], right: &[f32]) {
@@ -1287,6 +1666,323 @@ mod tests {
                 late_by_samples: 64
             })
         );
+    }
+
+    #[test]
+    fn beat_events_convert_deterministically_at_fixed_tempo() {
+        let tempo = TempoMapSnapshot {
+            origin_sample: 0,
+            origin_beat: 0.0,
+            bpm: 120.0,
+            sample_rate: 48_000.0,
+        };
+
+        assert_eq!(tempo.beat_to_sample(0.0), 0);
+        assert_eq!(tempo.beat_to_sample(1.0), 24_000);
+        assert_eq!(tempo.beat_to_sample(2.5), 60_000);
+    }
+
+    #[test]
+    fn tempo_change_affects_only_events_outside_committed_horizon() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine = AudioEngine::new()
+            .with_scheduled_test_voice()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+        let initial_tempo = TempoMapSnapshot {
+            origin_sample: 0,
+            origin_beat: 0.0,
+            bpm: 120.0,
+            sample_rate: 48_000.0,
+        };
+        let slower_tempo = TempoMapSnapshot {
+            origin_sample: 0,
+            origin_beat: 0.0,
+            bpm: 60.0,
+            sample_rate: 48_000.0,
+        };
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 0,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetTempoMap {
+                id: 1,
+                tempo: initial_tempo,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleBeatEvent {
+                id: 2,
+                event: ScheduledBeatEvent::NoteOn {
+                    target_node: 1,
+                    note: 69,
+                    velocity: 0.5,
+                    at_beat: 0.004,
+                },
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleBeatEvent {
+                id: 3,
+                event: ScheduledBeatEvent::NoteOn {
+                    target_node: 1,
+                    note: 69,
+                    velocity: 0.5,
+                    at_beat: 1.0,
+                },
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetTempoMap {
+                id: 4,
+                tempo: slower_tempo,
+                at_sample: 0,
+            })
+            .unwrap();
+
+        process_frames(&mut engine, 1);
+
+        let samples = engine
+            .scheduled_events
+            .entries
+            .iter()
+            .filter_map(|entry| entry.as_ref())
+            .map(ScheduledEventEntry::effective_sample)
+            .collect::<Vec<_>>();
+
+        assert!(samples.contains(&96));
+        assert!(samples.contains(&48_000));
+    }
+
+    #[test]
+    fn scheduled_events_inside_block_deliver_at_exact_offsets() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine = AudioEngine::new()
+            .with_scheduled_test_voice()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 2,
+                event: scheduled_note_on(64),
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 3,
+                event: scheduled_note_off(96),
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 128);
+
+        assert!(frame_is_silent(&output, 63));
+        assert!(frame_has_signal(&output, 65));
+        assert!(frame_is_silent(&output, 96));
+    }
+
+    #[test]
+    fn loop_boundary_events_do_not_duplicate_or_disappear() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine = AudioEngine::new()
+            .with_scheduled_test_voice()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::SetTransportLoop {
+                id: 1,
+                transport_loop: TransportLoop {
+                    enabled: true,
+                    start_sample: 64,
+                    end_sample: 96,
+                },
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 2,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 3,
+                event: scheduled_note_on(64),
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 4,
+                event: scheduled_note_off(80),
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 160);
+
+        assert!(frame_has_signal(&output, 65));
+        assert!(frame_is_silent(&output, 80));
+        assert!(frame_has_signal(&output, 97));
+        assert!(frame_is_silent(&output, 112));
+        assert!(frame_has_signal(&output, 129));
+        assert!(frame_is_silent(&output, 144));
+    }
+
+    #[test]
+    fn scheduled_event_timing_is_independent_of_callback_grouping() {
+        fn render(groups: &[u32]) -> Vec<f32> {
+            let (command_sender, command_receiver) = crate::engine_command_queue();
+            let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+            let mut engine = AudioEngine::new()
+                .with_scheduled_test_voice()
+                .with_realtime_queues(command_receiver, telemetry_sender);
+            let mut rendered = Vec::new();
+
+            command_sender
+                .push(EngineCommand::TransportStart {
+                    id: 1,
+                    at_sample: 0,
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 2,
+                    event: scheduled_note_on(64),
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 3,
+                    event: scheduled_note_off(160),
+                })
+                .unwrap();
+
+            for frames in groups {
+                rendered.extend(process_frames(&mut engine, *frames));
+            }
+
+            rendered
+        }
+
+        let a = render(&[256]);
+        let b = render(&[32, 96, 16, 112]);
+
+        assert_outputs_close(&a, &b);
+    }
+
+    #[test]
+    fn late_scheduled_events_apply_at_next_block_start() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine = AudioEngine::new()
+            .with_scheduled_test_voice()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        process_frames(&mut engine, 128);
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 2,
+                event: scheduled_note_on(64),
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 128);
+
+        assert!(frame_has_signal(&output, 1));
+    }
+
+    #[test]
+    fn transport_stop_prevents_future_event_execution() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine = AudioEngine::new()
+            .with_scheduled_test_voice()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::TransportStop {
+                id: 2,
+                at_sample: 32,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 3,
+                event: scheduled_note_on(64),
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 128);
+
+        assert!(output.iter().all(|sample| *sample == 0.0));
+        assert!(engine.scheduled_events_empty());
+    }
+
+    #[test]
+    fn panic_clears_scheduled_and_active_events() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine = AudioEngine::new()
+            .with_scheduled_test_voice()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 2,
+                event: scheduled_note_on(16),
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::Panic {
+                id: 3,
+                at_sample: 64,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 4,
+                event: scheduled_note_off(120),
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 128);
+
+        assert!(frame_has_signal(&output, 17));
+        assert!(output[64 * 2..].iter().all(|sample| *sample == 0.0));
+        assert!(engine.scheduled_events_empty());
     }
 
     #[test]
