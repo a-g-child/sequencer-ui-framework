@@ -42,6 +42,7 @@ pub struct EventGraphDiagnostics {
     pub events_received: u64,
     pub route_dispatches: u64,
     pub events_emitted: u64,
+    pub events_suppressed: u64,
     pub events_dropped_capacity: u64,
     pub events_dropped_depth: u64,
     pub events_dropped_budget: u64,

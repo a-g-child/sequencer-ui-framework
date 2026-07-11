@@ -1347,6 +1347,9 @@ impl AudioEngine {
                 diagnostics.events_emitted = diagnostics
                     .events_emitted
                     .saturating_add(plan_diagnostics.events_emitted);
+                diagnostics.events_suppressed = diagnostics
+                    .events_suppressed
+                    .saturating_add(plan_diagnostics.events_suppressed);
                 diagnostics.events_dropped_capacity = diagnostics
                     .events_dropped_capacity
                     .saturating_add(plan_diagnostics.events_dropped_capacity);
@@ -1368,9 +1371,9 @@ mod tests {
     use super::*;
     use crate::{PlanStateTransfer, StateTransferEntry, StateTransferKind};
     use engine_protocol::{
-        diagnostic_tone_plan, monophonic_voice_plan, EventRoute, EventRouteMask,
-        ScheduledBeatEvent, ScheduledEngineEvent, TempoMapSnapshot, TransportLoop, VoiceNodePlan,
-        NODE_OUTPUT, NODE_VOICE, PARAM_GAIN_GAIN,
+        diagnostic_tone_plan, monophonic_voice_plan, transposed_monophonic_voice_plan, EventRoute,
+        EventRouteMask, ScheduledBeatEvent, ScheduledEngineEvent, TempoMapSnapshot, TransportLoop,
+        VoiceNodePlan, NODE_EVENT_INPUT, NODE_OUTPUT, NODE_VOICE, PARAM_GAIN_GAIN,
     };
 
     fn plan_with_identity(
@@ -2055,6 +2058,56 @@ mod tests {
                 .push(EngineCommand::ScheduleEvent {
                     id: 3,
                     event: scheduled_note_off(160),
+                })
+                .unwrap();
+
+            for frames in groups {
+                rendered.extend(process_frames(&mut engine, *frames));
+            }
+
+            rendered
+        }
+
+        assert_outputs_close(&render(&[256]), &render(&[64, 32, 96, 64]));
+    }
+
+    #[test]
+    fn transposed_voice_plan_output_is_independent_of_callback_grouping() {
+        fn render(groups: &[u32]) -> Vec<f32> {
+            let (command_sender, command_receiver) = crate::engine_command_queue();
+            let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+            let plan = transposed_monophonic_voice_plan(12, 2);
+            let mut engine = AudioEngine::new()
+                .with_execution_plan(&plan, 512)
+                .unwrap()
+                .with_realtime_queues(command_receiver, telemetry_sender);
+            let mut rendered = Vec::new();
+
+            command_sender
+                .push(EngineCommand::TransportStart {
+                    id: 1,
+                    at_sample: 0,
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 2,
+                    event: ScheduledEngineEvent::NoteOn {
+                        target_node: NODE_EVENT_INPUT,
+                        note: 57,
+                        velocity: 0.5,
+                        at_sample: 32,
+                    },
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 3,
+                    event: ScheduledEngineEvent::NoteOff {
+                        target_node: NODE_EVENT_INPUT,
+                        note: 57,
+                        at_sample: 160,
+                    },
                 })
                 .unwrap();
 

@@ -84,7 +84,9 @@ pub struct RuntimeNodeMetadata {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeNodeKind {
+    EventInput,
     Oscillator,
+    Transpose,
     Voice,
     Gain,
     Output,
@@ -154,6 +156,7 @@ impl PreparedExecutionPlan {
             .nodes
             .iter()
             .map(|node| match &node.kind {
+                PlanNodeKind::EventInput(_) => Ok(RuntimeNode::EventInput(EventInputNode)),
                 PlanNodeKind::Oscillator(node_plan) => {
                     let output_buffer = buffer_index(plan, node_plan.output_buffer)?;
                     let frequency_parameter = parameter_index(plan, node_plan.frequency_parameter)?;
@@ -181,6 +184,9 @@ impl PreparedExecutionPlan {
                         output_buffer,
                     }))
                 }
+                PlanNodeKind::Transpose(node_plan) => Ok(RuntimeNode::Transpose(TransposeNode {
+                    semitones: node_plan.semitones,
+                })),
                 PlanNodeKind::Gain(node_plan) => {
                     let input_buffer = buffer_index(plan, node_plan.input_buffer)?;
                     let output_buffer = buffer_index(plan, node_plan.output_buffer)?;
@@ -797,7 +803,9 @@ struct NodeProcessContext {
 }
 
 enum RuntimeNode {
+    EventInput(EventInputNode),
     Oscillator(OscillatorNode),
+    Transpose(TransposeNode),
     Voice(VoiceNode),
     Gain(GainNode),
     Output(OutputNode),
@@ -805,6 +813,8 @@ enum RuntimeNode {
     Forwarding(ForwardingNode),
     #[cfg(test)]
     Burst(BurstNode),
+    #[cfg(test)]
+    Recording(RecordingNode),
 }
 
 impl RuntimeNode {
@@ -816,12 +826,14 @@ impl RuntimeNode {
         output: &mut [f32],
     ) {
         match self {
+            Self::EventInput(_) => {}
             Self::Oscillator(node) => node.process(context, buffers, parameters),
+            Self::Transpose(_) => {}
             Self::Voice(node) => node.process(context, buffers),
             Self::Gain(node) => node.process(context, buffers, parameters),
             Self::Output(node) => node.process(context, buffers, output),
             #[cfg(test)]
-            Self::Forwarding(_) | Self::Burst(_) => {}
+            Self::Forwarding(_) | Self::Burst(_) | Self::Recording(_) => {}
         }
     }
 
@@ -835,12 +847,14 @@ impl RuntimeNode {
 
     fn node_type(&self) -> RuntimeNodeKind {
         match self {
+            Self::EventInput(_) => RuntimeNodeKind::EventInput,
             Self::Oscillator(_) => RuntimeNodeKind::Oscillator,
+            Self::Transpose(_) => RuntimeNodeKind::Transpose,
             Self::Voice(_) => RuntimeNodeKind::Voice,
             Self::Gain(_) => RuntimeNodeKind::Gain,
             Self::Output(_) => RuntimeNodeKind::Output,
             #[cfg(test)]
-            Self::Forwarding(_) | Self::Burst(_) => RuntimeNodeKind::Gain,
+            Self::Forwarding(_) | Self::Burst(_) | Self::Recording(_) => RuntimeNodeKind::Gain,
         }
     }
 
@@ -874,15 +888,20 @@ impl RuntimeNode {
         emitter: &mut EventEmitter<'_>,
     ) -> bool {
         match self {
+            Self::Transpose(node) => node.process_event(event, emitter),
             Self::Voice(node) => node.process_event(event, emitter),
             #[cfg(test)]
             Self::Forwarding(node) => node.process_event(event, emitter),
             #[cfg(test)]
             Self::Burst(node) => node.process_event(event, emitter),
+            #[cfg(test)]
+            Self::Recording(node) => node.process_event(event, emitter),
             _ => false,
         }
     }
 }
+
+struct EventInputNode;
 
 struct OscillatorNode {
     phase: f64,
@@ -890,9 +909,68 @@ struct OscillatorNode {
     output_buffer: usize,
 }
 
+struct TransposeNode {
+    semitones: i8,
+}
+
 struct VoiceNode {
     voice: MonophonicVoice,
     output_buffer: usize,
+}
+
+impl TransposeNode {
+    fn process_event(
+        &mut self,
+        event: &ScheduledEngineEvent,
+        emitter: &mut EventEmitter<'_>,
+    ) -> bool {
+        match *event {
+            ScheduledEngineEvent::NoteOn {
+                target_node,
+                note,
+                velocity,
+                at_sample,
+            } => {
+                let Some(note) = transpose_note(note, self.semitones) else {
+                    emitter.suppress();
+                    return true;
+                };
+
+                emitter
+                    .emit(ScheduledEngineEvent::NoteOn {
+                        target_node,
+                        note,
+                        velocity,
+                        at_sample,
+                    })
+                    .is_ok()
+            }
+            ScheduledEngineEvent::NoteOff {
+                target_node,
+                note,
+                at_sample,
+            } => {
+                let Some(note) = transpose_note(note, self.semitones) else {
+                    emitter.suppress();
+                    return true;
+                };
+
+                emitter
+                    .emit(ScheduledEngineEvent::NoteOff {
+                        target_node,
+                        note,
+                        at_sample,
+                    })
+                    .is_ok()
+            }
+        }
+    }
+}
+
+fn transpose_note(note: u8, semitones: i8) -> Option<u8> {
+    let transposed = note as i16 + semitones as i16;
+
+    (0..=127).contains(&transposed).then_some(transposed as u8)
 }
 
 impl VoiceNode {
@@ -1195,6 +1273,10 @@ struct EventEmitter<'a> {
 
 #[allow(dead_code)]
 impl EventEmitter<'_> {
+    fn suppress(&mut self) {
+        self.diagnostics.events_suppressed = self.diagnostics.events_suppressed.saturating_add(1);
+    }
+
     fn emit(&mut self, event: ScheduledEngineEvent) -> Result<(), ScheduledEngineEvent> {
         if self.parent_depth >= MAX_EVENT_DEPTH {
             self.diagnostics.events_dropped_depth =
@@ -1259,6 +1341,24 @@ impl BurstNode {
         }
 
         emitted
+    }
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct RecordingNode {
+    events: Vec<ScheduledEngineEvent>,
+}
+
+#[cfg(test)]
+impl RecordingNode {
+    fn process_event(
+        &mut self,
+        event: &ScheduledEngineEvent,
+        _emitter: &mut EventEmitter<'_>,
+    ) -> bool {
+        self.events.push(*event);
+        true
     }
 }
 
@@ -1424,7 +1524,9 @@ fn require_channels(
 
 fn runtime_node_kind(kind: &PlanNodeKind) -> Result<RuntimeNodeKind, PlanValidationError> {
     match kind {
+        PlanNodeKind::EventInput(_) => Ok(RuntimeNodeKind::EventInput),
         PlanNodeKind::Oscillator(_) => Ok(RuntimeNodeKind::Oscillator),
+        PlanNodeKind::Transpose(_) => Ok(RuntimeNodeKind::Transpose),
         PlanNodeKind::Voice(_) => Ok(RuntimeNodeKind::Voice),
         PlanNodeKind::Gain(_) => Ok(RuntimeNodeKind::Gain),
         PlanNodeKind::Output(_) => Ok(RuntimeNodeKind::Output),
@@ -1451,7 +1553,9 @@ fn reject_duplicate_stable_ids(
 
 fn state_transfer_kind_for_node(node_kind: RuntimeNodeKind) -> Option<StateTransferKind> {
     match node_kind {
+        RuntimeNodeKind::EventInput => None,
         RuntimeNodeKind::Oscillator => Some(StateTransferKind::OscillatorPhase),
+        RuntimeNodeKind::Transpose => None,
         RuntimeNodeKind::Voice => None,
         RuntimeNodeKind::Gain => Some(StateTransferKind::GainSmoother),
         RuntimeNodeKind::Output => None,
@@ -1511,9 +1615,10 @@ fn validate_state_transfer(
 mod tests {
     use super::*;
     use engine_protocol::{
-        diagnostic_tone_plan, monophonic_voice_plan, AudioBufferSlot, EventRoute, EventRouteMask,
-        GainNodePlan, NativeExecutionPlan, OscillatorNodePlan, OutputNodePlan, PlanNode,
-        PlanNodeKind, ScheduledEngineEvent, NODE_GAIN, NODE_OSCILLATOR, NODE_OUTPUT, NODE_VOICE,
+        diagnostic_tone_plan, monophonic_voice_plan, AudioBufferSlot, EventInputNodePlan,
+        EventRoute, EventRouteMask, GainNodePlan, NativeExecutionPlan, OscillatorNodePlan,
+        OutputNodePlan, PlanNode, PlanNodeKind, ScheduledEngineEvent, TransposeNodePlan,
+        NODE_EVENT_INPUT, NODE_GAIN, NODE_OSCILLATOR, NODE_OUTPUT, NODE_TRANSPOSE, NODE_VOICE,
         PARAM_GAIN_GAIN, PARAM_OSCILLATOR_FREQUENCY,
     };
 
@@ -1573,6 +1678,91 @@ mod tests {
         plan.audio_execution_order = vec![NODE_VOICE, NODE_OUTPUT];
         plan.event_routes.clear();
         plan
+    }
+
+    fn transpose_to_recording_plan(semitones: i8) -> NativeExecutionPlan {
+        NativeExecutionPlan {
+            version: NATIVE_EXECUTION_PLAN_VERSION,
+            plan_id: 1,
+            plan_revision: 1,
+            nodes: vec![
+                PlanNode {
+                    id: NODE_EVENT_INPUT,
+                    kind: PlanNodeKind::EventInput(EventInputNodePlan),
+                },
+                PlanNode {
+                    id: NODE_TRANSPOSE,
+                    kind: PlanNodeKind::Transpose(TransposeNodePlan { semitones }),
+                },
+                PlanNode {
+                    id: NODE_VOICE,
+                    kind: PlanNodeKind::Voice(engine_protocol::VoiceNodePlan {
+                        output_buffer: 1,
+                        attack_seconds: 0.0,
+                        decay_seconds: 0.0,
+                        sustain_level: 1.0,
+                        release_seconds: 0.0,
+                    }),
+                },
+                PlanNode {
+                    id: NODE_OUTPUT,
+                    kind: PlanNodeKind::Output(OutputNodePlan {
+                        input_buffer: 1,
+                        output_channels: 2,
+                    }),
+                },
+            ],
+            buffers: vec![AudioBufferSlot { id: 1, channels: 1 }],
+            parameters: vec![],
+            event_routes: vec![
+                EventRoute {
+                    source_node: NODE_EVENT_INPUT,
+                    destination_node: NODE_TRANSPOSE,
+                    event_mask: EventRouteMask::NOTE,
+                    priority: 0,
+                    enabled: true,
+                },
+                EventRoute {
+                    source_node: NODE_TRANSPOSE,
+                    destination_node: NODE_VOICE,
+                    event_mask: EventRouteMask::NOTE,
+                    priority: 0,
+                    enabled: true,
+                },
+            ],
+            audio_execution_order: vec![NODE_VOICE, NODE_OUTPUT],
+        }
+    }
+
+    fn note_on(source_node: u32, note: u8, velocity: f32, at_sample: u64) -> ScheduledEngineEvent {
+        ScheduledEngineEvent::NoteOn {
+            target_node: source_node,
+            note,
+            velocity,
+            at_sample,
+        }
+    }
+
+    fn note_off(source_node: u32, note: u8, at_sample: u64) -> ScheduledEngineEvent {
+        ScheduledEngineEvent::NoteOff {
+            target_node: source_node,
+            note,
+            at_sample,
+        }
+    }
+
+    fn install_recording_node(prepared: &mut PreparedExecutionPlan, node_index: usize) {
+        prepared.nodes[node_index] = RuntimeNode::Recording(RecordingNode::default());
+    }
+
+    fn recorded_events(
+        prepared: &PreparedExecutionPlan,
+        node_index: usize,
+    ) -> &[ScheduledEngineEvent] {
+        match &prepared.nodes[node_index] {
+            RuntimeNode::Recording(node) => &node.events,
+            _ => panic!("expected recording node"),
+        }
     }
 
     #[test]
@@ -1726,6 +1916,162 @@ mod tests {
 
         assert_eq!(diagnostics.events_received, MAX_EVENTS_PER_BLOCK as u64);
         assert_eq!(diagnostics.events_dropped_budget, 1);
+    }
+
+    #[test]
+    fn transpose_node_transforms_note_on_and_preserves_timestamp_and_velocity() {
+        let plan = transpose_to_recording_plan(12);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.75, 123)));
+        assert_eq!(
+            recorded_events(&prepared, 2),
+            &[ScheduledEngineEvent::NoteOn {
+                target_node: NODE_EVENT_INPUT,
+                note: 72,
+                velocity: 0.75,
+                at_sample: 123,
+            }]
+        );
+
+        let diagnostics = prepared.event_graph_diagnostics();
+
+        assert_eq!(diagnostics.events_received, 2);
+        assert_eq!(diagnostics.events_emitted, 1);
+        assert_eq!(diagnostics.events_suppressed, 0);
+    }
+
+    #[test]
+    fn transpose_node_transforms_matching_note_off() {
+        let plan = transpose_to_recording_plan(-12);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_off(NODE_EVENT_INPUT, 72, 456)));
+        assert_eq!(
+            recorded_events(&prepared, 2),
+            &[ScheduledEngineEvent::NoteOff {
+                target_node: NODE_EVENT_INPUT,
+                note: 60,
+                at_sample: 456,
+            }]
+        );
+    }
+
+    #[test]
+    fn transpose_node_suppresses_out_of_range_notes() {
+        let plan = transpose_to_recording_plan(12);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 120, 1.0, 0)));
+        assert!(recorded_events(&prepared, 2).is_empty());
+
+        let diagnostics = prepared.event_graph_diagnostics();
+
+        assert_eq!(diagnostics.events_emitted, 0);
+        assert_eq!(diagnostics.events_suppressed, 1);
+    }
+
+    #[test]
+    fn transpose_nodes_compose_predictably() {
+        let mut plan = transpose_to_recording_plan(7);
+        let second_transpose_id = 7;
+
+        plan.nodes.insert(
+            2,
+            PlanNode {
+                id: second_transpose_id,
+                kind: PlanNodeKind::Transpose(TransposeNodePlan { semitones: 5 }),
+            },
+        );
+        plan.event_routes = vec![
+            EventRoute {
+                source_node: NODE_EVENT_INPUT,
+                destination_node: NODE_TRANSPOSE,
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+            EventRoute {
+                source_node: NODE_TRANSPOSE,
+                destination_node: second_transpose_id,
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+            EventRoute {
+                source_node: second_transpose_id,
+                destination_node: NODE_VOICE,
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+        ];
+
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 3);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.5, 99)));
+        assert_eq!(
+            recorded_events(&prepared, 3),
+            &[ScheduledEngineEvent::NoteOn {
+                target_node: NODE_EVENT_INPUT,
+                note: 72,
+                velocity: 0.5,
+                at_sample: 99,
+            }]
+        );
+    }
+
+    #[test]
+    fn disabled_route_after_transpose_bypasses_propagation() {
+        let mut plan = transpose_to_recording_plan(12);
+
+        plan.event_routes[1].enabled = false;
+
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.5, 0)));
+        assert!(recorded_events(&prepared, 2).is_empty());
+
+        let diagnostics = prepared.event_graph_diagnostics();
+
+        assert_eq!(diagnostics.events_emitted, 1);
+        assert_eq!(diagnostics.route_dispatches, 1);
+    }
+
+    #[test]
+    fn fanout_after_transpose_remains_deterministic() {
+        let mut plan = transpose_to_recording_plan(12);
+
+        plan.event_routes.push(EventRoute {
+            source_node: NODE_TRANSPOSE,
+            destination_node: NODE_OUTPUT,
+            event_mask: EventRouteMask::NOTE,
+            priority: 0,
+            enabled: true,
+        });
+        plan.event_routes[1].priority = 20;
+
+        let prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+        let (start, len) = prepared
+            .event_route_range_for_source(NODE_TRANSPOSE)
+            .expect("transpose source should have prepared routes");
+
+        assert_eq!(len, 2);
+        assert_eq!(prepared.event_route_destination_at(start as usize), Some(3));
+        assert_eq!(
+            prepared.event_route_destination_at(start as usize + 1),
+            Some(2)
+        );
     }
 
     #[test]
