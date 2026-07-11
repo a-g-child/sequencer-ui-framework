@@ -29,6 +29,8 @@ pub struct EventRoute {
     pub source_node: NodeId,
     pub destination_node: NodeId,
     pub event_mask: EventRouteMask,
+    pub priority: u16,
+    pub enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,6 +189,8 @@ pub fn monophonic_voice_plan(output_channels: u16) -> NativeExecutionPlan {
             source_node: NODE_VOICE,
             destination_node: NODE_VOICE,
             event_mask: EventRouteMask::NOTE,
+            priority: 0,
+            enabled: true,
         }],
         audio_execution_order: vec![NODE_VOICE, NODE_OUTPUT],
     }

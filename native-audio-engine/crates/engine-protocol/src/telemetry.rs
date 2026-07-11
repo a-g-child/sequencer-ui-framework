@@ -14,6 +14,7 @@ pub struct AudioTelemetry {
     pub pending_command_count: u32,
     pub command_diagnostics: CommandDiagnostics,
     pub runtime_plan_status: RuntimePlanStatus,
+    pub event_graph_diagnostics: EventGraphDiagnostics,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -34,4 +35,14 @@ pub struct RuntimePlanStatus {
     pub pending_plan_count: u32,
     pub successful_swaps: u64,
     pub rejected_swaps: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EventGraphDiagnostics {
+    pub events_received: u64,
+    pub route_dispatches: u64,
+    pub events_emitted: u64,
+    pub events_dropped_capacity: u64,
+    pub events_dropped_depth: u64,
+    pub events_dropped_budget: u64,
 }

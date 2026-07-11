@@ -450,6 +450,7 @@ impl AudioEngine {
             pending_command_count: self.pending_commands.len() as u32,
             command_diagnostics: self.current_command_diagnostics(),
             runtime_plan_status: self.runtime_plan_status(),
+            event_graph_diagnostics: self.current_event_graph_diagnostics(),
         }
     }
 
@@ -1322,6 +1323,44 @@ impl AudioEngine {
             ..self.command_diagnostics
         }
     }
+
+    fn current_event_graph_diagnostics(&self) -> engine_protocol::EventGraphDiagnostics {
+        let mut diagnostics = self
+            .execution_plan
+            .as_ref()
+            .map(PreparedExecutionPlan::event_graph_diagnostics)
+            .unwrap_or_default();
+
+        if let Some(crossfade) = self.crossfade.as_ref() {
+            for plan in [crossfade.old_plan.as_ref(), crossfade.new_plan.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                let plan_diagnostics = plan.event_graph_diagnostics();
+
+                diagnostics.events_received = diagnostics
+                    .events_received
+                    .saturating_add(plan_diagnostics.events_received);
+                diagnostics.route_dispatches = diagnostics
+                    .route_dispatches
+                    .saturating_add(plan_diagnostics.route_dispatches);
+                diagnostics.events_emitted = diagnostics
+                    .events_emitted
+                    .saturating_add(plan_diagnostics.events_emitted);
+                diagnostics.events_dropped_capacity = diagnostics
+                    .events_dropped_capacity
+                    .saturating_add(plan_diagnostics.events_dropped_capacity);
+                diagnostics.events_dropped_depth = diagnostics
+                    .events_dropped_depth
+                    .saturating_add(plan_diagnostics.events_dropped_depth);
+                diagnostics.events_dropped_budget = diagnostics
+                    .events_dropped_budget
+                    .saturating_add(plan_diagnostics.events_dropped_budget);
+            }
+        }
+
+        diagnostics
+    }
 }
 
 #[cfg(test)]
@@ -1331,7 +1370,7 @@ mod tests {
     use engine_protocol::{
         diagnostic_tone_plan, monophonic_voice_plan, EventRoute, EventRouteMask,
         ScheduledBeatEvent, ScheduledEngineEvent, TempoMapSnapshot, TransportLoop, VoiceNodePlan,
-        NODE_OSCILLATOR, NODE_VOICE, PARAM_GAIN_GAIN,
+        NODE_OUTPUT, NODE_VOICE, PARAM_GAIN_GAIN,
     };
 
     fn plan_with_identity(
@@ -1876,9 +1915,11 @@ mod tests {
         let mut plan = monophonic_voice_plan(2);
 
         plan.event_routes = vec![EventRoute {
-            source_node: NODE_OSCILLATOR,
+            source_node: NODE_OUTPUT,
             destination_node: NODE_VOICE,
             event_mask: EventRouteMask::NOTE,
+            priority: 0,
+            enabled: true,
         }];
 
         let mut engine = AudioEngine::new()
@@ -1896,7 +1937,7 @@ mod tests {
             .push(EngineCommand::ScheduleEvent {
                 id: 2,
                 event: ScheduledEngineEvent::NoteOn {
-                    target_node: NODE_OSCILLATOR,
+                    target_node: NODE_OUTPUT,
                     note: 69,
                     velocity: 0.5,
                     at_sample: 64,
