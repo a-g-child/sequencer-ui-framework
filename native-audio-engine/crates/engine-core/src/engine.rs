@@ -102,6 +102,11 @@ impl AudioEngine {
         Ok(self)
     }
 
+    pub fn with_prepared_execution_plan(mut self, plan: PreparedExecutionPlan) -> Self {
+        self.execution_plan = Some(plan);
+        self
+    }
+
     pub fn with_realtime_queues(
         mut self,
         command_receiver: EngineCommandReceiver,

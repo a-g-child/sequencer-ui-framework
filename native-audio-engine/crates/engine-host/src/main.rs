@@ -101,6 +101,7 @@ fn run(options: HostOptions) -> Result<(), engine_audio_io::AudioDriverError> {
     let (prepared_plan_sender, prepared_plan_receiver) = prepared_plan_transfer_queue();
     let (retired_plan_sender, retired_plan_receiver) = retired_plan_queue();
     let mut engine = AudioEngine::new();
+    let mut active_plan_metadata: Option<engine_core::PreparedExecutionPlanMetadata> = None;
 
     let request = OutputStreamRequest {
         device_id: options.device_id,
@@ -126,10 +127,11 @@ fn run(options: HostOptions) -> Result<(), engine_audio_io::AudioDriverError> {
             0.0,
             request.preferred_channels.unwrap_or(2),
         );
-
-        engine = engine
-            .with_execution_plan(&plan, maximum_frames)
+        let prepared = engine_core::PreparedExecutionPlan::prepare(&plan, maximum_frames)
             .expect("failed to prepare diagnostic tone execution plan");
+
+        active_plan_metadata = Some(prepared.metadata());
+        engine = engine.with_prepared_execution_plan(prepared);
     }
 
     let engine = engine
@@ -230,6 +232,13 @@ fn run(options: HostOptions) -> Result<(), engine_audio_io::AudioDriverError> {
 
                 let prepared = engine_core::PreparedExecutionPlan::prepare(&plan, maximum_frames)
                     .expect("failed to prepare swap execution plan");
+                let state_transfer = active_plan_metadata
+                    .as_ref()
+                    .map(|active_metadata| {
+                        engine_core::build_state_transfer(active_metadata, &prepared.metadata())
+                            .expect("failed to plan diagnostic state transfer")
+                    })
+                    .unwrap_or_default();
                 let requested_sample = options
                     .swap_after_ms
                     .map(|ms| active_stream.sample_rate as u64 * ms / 1_000)
@@ -239,7 +248,7 @@ fn run(options: HostOptions) -> Result<(), engine_audio_io::AudioDriverError> {
                     .push(engine_core::PreparedPlanTransfer::new(
                         transfer_id,
                         prepared,
-                        engine_core::PlanStateTransfer::empty(),
+                        state_transfer,
                     ))
                     .is_ok()
                 {
