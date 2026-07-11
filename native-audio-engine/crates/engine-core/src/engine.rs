@@ -9,11 +9,12 @@ use engine_protocol::{
 use crate::{
     EngineCommandReceiver, EngineTelemetrySender, PendingPlanSet, PlanValidationError,
     PreparedExecutionPlan, PreparedPlanReceiver, ProcessContext, ProcessRange,
-    RetiredExecutionPlan, RetiredPlanSender,
+    RetiredExecutionPlan, RetiredPlanSender, RETIRED_PLAN_TRANSFER_CAPACITY,
 };
 
 const PENDING_COMMAND_CAPACITY: usize = 1024;
 const DEFAULT_PLAN_CROSSFADE_SAMPLES: u32 = 128;
+const DEFERRED_RETIREMENT_CAPACITY: usize = RETIRED_PLAN_TRANSFER_CAPACITY * 2;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct DiagnosticSignalState {
@@ -49,6 +50,39 @@ impl ActivePlanCrossfade {
     }
 }
 
+struct DeferredRetirements {
+    slots: [Option<RetiredExecutionPlan>; DEFERRED_RETIREMENT_CAPACITY],
+}
+
+impl Default for DeferredRetirements {
+    fn default() -> Self {
+        Self {
+            slots: std::array::from_fn(|_| None),
+        }
+    }
+}
+
+impl DeferredRetirements {
+    fn push(&mut self, retired: RetiredExecutionPlan) -> Result<(), RetiredExecutionPlan> {
+        if let Some(slot) = self.slots.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(retired);
+            return Ok(());
+        }
+
+        Err(retired)
+    }
+
+    fn pop(&mut self) -> Option<RetiredExecutionPlan> {
+        let slot = self.slots.iter_mut().find(|slot| slot.is_some())?;
+
+        slot.take()
+    }
+
+    fn is_full(&self) -> bool {
+        self.slots.iter().all(Option::is_some)
+    }
+}
+
 pub struct AudioEngine {
     sample_position: u64,
     callback_count: u64,
@@ -60,7 +94,7 @@ pub struct AudioEngine {
     diagnostic_signal: DiagnosticSignalState,
     execution_plan: Option<PreparedExecutionPlan>,
     crossfade: Option<ActivePlanCrossfade>,
-    deferred_retirement: Option<RetiredExecutionPlan>,
+    deferred_retirements: DeferredRetirements,
     pending_plans: PendingPlanSet,
     prepared_plan_receiver: Option<PreparedPlanReceiver>,
     retired_plan_sender: Option<RetiredPlanSender>,
@@ -94,7 +128,7 @@ impl AudioEngine {
             diagnostic_signal: DiagnosticSignalState::disabled(),
             execution_plan: None,
             crossfade: None,
-            deferred_retirement: None,
+            deferred_retirements: DeferredRetirements::default(),
             pending_plans: PendingPlanSet::default(),
             prepared_plan_receiver: None,
             retired_plan_sender: None,
@@ -293,17 +327,15 @@ impl AudioEngine {
     }
 
     fn retire_unactivated_transfer(&mut self, transfer: crate::PreparedPlanTransfer) {
-        if let Some(sender) = self.retired_plan_sender.as_ref() {
-            let _ = sender.push(RetiredExecutionPlan {
-                plan_id: transfer.plan_id,
-                plan_revision: transfer.plan_revision,
-                plan: transfer.plan,
-            });
-        }
+        self.retire_or_defer(RetiredExecutionPlan {
+            plan_id: transfer.plan_id,
+            plan_revision: transfer.plan_revision,
+            plan: transfer.plan,
+        });
     }
 
     fn can_accept_retired_plan(&self) -> bool {
-        self.deferred_retirement.is_none()
+        !self.deferred_retirements.is_full()
             && self
                 .retired_plan_sender
                 .as_ref()
@@ -311,32 +343,31 @@ impl AudioEngine {
     }
 
     fn flush_deferred_retirement(&mut self) {
-        let Some(retired) = self.deferred_retirement.take() else {
-            return;
-        };
+        loop {
+            let Some(retired) = self.deferred_retirements.pop() else {
+                return;
+            };
 
-        let Some(sender) = self.retired_plan_sender.as_ref() else {
-            self.deferred_retirement = Some(retired);
-            return;
-        };
+            let Some(sender) = self.retired_plan_sender.as_ref() else {
+                let _ = self.deferred_retirements.push(retired);
+                return;
+            };
 
-        if let Err(retired) = sender.push(retired) {
-            self.deferred_retirement = Some(retired);
+            if let Err(retired) = sender.push(retired) {
+                let _ = self.deferred_retirements.push(retired);
+                return;
+            }
         }
     }
 
     fn retire_or_defer(&mut self, retired: RetiredExecutionPlan) {
         let Some(sender) = self.retired_plan_sender.as_ref() else {
-            if self.deferred_retirement.is_none() {
-                self.deferred_retirement = Some(retired);
-            }
+            let _ = self.deferred_retirements.push(retired);
             return;
         };
 
         if let Err(retired) = sender.push(retired) {
-            if self.deferred_retirement.is_none() {
-                self.deferred_retirement = Some(retired);
-            }
+            let _ = self.deferred_retirements.push(retired);
         }
     }
 
