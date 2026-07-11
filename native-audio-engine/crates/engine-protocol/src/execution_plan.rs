@@ -10,6 +10,9 @@ pub const NODE_SCALE: u32 = 7;
 pub const NODE_INSTRUMENT: u32 = 8;
 pub const NODE_CHORD: u32 = 9;
 pub const NODE_VELOCITY: u32 = 10;
+pub const NODE_EVENT_SPLITTER: u32 = 11;
+
+pub const DEFAULT_EVENT_PORT: u16 = 0;
 
 pub const PARAM_OSCILLATOR_FREQUENCY: u32 = 1;
 pub const PARAM_GAIN_GAIN: u32 = 2;
@@ -17,6 +20,19 @@ pub const PARAM_GAIN_GAIN: u32 = 2;
 pub type NodeId = u32;
 pub type BufferSlotId = u32;
 pub type ParameterSlotId = u32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EventEndpoint {
+    pub node_id: NodeId,
+    pub port_id: u16,
+}
+
+pub const fn event_endpoint(node_id: NodeId) -> EventEndpoint {
+    EventEndpoint {
+        node_id,
+        port_id: DEFAULT_EVENT_PORT,
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeExecutionPlan {
@@ -32,8 +48,8 @@ pub struct NativeExecutionPlan {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EventRoute {
-    pub source_node: NodeId,
-    pub destination_node: NodeId,
+    pub source: EventEndpoint,
+    pub destination: EventEndpoint,
     pub event_mask: EventRouteMask,
     pub priority: u16,
     pub enabled: bool,
@@ -61,6 +77,7 @@ pub struct PlanNode {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlanNodeKind {
     EventInput(EventInputNodePlan),
+    EventSplitter(EventSplitterNodePlan),
     Oscillator(OscillatorNodePlan),
     Transpose(TransposeNodePlan),
     Scale(ScaleNodePlan),
@@ -75,6 +92,11 @@ pub enum PlanNodeKind {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EventInputNodePlan;
+
+/// Routing utility that re-emits the same event from fixed output ports without
+/// transforming musical state.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EventSplitterNodePlan;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct OscillatorNodePlan {
@@ -241,8 +263,8 @@ pub fn monophonic_voice_plan(output_channels: u16) -> NativeExecutionPlan {
         buffers: vec![AudioBufferSlot { id: 1, channels: 1 }],
         parameters: vec![],
         event_routes: vec![EventRoute {
-            source_node: NODE_VOICE,
-            destination_node: NODE_VOICE,
+            source: event_endpoint(NODE_VOICE),
+            destination: event_endpoint(NODE_VOICE),
             event_mask: EventRouteMask::NOTE,
             priority: 0,
             enabled: true,
@@ -290,15 +312,15 @@ pub fn transposed_monophonic_voice_plan(
         parameters: vec![],
         event_routes: vec![
             EventRoute {
-                source_node: NODE_EVENT_INPUT,
-                destination_node: NODE_TRANSPOSE,
+                source: event_endpoint(NODE_EVENT_INPUT),
+                destination: event_endpoint(NODE_TRANSPOSE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_TRANSPOSE,
-                destination_node: NODE_VOICE,
+                source: event_endpoint(NODE_TRANSPOSE),
+                destination: event_endpoint(NODE_VOICE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
@@ -351,15 +373,15 @@ pub fn scaled_monophonic_voice_plan(
         parameters: vec![],
         event_routes: vec![
             EventRoute {
-                source_node: NODE_EVENT_INPUT,
-                destination_node: NODE_SCALE,
+                source: event_endpoint(NODE_EVENT_INPUT),
+                destination: event_endpoint(NODE_SCALE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_SCALE,
-                destination_node: NODE_VOICE,
+                source: event_endpoint(NODE_SCALE),
+                destination: event_endpoint(NODE_VOICE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
@@ -401,8 +423,8 @@ pub fn monophonic_instrument_plan(output_channels: u16) -> NativeExecutionPlan {
         buffers: vec![AudioBufferSlot { id: 1, channels: 1 }],
         parameters: vec![],
         event_routes: vec![EventRoute {
-            source_node: NODE_EVENT_INPUT,
-            destination_node: NODE_INSTRUMENT,
+            source: event_endpoint(NODE_EVENT_INPUT),
+            destination: event_endpoint(NODE_INSTRUMENT),
             event_mask: EventRouteMask::NOTE,
             priority: 0,
             enabled: true,
@@ -451,15 +473,15 @@ pub fn transposed_monophonic_instrument_plan(
         parameters: vec![],
         event_routes: vec![
             EventRoute {
-                source_node: NODE_EVENT_INPUT,
-                destination_node: NODE_TRANSPOSE,
+                source: event_endpoint(NODE_EVENT_INPUT),
+                destination: event_endpoint(NODE_TRANSPOSE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_TRANSPOSE,
-                destination_node: NODE_INSTRUMENT,
+                source: event_endpoint(NODE_TRANSPOSE),
+                destination: event_endpoint(NODE_INSTRUMENT),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
@@ -513,15 +535,15 @@ pub fn scaled_monophonic_instrument_plan(
         parameters: vec![],
         event_routes: vec![
             EventRoute {
-                source_node: NODE_EVENT_INPUT,
-                destination_node: NODE_SCALE,
+                source: event_endpoint(NODE_EVENT_INPUT),
+                destination: event_endpoint(NODE_SCALE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_SCALE,
-                destination_node: NODE_INSTRUMENT,
+                source: event_endpoint(NODE_SCALE),
+                destination: event_endpoint(NODE_INSTRUMENT),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
@@ -572,15 +594,15 @@ pub fn chorded_instrument_plan(
         parameters: vec![],
         event_routes: vec![
             EventRoute {
-                source_node: NODE_EVENT_INPUT,
-                destination_node: NODE_CHORD,
+                source: event_endpoint(NODE_EVENT_INPUT),
+                destination: event_endpoint(NODE_CHORD),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_CHORD,
-                destination_node: NODE_INSTRUMENT,
+                source: event_endpoint(NODE_CHORD),
+                destination: event_endpoint(NODE_INSTRUMENT),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
@@ -652,36 +674,36 @@ pub fn velocity_chorded_instrument_plan(
         parameters: vec![],
         event_routes: vec![
             EventRoute {
-                source_node: NODE_EVENT_INPUT,
-                destination_node: NODE_TRANSPOSE,
+                source: event_endpoint(NODE_EVENT_INPUT),
+                destination: event_endpoint(NODE_TRANSPOSE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_TRANSPOSE,
-                destination_node: NODE_SCALE,
+                source: event_endpoint(NODE_TRANSPOSE),
+                destination: event_endpoint(NODE_SCALE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_SCALE,
-                destination_node: NODE_VELOCITY,
+                source: event_endpoint(NODE_SCALE),
+                destination: event_endpoint(NODE_VELOCITY),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_VELOCITY,
-                destination_node: NODE_CHORD,
+                source: event_endpoint(NODE_VELOCITY),
+                destination: event_endpoint(NODE_CHORD),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_CHORD,
-                destination_node: NODE_INSTRUMENT,
+                source: event_endpoint(NODE_CHORD),
+                destination: event_endpoint(NODE_INSTRUMENT),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,

@@ -9,8 +9,9 @@ use std::{
 
 use engine_dsp::{MonophonicVoice, MonophonicVoiceState, SmoothedParameter};
 use engine_protocol::{
-    AudioBufferSlot, BufferSlotId, EventGraphDiagnostics, EventRouteMask, NativeExecutionPlan,
-    NodeId, ParameterSlotId, PlanNodeKind, ScheduledEngineEvent, NATIVE_EXECUTION_PLAN_VERSION,
+    AudioBufferSlot, BufferSlotId, EventEndpoint, EventGraphDiagnostics, EventRouteMask,
+    NativeExecutionPlan, NodeId, ParameterSlotId, PlanNodeKind, ScheduledEngineEvent,
+    DEFAULT_EVENT_PORT, NATIVE_EXECUTION_PLAN_VERSION,
 };
 
 pub const MAX_EVENT_DEPTH: u16 = 32;
@@ -31,6 +32,10 @@ pub enum PlanValidationError {
     MultipleOutputs,
     InvalidBlockCapacity,
     InvalidEventRouteMask,
+    UnknownEventSourcePort,
+    UnknownEventDestinationPort,
+    IncompatibleEventRoute,
+    DuplicateEventPort,
     InvalidChordIntervals,
     DuplicateChordInterval,
     InvalidVelocityTransform,
@@ -106,6 +111,12 @@ pub struct VoiceConfig {
     pub release_seconds: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RuntimeEventContext {
+    pub input_port: u16,
+    pub sample_position: u64,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InstrumentDiagnostics {
     pub active_voices: u32,
@@ -116,6 +127,7 @@ pub struct InstrumentDiagnostics {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeNodeKind {
     EventInput,
+    EventSplitter,
     Oscillator,
     Transpose,
     Scale,
@@ -126,6 +138,55 @@ pub enum RuntimeNodeKind {
     Gain,
     Output,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventPortDirection {
+    Input,
+    Output,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EventPortMetadata {
+    pub id: u16,
+    pub direction: EventPortDirection,
+    pub mask: EventRouteMask,
+}
+
+const EMPTY_EVENT_MASK: EventRouteMask = EventRouteMask { note: false };
+const DEFAULT_EVENT_PORTS: [EventPortMetadata; 2] = [
+    EventPortMetadata {
+        id: DEFAULT_EVENT_PORT,
+        direction: EventPortDirection::Input,
+        mask: EventRouteMask::NOTE,
+    },
+    EventPortMetadata {
+        id: DEFAULT_EVENT_PORT,
+        direction: EventPortDirection::Output,
+        mask: EventRouteMask::NOTE,
+    },
+];
+const EVENT_SPLITTER_PORTS: [EventPortMetadata; 4] = [
+    EventPortMetadata {
+        id: DEFAULT_EVENT_PORT,
+        direction: EventPortDirection::Input,
+        mask: EventRouteMask::NOTE,
+    },
+    EventPortMetadata {
+        id: EventSplitterNode::OUTPUT_A,
+        direction: EventPortDirection::Output,
+        mask: EventRouteMask::NOTE,
+    },
+    EventPortMetadata {
+        id: EventSplitterNode::OUTPUT_B,
+        direction: EventPortDirection::Output,
+        mask: EventRouteMask::NOTE,
+    },
+    EventPortMetadata {
+        id: EventSplitterNode::OUTPUT_EMPTY,
+        direction: EventPortDirection::Output,
+        mask: EMPTY_EVENT_MASK,
+    },
+];
 
 pub struct RuntimeCompiler {
     maximum_frames: usize,
@@ -198,6 +259,7 @@ impl PreparedExecutionPlan {
         }
 
         validate_unique_node_ids(plan)?;
+        validate_event_port_declarations(plan)?;
 
         let buffers = AudioBufferArena::new(&plan.buffers, maximum_frames)?;
         let parameters = plan
@@ -217,6 +279,7 @@ impl PreparedExecutionPlan {
             .iter()
             .map(|node| match &node.kind {
                 PlanNodeKind::EventInput(_) => Ok(RuntimeNode::EventInput(EventInputNode)),
+                PlanNodeKind::EventSplitter(_) => Ok(RuntimeNode::EventSplitter(EventSplitterNode)),
                 PlanNodeKind::Oscillator(node_plan) => {
                     let output_buffer = buffer_index(plan, node_plan.output_buffer)?;
                     let frequency_parameter = parameter_index(plan, node_plan.frequency_parameter)?;
@@ -482,11 +545,21 @@ impl PreparedExecutionPlan {
         let Some(source_node_index) = self.event_graph.source_node_index(source_node) else {
             return false;
         };
+        let Some(source_endpoint_index) = self
+            .event_graph
+            .source_endpoint_index(source_node_index, DEFAULT_EVENT_PORT)
+        else {
+            self.event_graph_diagnostics.events_received = self
+                .event_graph_diagnostics
+                .events_received
+                .saturating_add(1);
+            return false;
+        };
 
         self.event_work_queue.clear();
         self.event_work_queue
             .push(EmittedRuntimeEvent {
-                source_node_index,
+                source_endpoint_index,
                 event,
                 depth: 0,
             })
@@ -512,7 +585,7 @@ impl PreparedExecutionPlan {
 
             let range = self
                 .event_graph
-                .route_range(runtime_event.source_node_index);
+                .route_range(runtime_event.source_endpoint_index);
 
             for route_index in range.start..range.end() {
                 let route = self.event_graph.routes[route_index as usize];
@@ -528,13 +601,22 @@ impl PreparedExecutionPlan {
 
                 let mut emitter = EventEmitter {
                     queue: &mut self.event_work_queue,
+                    event_graph: &self.event_graph,
                     source_node_index: route.destination_node_index,
+                    parent_input_port: route.destination_port_id,
                     parent_depth: runtime_event.depth,
                     diagnostics: &mut self.event_graph_diagnostics,
                 };
+                let context = RuntimeEventContext {
+                    input_port: route.destination_port_id,
+                    sample_position: runtime_event.event.at_sample(),
+                };
 
-                handled |= self.nodes[route.destination_node_index as usize]
-                    .process_event(&runtime_event.event, &mut emitter);
+                handled |= self.nodes[route.destination_node_index as usize].process_event(
+                    &runtime_event.event,
+                    context,
+                    &mut emitter,
+                );
             }
         }
 
@@ -556,9 +638,27 @@ impl PreparedExecutionPlan {
             .map(|route| route.destination_node_index)
     }
 
+    pub fn event_route_destination_port_at(&self, index: usize) -> Option<u16> {
+        self.event_graph
+            .routes
+            .get(index)
+            .map(|route| route.destination_port_id)
+    }
+
     pub fn event_route_range_for_source(&self, source_node: NodeId) -> Option<(u32, u32)> {
+        self.event_route_range_for_source_endpoint(source_node, DEFAULT_EVENT_PORT)
+    }
+
+    pub fn event_route_range_for_source_endpoint(
+        &self,
+        source_node: NodeId,
+        source_port_id: u16,
+    ) -> Option<(u32, u32)> {
         let source_node_index = self.event_graph.source_node_index(source_node)?;
-        let range = self.event_graph.route_range(source_node_index);
+        let source_endpoint_index = self
+            .event_graph
+            .source_endpoint_index(source_node_index, source_port_id)?;
+        let range = self.event_graph.route_range(source_endpoint_index);
 
         Some((range.start, range.len))
     }
@@ -951,6 +1051,7 @@ struct NodeProcessContext {
 
 enum RuntimeNode {
     EventInput(EventInputNode),
+    EventSplitter(EventSplitterNode),
     Oscillator(OscillatorNode),
     Transpose(TransposeNode),
     Scale(ScaleNode),
@@ -978,6 +1079,7 @@ impl RuntimeNode {
     ) {
         match self {
             Self::EventInput(_) => {}
+            Self::EventSplitter(_) => {}
             Self::Oscillator(node) => node.process(context, buffers, parameters),
             Self::Transpose(_) => {}
             Self::Scale(_) => {}
@@ -1004,6 +1106,7 @@ impl RuntimeNode {
     fn node_type(&self) -> RuntimeNodeKind {
         match self {
             Self::EventInput(_) => RuntimeNodeKind::EventInput,
+            Self::EventSplitter(_) => RuntimeNodeKind::EventSplitter,
             Self::Oscillator(_) => RuntimeNodeKind::Oscillator,
             Self::Transpose(_) => RuntimeNodeKind::Transpose,
             Self::Scale(_) => RuntimeNodeKind::Scale,
@@ -1066,9 +1169,11 @@ impl RuntimeNode {
     fn process_event(
         &mut self,
         event: &ScheduledEngineEvent,
+        context: RuntimeEventContext,
         emitter: &mut EventEmitter<'_>,
     ) -> bool {
         match self {
+            Self::EventSplitter(node) => node.process_event(event, context, emitter),
             Self::Transpose(node) => node.process_event(event, emitter),
             Self::Scale(node) => node.process_event(event, emitter),
             Self::Velocity(node) => node.process_event(event, emitter),
@@ -1087,6 +1192,29 @@ impl RuntimeNode {
 }
 
 struct EventInputNode;
+
+struct EventSplitterNode;
+
+impl EventSplitterNode {
+    const OUTPUT_A: u16 = 1;
+    const OUTPUT_B: u16 = 2;
+    const OUTPUT_EMPTY: u16 = 3;
+
+    fn process_event(
+        &mut self,
+        event: &ScheduledEngineEvent,
+        context: RuntimeEventContext,
+        emitter: &mut EventEmitter<'_>,
+    ) -> bool {
+        if context.input_port != DEFAULT_EVENT_PORT {
+            return false;
+        }
+
+        let _ = emitter.emit_from(Self::OUTPUT_A, *event);
+        let _ = emitter.emit_from(Self::OUTPUT_B, *event);
+        true
+    }
+}
 
 struct OscillatorNode {
     phase: f64,
@@ -1616,6 +1744,7 @@ struct RuntimeParameter {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PreparedEventRoute {
     destination_node_index: u32,
+    destination_port_id: u16,
     event_mask: EventRouteMask,
     priority: u16,
 }
@@ -1644,6 +1773,7 @@ impl RouteRange {
 
 struct PreparedEventGraph {
     routes: Box<[PreparedEventRoute]>,
+    source_endpoints: Box<[PreparedEventSourceEndpoint]>,
     source_ranges: Box<[RouteRange]>,
     source_node_indexes: Box<[Option<NodeId>]>,
 }
@@ -1666,14 +1796,32 @@ impl PreparedEventGraph {
                     return Err(PlanValidationError::InvalidEventRouteMask);
                 }
 
-                let source_node_index = node_index(plan, route.source_node)? as u32;
-                let destination_node_index = node_index(plan, route.destination_node)? as u32;
+                let source_node_index = node_index(plan, route.source.node_id)? as u32;
+                let destination_node_index = node_index(plan, route.destination.node_id)? as u32;
+
+                validate_event_endpoint(
+                    plan,
+                    route.source,
+                    EventPortDirection::Output,
+                    route.event_mask,
+                    PlanValidationError::UnknownEventSourcePort,
+                )?;
+                validate_event_endpoint(
+                    plan,
+                    route.destination,
+                    EventPortDirection::Input,
+                    route.event_mask,
+                    PlanValidationError::UnknownEventDestinationPort,
+                )?;
 
                 Ok(SortableEventRoute {
                     source_node_index,
-                    destination_node: route.destination_node,
+                    source_port_id: route.source.port_id,
+                    destination_node: route.destination.node_id,
+                    destination_port_id: route.destination.port_id,
                     route: PreparedEventRoute {
                         destination_node_index,
+                        destination_port_id: route.destination.port_id,
                         event_mask: route.event_mask,
                         priority: route.priority,
                     },
@@ -1685,35 +1833,45 @@ impl PreparedEventGraph {
         prepared_routes.sort_by_key(|route| {
             (
                 route.source_node_index,
+                route.source_port_id,
                 route.route.priority,
                 route.destination_node,
+                route.destination_port_id,
                 route.plan_order,
             )
         });
 
-        let mut source_ranges = vec![RouteRange::default(); plan.nodes.len()];
+        let mut source_endpoints = Vec::new();
+        let mut source_ranges = Vec::new();
         let mut routes = Vec::with_capacity(prepared_routes.len());
         let mut index = 0;
 
         while index < prepared_routes.len() {
-            let source_node_index = prepared_routes[index].source_node_index as usize;
+            let source_node_index = prepared_routes[index].source_node_index;
+            let source_port_id = prepared_routes[index].source_port_id;
             let start = routes.len() as u32;
 
             while index < prepared_routes.len()
-                && prepared_routes[index].source_node_index as usize == source_node_index
+                && prepared_routes[index].source_node_index == source_node_index
+                && prepared_routes[index].source_port_id == source_port_id
             {
                 routes.push(prepared_routes[index].route);
                 index += 1;
             }
 
-            source_ranges[source_node_index] = RouteRange {
+            source_endpoints.push(PreparedEventSourceEndpoint {
+                node_index: source_node_index,
+                port_id: source_port_id,
+            });
+            source_ranges.push(RouteRange {
                 start,
                 len: routes.len() as u32 - start,
-            };
+            });
         }
 
         Ok(Self {
             routes: routes.into_boxed_slice(),
+            source_endpoints: source_endpoints.into_boxed_slice(),
             source_ranges: source_ranges.into_boxed_slice(),
             source_node_indexes,
         })
@@ -1730,25 +1888,43 @@ impl PreparedEventGraph {
             })
     }
 
-    fn route_range(&self, source_node_index: u32) -> RouteRange {
+    fn source_endpoint_index(&self, source_node_index: u32, source_port_id: u16) -> Option<u32> {
+        self.source_endpoints
+            .iter()
+            .enumerate()
+            .find_map(|(index, endpoint)| {
+                (endpoint.node_index == source_node_index && endpoint.port_id == source_port_id)
+                    .then_some(index as u32)
+            })
+    }
+
+    fn route_range(&self, source_endpoint_index: u32) -> RouteRange {
         self.source_ranges
-            .get(source_node_index as usize)
+            .get(source_endpoint_index as usize)
             .copied()
             .unwrap_or_default()
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreparedEventSourceEndpoint {
+    node_index: u32,
+    port_id: u16,
+}
+
 #[derive(Clone, Copy)]
 struct SortableEventRoute {
     source_node_index: u32,
+    source_port_id: u16,
     destination_node: NodeId,
+    destination_port_id: u16,
     route: PreparedEventRoute,
     plan_order: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct EmittedRuntimeEvent {
-    source_node_index: u32,
+    source_endpoint_index: u32,
     event: ScheduledEngineEvent,
     depth: u16,
 }
@@ -1804,7 +1980,9 @@ impl FixedEventQueue {
 #[allow(dead_code)]
 struct EventEmitter<'a> {
     queue: &'a mut FixedEventQueue,
+    event_graph: &'a PreparedEventGraph,
     source_node_index: u32,
+    parent_input_port: u16,
     parent_depth: u16,
     diagnostics: &'a mut EventGraphDiagnostics,
 }
@@ -1816,14 +1994,30 @@ impl EventEmitter<'_> {
     }
 
     fn emit(&mut self, event: ScheduledEngineEvent) -> Result<(), ScheduledEngineEvent> {
+        self.emit_from(DEFAULT_EVENT_PORT, event)
+    }
+
+    fn emit_from(
+        &mut self,
+        output_port: u16,
+        event: ScheduledEngineEvent,
+    ) -> Result<(), ScheduledEngineEvent> {
         if self.parent_depth >= MAX_EVENT_DEPTH {
             self.diagnostics.events_dropped_depth =
                 self.diagnostics.events_dropped_depth.saturating_add(1);
             return Err(event);
         }
 
+        let Some(source_endpoint_index) = self
+            .event_graph
+            .source_endpoint_index(self.source_node_index, output_port)
+        else {
+            self.diagnostics.events_emitted = self.diagnostics.events_emitted.saturating_add(1);
+            return Ok(());
+        };
+
         let runtime_event = EmittedRuntimeEvent {
-            source_node_index: self.source_node_index,
+            source_endpoint_index,
             event,
             depth: self.parent_depth + 1,
         };
@@ -2010,6 +2204,63 @@ fn validate_unique_node_ids(plan: &NativeExecutionPlan) -> Result<(), PlanValida
     Ok(())
 }
 
+fn validate_event_port_declarations(plan: &NativeExecutionPlan) -> Result<(), PlanValidationError> {
+    for node in &plan.nodes {
+        let ports = event_ports_for_node(&node.kind);
+
+        for (index, port) in ports.iter().enumerate() {
+            if ports
+                .iter()
+                .skip(index + 1)
+                .any(|candidate| candidate.id == port.id && candidate.direction == port.direction)
+            {
+                return Err(PlanValidationError::DuplicateEventPort);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn event_ports_for_node(kind: &PlanNodeKind) -> &'static [EventPortMetadata] {
+    match kind {
+        PlanNodeKind::EventSplitter(_) => &EVENT_SPLITTER_PORTS,
+        _ => &DEFAULT_EVENT_PORTS,
+    }
+}
+
+fn validate_event_endpoint(
+    plan: &NativeExecutionPlan,
+    endpoint: EventEndpoint,
+    required_direction: EventPortDirection,
+    event_mask: EventRouteMask,
+    unknown_port_error: PlanValidationError,
+) -> Result<(), PlanValidationError> {
+    let node = plan
+        .nodes
+        .iter()
+        .find(|node| node.id == endpoint.node_id)
+        .ok_or(PlanValidationError::UnknownNode)?;
+    let ports = event_ports_for_node(&node.kind);
+
+    if !ports.iter().any(|port| port.id == endpoint.port_id) {
+        return Err(unknown_port_error);
+    }
+
+    let Some(port) = ports
+        .iter()
+        .find(|port| port.id == endpoint.port_id && port.direction == required_direction)
+    else {
+        return Err(PlanValidationError::IncompatibleEventRoute);
+    };
+
+    if event_mask.accepts_note() && !port.mask.accepts_note() {
+        return Err(PlanValidationError::IncompatibleEventRoute);
+    }
+
+    Ok(())
+}
+
 fn node_index(plan: &NativeExecutionPlan, node_id: NodeId) -> Result<usize, PlanValidationError> {
     plan.nodes
         .iter()
@@ -2122,6 +2373,7 @@ fn validate_voice_config(config: VoiceConfig) -> Result<(), PlanValidationError>
 fn runtime_node_kind(kind: &PlanNodeKind) -> Result<RuntimeNodeKind, PlanValidationError> {
     match kind {
         PlanNodeKind::EventInput(_) => Ok(RuntimeNodeKind::EventInput),
+        PlanNodeKind::EventSplitter(_) => Ok(RuntimeNodeKind::EventSplitter),
         PlanNodeKind::Oscillator(_) => Ok(RuntimeNodeKind::Oscillator),
         PlanNodeKind::Transpose(_) => Ok(RuntimeNodeKind::Transpose),
         PlanNodeKind::Scale(_) => Ok(RuntimeNodeKind::Scale),
@@ -2170,6 +2422,7 @@ fn reject_duplicate_stable_ids(
 fn state_transfer_kind_for_node(node_kind: RuntimeNodeKind) -> Option<StateTransferKind> {
     match node_kind {
         RuntimeNodeKind::EventInput => None,
+        RuntimeNodeKind::EventSplitter => None,
         RuntimeNodeKind::Oscillator => Some(StateTransferKind::OscillatorPhase),
         RuntimeNodeKind::Transpose => None,
         RuntimeNodeKind::Scale => None,
@@ -2240,11 +2493,12 @@ fn validate_state_transfer(
 mod tests {
     use super::*;
     use engine_protocol::{
-        chorded_instrument_plan, diagnostic_tone_plan, monophonic_instrument_plan,
-        monophonic_voice_plan, AudioBufferSlot, ChordNodePlan, EventInputNodePlan, EventRoute,
-        EventRouteMask, GainNodePlan, InstrumentNodePlan, NativeExecutionPlan, OscillatorNodePlan,
-        OutputNodePlan, PlanNode, PlanNodeKind, ScaleNodePlan, ScheduledEngineEvent,
-        TransposeNodePlan, VelocityNodePlan, NODE_CHORD, NODE_EVENT_INPUT, NODE_GAIN,
+        chorded_instrument_plan, diagnostic_tone_plan, event_endpoint, monophonic_instrument_plan,
+        monophonic_voice_plan, transposed_monophonic_voice_plan, AudioBufferSlot, ChordNodePlan,
+        EventInputNodePlan, EventRoute, EventRouteMask, EventSplitterNodePlan, GainNodePlan,
+        InstrumentNodePlan, NativeExecutionPlan, OscillatorNodePlan, OutputNodePlan, PlanNode,
+        PlanNodeKind, ScaleNodePlan, ScheduledEngineEvent, TransposeNodePlan, VelocityNodePlan,
+        DEFAULT_EVENT_PORT, NODE_CHORD, NODE_EVENT_INPUT, NODE_EVENT_SPLITTER, NODE_GAIN,
         NODE_INSTRUMENT, NODE_OSCILLATOR, NODE_OUTPUT, NODE_SCALE, NODE_TRANSPOSE, NODE_VELOCITY,
         NODE_VOICE, PARAM_GAIN_GAIN, PARAM_OSCILLATOR_FREQUENCY,
     };
@@ -2565,15 +2819,15 @@ mod tests {
             parameters: vec![],
             event_routes: vec![
                 EventRoute {
-                    source_node: NODE_EVENT_INPUT,
-                    destination_node: NODE_TRANSPOSE,
+                    source: event_endpoint(NODE_EVENT_INPUT),
+                    destination: event_endpoint(NODE_TRANSPOSE),
                     event_mask: EventRouteMask::NOTE,
                     priority: 0,
                     enabled: true,
                 },
                 EventRoute {
-                    source_node: NODE_TRANSPOSE,
-                    destination_node: NODE_VOICE,
+                    source: event_endpoint(NODE_TRANSPOSE),
+                    destination: event_endpoint(NODE_VOICE),
                     event_mask: EventRouteMask::NOTE,
                     priority: 0,
                     enabled: true,
@@ -2622,15 +2876,15 @@ mod tests {
             parameters: vec![],
             event_routes: vec![
                 EventRoute {
-                    source_node: NODE_EVENT_INPUT,
-                    destination_node: NODE_SCALE,
+                    source: event_endpoint(NODE_EVENT_INPUT),
+                    destination: event_endpoint(NODE_SCALE),
                     event_mask: EventRouteMask::NOTE,
                     priority: 0,
                     enabled: true,
                 },
                 EventRoute {
-                    source_node: NODE_SCALE,
-                    destination_node: NODE_VOICE,
+                    source: event_endpoint(NODE_SCALE),
+                    destination: event_endpoint(NODE_VOICE),
                     event_mask: EventRouteMask::NOTE,
                     priority: 0,
                     enabled: true,
@@ -2676,15 +2930,15 @@ mod tests {
             parameters: vec![],
             event_routes: vec![
                 EventRoute {
-                    source_node: NODE_EVENT_INPUT,
-                    destination_node: NODE_CHORD,
+                    source: event_endpoint(NODE_EVENT_INPUT),
+                    destination: event_endpoint(NODE_CHORD),
                     event_mask: EventRouteMask::NOTE,
                     priority: 0,
                     enabled: true,
                 },
                 EventRoute {
-                    source_node: NODE_CHORD,
-                    destination_node: NODE_VOICE,
+                    source: event_endpoint(NODE_CHORD),
+                    destination: event_endpoint(NODE_VOICE),
                     event_mask: EventRouteMask::NOTE,
                     priority: 0,
                     enabled: true,
@@ -2730,21 +2984,99 @@ mod tests {
             parameters: vec![],
             event_routes: vec![
                 EventRoute {
-                    source_node: NODE_EVENT_INPUT,
-                    destination_node: NODE_VELOCITY,
+                    source: event_endpoint(NODE_EVENT_INPUT),
+                    destination: event_endpoint(NODE_VELOCITY),
                     event_mask: EventRouteMask::NOTE,
                     priority: 0,
                     enabled: true,
                 },
                 EventRoute {
-                    source_node: NODE_VELOCITY,
-                    destination_node: NODE_VOICE,
+                    source: event_endpoint(NODE_VELOCITY),
+                    destination: event_endpoint(NODE_VOICE),
                     event_mask: EventRouteMask::NOTE,
                     priority: 0,
                     enabled: true,
                 },
             ],
             audio_execution_order: vec![NODE_VOICE, NODE_OUTPUT],
+        }
+    }
+
+    fn splitter_to_recording_plan() -> NativeExecutionPlan {
+        NativeExecutionPlan {
+            version: NATIVE_EXECUTION_PLAN_VERSION,
+            plan_id: 1,
+            plan_revision: 1,
+            nodes: vec![
+                PlanNode {
+                    id: NODE_EVENT_INPUT,
+                    kind: PlanNodeKind::EventInput(EventInputNodePlan),
+                },
+                PlanNode {
+                    id: NODE_EVENT_SPLITTER,
+                    kind: PlanNodeKind::EventSplitter(EventSplitterNodePlan),
+                },
+                PlanNode {
+                    id: NODE_VOICE,
+                    kind: PlanNodeKind::Voice(engine_protocol::VoiceNodePlan {
+                        output_buffer: 1,
+                        attack_seconds: 0.0,
+                        decay_seconds: 0.0,
+                        sustain_level: 1.0,
+                        release_seconds: 0.0,
+                    }),
+                },
+                PlanNode {
+                    id: NODE_INSTRUMENT,
+                    kind: PlanNodeKind::Instrument(InstrumentNodePlan {
+                        output_buffer: 1,
+                        voice_count: 4,
+                        attack_seconds: 0.0,
+                        decay_seconds: 0.0,
+                        sustain_level: 1.0,
+                        release_seconds: 0.0,
+                    }),
+                },
+                PlanNode {
+                    id: NODE_OUTPUT,
+                    kind: PlanNodeKind::Output(OutputNodePlan {
+                        input_buffer: 1,
+                        output_channels: 2,
+                    }),
+                },
+            ],
+            buffers: vec![AudioBufferSlot { id: 1, channels: 1 }],
+            parameters: vec![],
+            event_routes: vec![
+                EventRoute {
+                    source: event_endpoint(NODE_EVENT_INPUT),
+                    destination: event_endpoint(NODE_EVENT_SPLITTER),
+                    event_mask: EventRouteMask::NOTE,
+                    priority: 0,
+                    enabled: true,
+                },
+                EventRoute {
+                    source: EventEndpoint {
+                        node_id: NODE_EVENT_SPLITTER,
+                        port_id: EventSplitterNode::OUTPUT_A,
+                    },
+                    destination: event_endpoint(NODE_VOICE),
+                    event_mask: EventRouteMask::NOTE,
+                    priority: 0,
+                    enabled: true,
+                },
+                EventRoute {
+                    source: EventEndpoint {
+                        node_id: NODE_EVENT_SPLITTER,
+                        port_id: EventSplitterNode::OUTPUT_B,
+                    },
+                    destination: event_endpoint(NODE_INSTRUMENT),
+                    event_mask: EventRouteMask::NOTE,
+                    priority: 0,
+                    enabled: true,
+                },
+            ],
+            audio_execution_order: vec![NODE_OUTPUT],
         }
     }
 
@@ -2785,15 +3117,15 @@ mod tests {
 
         plan.event_routes = vec![
             EventRoute {
-                source_node: NODE_OSCILLATOR,
-                destination_node: NODE_VOICE,
+                source: event_endpoint(NODE_OSCILLATOR),
+                destination: event_endpoint(NODE_VOICE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 20,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_OSCILLATOR,
-                destination_node: NODE_GAIN,
+                source: event_endpoint(NODE_OSCILLATOR),
+                destination: event_endpoint(NODE_GAIN),
                 event_mask: EventRouteMask::NOTE,
                 priority: 10,
                 enabled: true,
@@ -2812,12 +3144,175 @@ mod tests {
     }
 
     #[test]
+    fn endpoint_routes_preserve_port_zero_compatibility() {
+        let plan = transposed_monophonic_voice_plan(12, 2);
+        let prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        assert_eq!(
+            prepared.event_route_range_for_source_endpoint(NODE_EVENT_INPUT, DEFAULT_EVENT_PORT),
+            Some((0, 1))
+        );
+        assert_eq!(
+            prepared.event_route_destination_port_at(0),
+            Some(DEFAULT_EVENT_PORT)
+        );
+    }
+
+    #[test]
+    fn routes_from_one_output_port_to_one_input_port() {
+        let mut plan = splitter_to_recording_plan();
+
+        plan.event_routes.retain(|route| {
+            route.source.node_id != NODE_EVENT_SPLITTER
+                || route.source.port_id == EventSplitterNode::OUTPUT_A
+        });
+
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+        install_recording_node(&mut prepared, 2);
+        install_recording_node(&mut prepared, 3);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.75, 7)));
+        assert_eq!(
+            recorded_events(&prepared, 2),
+            &[ScheduledEngineEvent::NoteOn {
+                target_node: NODE_EVENT_INPUT,
+                note: 60,
+                velocity: 0.75,
+                at_sample: 7,
+            }]
+        );
+        assert!(recorded_events(&prepared, 3).is_empty());
+    }
+
+    #[test]
+    fn fanout_from_one_output_port_is_deterministic() {
+        let mut plan = splitter_to_recording_plan();
+
+        plan.event_routes = vec![
+            plan.event_routes[0],
+            EventRoute {
+                source: EventEndpoint {
+                    node_id: NODE_EVENT_SPLITTER,
+                    port_id: EventSplitterNode::OUTPUT_A,
+                },
+                destination: event_endpoint(NODE_INSTRUMENT),
+                event_mask: EventRouteMask::NOTE,
+                priority: 20,
+                enabled: true,
+            },
+            EventRoute {
+                source: EventEndpoint {
+                    node_id: NODE_EVENT_SPLITTER,
+                    port_id: EventSplitterNode::OUTPUT_A,
+                },
+                destination: event_endpoint(NODE_VOICE),
+                event_mask: EventRouteMask::NOTE,
+                priority: 10,
+                enabled: true,
+            },
+        ];
+
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+        install_recording_node(&mut prepared, 2);
+        install_recording_node(&mut prepared, 3);
+
+        assert_eq!(
+            prepared.event_route_range_for_source_endpoint(
+                NODE_EVENT_SPLITTER,
+                EventSplitterNode::OUTPUT_A
+            ),
+            Some((1, 2))
+        );
+        assert_eq!(prepared.event_route_destination_at(1), Some(2));
+        assert_eq!(prepared.event_route_destination_at(2), Some(3));
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 61, 0.5, 8)));
+        assert_eq!(recorded_events(&prepared, 2).len(), 1);
+        assert_eq!(recorded_events(&prepared, 3).len(), 1);
+    }
+
+    #[test]
+    fn two_output_ports_route_independently() {
+        let plan = splitter_to_recording_plan();
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+        install_recording_node(&mut prepared, 3);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 62, 0.25, 9)));
+        assert_eq!(recorded_events(&prepared, 2).len(), 1);
+        assert_eq!(recorded_events(&prepared, 3).len(), 1);
+        assert_eq!(
+            prepared.event_route_range_for_source_endpoint(
+                NODE_EVENT_SPLITTER,
+                EventSplitterNode::OUTPUT_A
+            ),
+            Some((1, 1))
+        );
+        assert_eq!(
+            prepared.event_route_range_for_source_endpoint(
+                NODE_EVENT_SPLITTER,
+                EventSplitterNode::OUTPUT_B
+            ),
+            Some((2, 1))
+        );
+    }
+
+    #[test]
+    fn unknown_event_source_port_rejects_during_compilation() {
+        let mut plan = splitter_to_recording_plan();
+
+        plan.event_routes[1].source.port_id = 99;
+
+        assert!(matches!(
+            PreparedExecutionPlan::prepare(&plan, 128),
+            Err(PlanValidationError::UnknownEventSourcePort)
+        ));
+    }
+
+    #[test]
+    fn unknown_event_destination_port_rejects_during_compilation() {
+        let mut plan = splitter_to_recording_plan();
+
+        plan.event_routes[1].destination.port_id = 99;
+
+        assert!(matches!(
+            PreparedExecutionPlan::prepare(&plan, 128),
+            Err(PlanValidationError::UnknownEventDestinationPort)
+        ));
+    }
+
+    #[test]
+    fn incompatible_event_port_direction_rejects_during_compilation() {
+        let mut plan = splitter_to_recording_plan();
+
+        plan.event_routes[1].source.port_id = DEFAULT_EVENT_PORT;
+
+        assert!(matches!(
+            PreparedExecutionPlan::prepare(&plan, 128),
+            Err(PlanValidationError::IncompatibleEventRoute)
+        ));
+    }
+
+    #[test]
+    fn event_masks_are_checked_against_port_capabilities() {
+        let mut plan = splitter_to_recording_plan();
+
+        plan.event_routes[1].source.port_id = EventSplitterNode::OUTPUT_EMPTY;
+
+        assert!(matches!(
+            PreparedExecutionPlan::prepare(&plan, 128),
+            Err(PlanValidationError::IncompatibleEventRoute)
+        ));
+    }
+
+    #[test]
     fn disabled_event_routes_are_excluded_from_dispatch() {
         let mut plan = monophonic_voice_plan(2);
 
         plan.event_routes = vec![EventRoute {
-            source_node: NODE_VOICE,
-            destination_node: NODE_VOICE,
+            source: event_endpoint(NODE_VOICE),
+            destination: event_endpoint(NODE_VOICE),
             event_mask: EventRouteMask::NOTE,
             priority: 0,
             enabled: false,
@@ -2842,15 +3337,15 @@ mod tests {
 
         plan.event_routes = vec![
             EventRoute {
-                source_node: NODE_OSCILLATOR,
-                destination_node: NODE_GAIN,
+                source: event_endpoint(NODE_OSCILLATOR),
+                destination: event_endpoint(NODE_GAIN),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_GAIN,
-                destination_node: NODE_VOICE,
+                source: event_endpoint(NODE_GAIN),
+                destination: event_endpoint(NODE_VOICE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
@@ -2875,15 +3370,15 @@ mod tests {
 
         plan.event_routes = vec![
             EventRoute {
-                source_node: NODE_OSCILLATOR,
-                destination_node: NODE_GAIN,
+                source: event_endpoint(NODE_OSCILLATOR),
+                destination: event_endpoint(NODE_GAIN),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_GAIN,
-                destination_node: NODE_OSCILLATOR,
+                source: event_endpoint(NODE_GAIN),
+                destination: event_endpoint(NODE_OSCILLATOR),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
@@ -2904,15 +3399,15 @@ mod tests {
 
         plan.event_routes = vec![
             EventRoute {
-                source_node: NODE_OSCILLATOR,
-                destination_node: NODE_GAIN,
+                source: event_endpoint(NODE_OSCILLATOR),
+                destination: event_endpoint(NODE_GAIN),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_GAIN,
-                destination_node: NODE_GAIN,
+                source: event_endpoint(NODE_GAIN),
+                destination: event_endpoint(NODE_GAIN),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
@@ -3005,22 +3500,22 @@ mod tests {
         );
         plan.event_routes = vec![
             EventRoute {
-                source_node: NODE_EVENT_INPUT,
-                destination_node: NODE_TRANSPOSE,
+                source: event_endpoint(NODE_EVENT_INPUT),
+                destination: event_endpoint(NODE_TRANSPOSE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_TRANSPOSE,
-                destination_node: second_transpose_id,
+                source: event_endpoint(NODE_TRANSPOSE),
+                destination: event_endpoint(second_transpose_id),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: second_transpose_id,
-                destination_node: NODE_VOICE,
+                source: event_endpoint(second_transpose_id),
+                destination: event_endpoint(NODE_VOICE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
@@ -3067,8 +3562,8 @@ mod tests {
         let mut plan = transpose_to_recording_plan(12);
 
         plan.event_routes.push(EventRoute {
-            source_node: NODE_TRANSPOSE,
-            destination_node: NODE_OUTPUT,
+            source: event_endpoint(NODE_TRANSPOSE),
+            destination: event_endpoint(NODE_OUTPUT),
             event_mask: EventRouteMask::NOTE,
             priority: 0,
             enabled: true,
@@ -3240,22 +3735,22 @@ mod tests {
         );
         plan.event_routes = vec![
             EventRoute {
-                source_node: NODE_EVENT_INPUT,
-                destination_node: NODE_VELOCITY,
+                source: event_endpoint(NODE_EVENT_INPUT),
+                destination: event_endpoint(NODE_VELOCITY),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_VELOCITY,
-                destination_node: NODE_CHORD,
+                source: event_endpoint(NODE_VELOCITY),
+                destination: event_endpoint(NODE_CHORD),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_CHORD,
-                destination_node: NODE_VOICE,
+                source: event_endpoint(NODE_CHORD),
+                destination: event_endpoint(NODE_VOICE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
@@ -3447,29 +3942,29 @@ mod tests {
         );
         plan.event_routes = vec![
             EventRoute {
-                source_node: NODE_EVENT_INPUT,
-                destination_node: NODE_TRANSPOSE,
+                source: event_endpoint(NODE_EVENT_INPUT),
+                destination: event_endpoint(NODE_TRANSPOSE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_TRANSPOSE,
-                destination_node: NODE_SCALE,
+                source: event_endpoint(NODE_TRANSPOSE),
+                destination: event_endpoint(NODE_SCALE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_SCALE,
-                destination_node: NODE_CHORD,
+                source: event_endpoint(NODE_SCALE),
+                destination: event_endpoint(NODE_CHORD),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_CHORD,
-                destination_node: NODE_VOICE,
+                source: event_endpoint(NODE_CHORD),
+                destination: event_endpoint(NODE_VOICE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
@@ -3587,22 +4082,22 @@ mod tests {
         );
         plan.event_routes = vec![
             EventRoute {
-                source_node: NODE_EVENT_INPUT,
-                destination_node: NODE_TRANSPOSE,
+                source: event_endpoint(NODE_EVENT_INPUT),
+                destination: event_endpoint(NODE_TRANSPOSE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_TRANSPOSE,
-                destination_node: NODE_SCALE,
+                source: event_endpoint(NODE_TRANSPOSE),
+                destination: event_endpoint(NODE_SCALE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,
             },
             EventRoute {
-                source_node: NODE_SCALE,
-                destination_node: NODE_VOICE,
+                source: event_endpoint(NODE_SCALE),
+                destination: event_endpoint(NODE_VOICE),
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
                 enabled: true,

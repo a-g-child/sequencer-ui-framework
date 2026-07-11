@@ -1371,7 +1371,7 @@ mod tests {
     use super::*;
     use crate::{build_state_transfer, PlanStateTransfer, StateTransferEntry, StateTransferKind};
     use engine_protocol::{
-        chorded_instrument_plan, diagnostic_tone_plan, monophonic_instrument_plan,
+        chorded_instrument_plan, diagnostic_tone_plan, event_endpoint, monophonic_instrument_plan,
         monophonic_voice_plan, scaled_monophonic_instrument_plan, scaled_monophonic_voice_plan,
         transposed_monophonic_instrument_plan, transposed_monophonic_voice_plan, EventRoute,
         EventRouteMask, PlanNodeKind, ScaleNodePlan, ScheduledBeatEvent, ScheduledEngineEvent,
@@ -2148,8 +2148,8 @@ mod tests {
         let mut plan = monophonic_voice_plan(2);
 
         plan.event_routes = vec![EventRoute {
-            source_node: NODE_OUTPUT,
-            destination_node: NODE_VOICE,
+            source: event_endpoint(NODE_OUTPUT),
+            destination: event_endpoint(NODE_VOICE),
             event_mask: EventRouteMask::NOTE,
             priority: 0,
             enabled: true,
