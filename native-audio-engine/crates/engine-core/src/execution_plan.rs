@@ -7,10 +7,10 @@ use std::{
     },
 };
 
-use engine_dsp::SmoothedParameter;
+use engine_dsp::{MonophonicVoice, SmoothedParameter};
 use engine_protocol::{
     AudioBufferSlot, BufferSlotId, NativeExecutionPlan, NodeId, ParameterSlotId, PlanNodeKind,
-    NATIVE_EXECUTION_PLAN_VERSION,
+    ScheduledEngineEvent, NATIVE_EXECUTION_PLAN_VERSION,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,6 +78,7 @@ pub struct RuntimeNodeMetadata {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeNodeKind {
     Oscillator,
+    Voice,
     Gain,
     Output,
 }
@@ -155,6 +156,21 @@ impl PreparedExecutionPlan {
                     Ok(RuntimeNode::Oscillator(OscillatorNode {
                         phase: 0.0,
                         frequency_parameter,
+                        output_buffer,
+                    }))
+                }
+                PlanNodeKind::Voice(node_plan) => {
+                    let output_buffer = buffer_index(plan, node_plan.output_buffer)?;
+
+                    require_channels(plan, node_plan.output_buffer, 1)?;
+
+                    Ok(RuntimeNode::Voice(VoiceNode {
+                        voice: MonophonicVoice::new(
+                            node_plan.attack_seconds,
+                            node_plan.decay_seconds,
+                            node_plan.sustain_level,
+                            node_plan.release_seconds,
+                        ),
                         output_buffer,
                     }))
                 }
@@ -320,6 +336,23 @@ impl PreparedExecutionPlan {
         for node in self.nodes.iter_mut() {
             node.reset();
         }
+    }
+
+    pub fn dispatch_event(&mut self, event: ScheduledEngineEvent) -> bool {
+        let target_node = match event {
+            ScheduledEngineEvent::NoteOn { target_node, .. }
+            | ScheduledEngineEvent::NoteOff { target_node, .. } => target_node,
+        };
+        let Some(node_index) = self
+            .node_metadata
+            .iter()
+            .find(|metadata| metadata.stable_id == target_node as u64)
+            .map(|metadata| metadata.runtime_index as usize)
+        else {
+            return false;
+        };
+
+        self.nodes[node_index].handle_event(event)
     }
 
     pub fn output_node_count(&self) -> usize {
@@ -685,6 +718,7 @@ struct NodeProcessContext {
 
 enum RuntimeNode {
     Oscillator(OscillatorNode),
+    Voice(VoiceNode),
     Gain(GainNode),
     Output(OutputNode),
 }
@@ -699,20 +733,24 @@ impl RuntimeNode {
     ) {
         match self {
             Self::Oscillator(node) => node.process(context, buffers, parameters),
+            Self::Voice(node) => node.process(context, buffers),
             Self::Gain(node) => node.process(context, buffers, parameters),
             Self::Output(node) => node.process(context, buffers, output),
         }
     }
 
     fn reset(&mut self) {
-        if let Self::Oscillator(node) = self {
-            node.phase = 0.0;
+        match self {
+            Self::Oscillator(node) => node.phase = 0.0,
+            Self::Voice(node) => node.voice.panic(),
+            _ => {}
         }
     }
 
     fn node_type(&self) -> RuntimeNodeKind {
         match self {
             Self::Oscillator(_) => RuntimeNodeKind::Oscillator,
+            Self::Voice(_) => RuntimeNodeKind::Voice,
             Self::Gain(_) => RuntimeNodeKind::Gain,
             Self::Output(_) => RuntimeNodeKind::Output,
         }
@@ -741,12 +779,41 @@ impl RuntimeNode {
             _ => None,
         }
     }
+
+    fn handle_event(&mut self, event: ScheduledEngineEvent) -> bool {
+        match (self, event) {
+            (Self::Voice(node), ScheduledEngineEvent::NoteOn { note, velocity, .. }) => {
+                node.voice.note_on(note, velocity);
+                true
+            }
+            (Self::Voice(node), ScheduledEngineEvent::NoteOff { note, .. }) => {
+                node.voice.note_off(note);
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 struct OscillatorNode {
     phase: f64,
     frequency_parameter: usize,
     output_buffer: usize,
+}
+
+struct VoiceNode {
+    voice: MonophonicVoice,
+    output_buffer: usize,
+}
+
+impl VoiceNode {
+    fn process(&mut self, context: &NodeProcessContext, buffers: &mut AudioBufferArena) {
+        let output = buffers.slot_mut(self.output_buffer);
+
+        for frame in context.range.start_frame..context.range.end_frame {
+            output[frame] = self.voice.next_sample(context.sample_rate);
+        }
+    }
 }
 
 impl OscillatorNode {
@@ -987,6 +1054,7 @@ fn require_channels(
 fn runtime_node_kind(kind: &PlanNodeKind) -> Result<RuntimeNodeKind, PlanValidationError> {
     match kind {
         PlanNodeKind::Oscillator(_) => Ok(RuntimeNodeKind::Oscillator),
+        PlanNodeKind::Voice(_) => Ok(RuntimeNodeKind::Voice),
         PlanNodeKind::Gain(_) => Ok(RuntimeNodeKind::Gain),
         PlanNodeKind::Output(_) => Ok(RuntimeNodeKind::Output),
         PlanNodeKind::Unsupported { .. } => Err(PlanValidationError::UnsupportedNodeType),
@@ -1013,6 +1081,7 @@ fn reject_duplicate_stable_ids(
 fn state_transfer_kind_for_node(node_kind: RuntimeNodeKind) -> Option<StateTransferKind> {
     match node_kind {
         RuntimeNodeKind::Oscillator => Some(StateTransferKind::OscillatorPhase),
+        RuntimeNodeKind::Voice => None,
         RuntimeNodeKind::Gain => Some(StateTransferKind::GainSmoother),
         RuntimeNodeKind::Output => None,
     }

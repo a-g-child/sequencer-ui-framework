@@ -3,6 +3,7 @@ pub const NATIVE_EXECUTION_PLAN_VERSION: u32 = 1;
 pub const NODE_OSCILLATOR: u32 = 1;
 pub const NODE_GAIN: u32 = 2;
 pub const NODE_OUTPUT: u32 = 3;
+pub const NODE_VOICE: u32 = 4;
 
 pub const PARAM_OSCILLATOR_FREQUENCY: u32 = 1;
 pub const PARAM_GAIN_GAIN: u32 = 2;
@@ -31,6 +32,7 @@ pub struct PlanNode {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlanNodeKind {
     Oscillator(OscillatorNodePlan),
+    Voice(VoiceNodePlan),
     Gain(GainNodePlan),
     Output(OutputNodePlan),
     Unsupported { descriptor: u32 },
@@ -40,6 +42,15 @@ pub enum PlanNodeKind {
 pub struct OscillatorNodePlan {
     pub frequency_parameter: ParameterSlotId,
     pub output_buffer: BufferSlotId,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VoiceNodePlan {
+    pub output_buffer: BufferSlotId,
+    pub attack_seconds: f32,
+    pub decay_seconds: f32,
+    pub sustain_level: f32,
+    pub release_seconds: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -121,5 +132,35 @@ pub fn diagnostic_tone_plan(
             },
         ],
         audio_execution_order: vec![NODE_OSCILLATOR, NODE_GAIN, NODE_OUTPUT],
+    }
+}
+
+pub fn monophonic_voice_plan(output_channels: u16) -> NativeExecutionPlan {
+    NativeExecutionPlan {
+        version: NATIVE_EXECUTION_PLAN_VERSION,
+        plan_id: 1,
+        plan_revision: 1,
+        nodes: vec![
+            PlanNode {
+                id: NODE_VOICE,
+                kind: PlanNodeKind::Voice(VoiceNodePlan {
+                    output_buffer: 1,
+                    attack_seconds: 0.0,
+                    decay_seconds: 0.0,
+                    sustain_level: 1.0,
+                    release_seconds: 0.0,
+                }),
+            },
+            PlanNode {
+                id: NODE_OUTPUT,
+                kind: PlanNodeKind::Output(OutputNodePlan {
+                    input_buffer: 1,
+                    output_channels,
+                }),
+            },
+        ],
+        buffers: vec![AudioBufferSlot { id: 1, channels: 1 }],
+        parameters: vec![],
+        audio_execution_order: vec![NODE_VOICE, NODE_OUTPUT],
     }
 }
