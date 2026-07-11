@@ -53,12 +53,19 @@ pub enum ScheduledEngineEvent {
         note: u8,
         at_sample: u64,
     },
+    ArpeggiatorTick {
+        target_node: u32,
+        generation: u64,
+        at_sample: u64,
+    },
 }
 
 impl ScheduledEngineEvent {
     pub fn at_sample(&self) -> u64 {
         match *self {
-            Self::NoteOn { at_sample, .. } | Self::NoteOff { at_sample, .. } => at_sample,
+            Self::NoteOn { at_sample, .. }
+            | Self::NoteOff { at_sample, .. }
+            | Self::ArpeggiatorTick { at_sample, .. } => at_sample,
         }
     }
 }

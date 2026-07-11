@@ -94,6 +94,7 @@ struct ScheduledEventEntry {
     loop_iteration: u64,
     beat_event: Option<ScheduledBeatEvent>,
     plan_revision: Option<PlanRevisionBinding>,
+    future_generation: Option<u64>,
 }
 
 impl ScheduledEventEntry {
@@ -103,13 +104,13 @@ impl ScheduledEventEntry {
 }
 
 struct ScheduledEventSet {
-    entries: [Option<ScheduledEventEntry>; SCHEDULED_EVENT_CAPACITY],
+    entries: Box<[Option<ScheduledEventEntry>]>,
 }
 
 impl Default for ScheduledEventSet {
     fn default() -> Self {
         Self {
-            entries: [None; SCHEDULED_EVENT_CAPACITY],
+            entries: vec![None; SCHEDULED_EVENT_CAPACITY].into_boxed_slice(),
         }
     }
 }
@@ -127,6 +128,7 @@ impl ScheduledEventSet {
             loop_iteration: 0,
             beat_event,
             plan_revision: None,
+            future_generation: None,
         };
 
         if let Some(slot) = self.entries.iter_mut().find(|slot| slot.is_none()) {
@@ -149,6 +151,7 @@ impl ScheduledEventSet {
             loop_iteration: 0,
             beat_event: None,
             plan_revision: Some(plan_revision),
+            future_generation: Some(request.generation),
         };
 
         if let Some(slot) = self.entries.iter_mut().find(|slot| slot.is_none()) {
@@ -277,13 +280,23 @@ fn set_scheduled_event_sample(event: ScheduledEngineEvent, at_sample: u64) -> Sc
             note,
             at_sample,
         },
+        ScheduledEngineEvent::ArpeggiatorTick {
+            target_node,
+            generation,
+            ..
+        } => ScheduledEngineEvent::ArpeggiatorTick {
+            target_node,
+            generation,
+            at_sample,
+        },
     }
 }
 
 fn event_endpoint_for_event(event: ScheduledEngineEvent) -> EventEndpoint {
     match event {
         ScheduledEngineEvent::NoteOn { target_node, .. }
-        | ScheduledEngineEvent::NoteOff { target_node, .. } => EventEndpoint {
+        | ScheduledEngineEvent::NoteOff { target_node, .. }
+        | ScheduledEngineEvent::ArpeggiatorTick { target_node, .. } => EventEndpoint {
             node_id: target_node,
             port_id: engine_protocol::DEFAULT_EVENT_PORT,
         },
@@ -1086,7 +1099,7 @@ impl AudioEngine {
         while let Some(entry) = self.scheduled_events.take_due_before(sample_position) {
             let should_reschedule = self.apply_scheduled_event(&entry);
 
-            if !should_reschedule {
+            if !should_reschedule || entry.plan_revision.is_some() {
                 continue;
             }
 
@@ -1097,6 +1110,11 @@ impl AudioEngine {
     fn apply_scheduled_event(&mut self, entry: &ScheduledEventEntry) -> bool {
         if !self.plan_revision_binding_is_active(entry.plan_revision) {
             self.record_future_plan_revision_discard();
+            return false;
+        }
+
+        if !self.future_event_generation_is_current(entry.source, entry.future_generation) {
+            self.record_future_generation_discard();
             return false;
         }
 
@@ -1111,6 +1129,7 @@ impl AudioEngine {
             ScheduledEngineEvent::NoteOff { .. } => {
                 self.scheduled_test_voice.note_off();
             }
+            ScheduledEngineEvent::ArpeggiatorTick { .. } => {}
         }
 
         true
@@ -1188,6 +1207,42 @@ impl AudioEngine {
         {
             plan.record_future_plan_revision_discard();
         }
+    }
+
+    fn record_future_generation_discard(&mut self) {
+        if let Some(plan) = self.execution_plan.as_mut() {
+            plan.record_future_generation_discard();
+            return;
+        }
+
+        if let Some(plan) = self
+            .crossfade
+            .as_mut()
+            .and_then(|crossfade| crossfade.new_plan.as_mut())
+        {
+            plan.record_future_generation_discard();
+        }
+    }
+
+    fn future_event_generation_is_current(
+        &self,
+        source: EventEndpoint,
+        generation: Option<u64>,
+    ) -> bool {
+        let Some(generation) = generation else {
+            return true;
+        };
+
+        self.execution_plan
+            .as_ref()
+            .map(|plan| plan.future_event_generation_is_current(source, generation))
+            .or_else(|| {
+                self.crossfade
+                    .as_ref()
+                    .and_then(|crossfade| crossfade.new_plan.as_ref())
+                    .map(|plan| plan.future_event_generation_is_current(source, generation))
+            })
+            .unwrap_or(false)
     }
 
     fn reschedule_looped_event(&mut self, mut entry: ScheduledEventEntry) {
@@ -1498,6 +1553,9 @@ impl AudioEngine {
                 diagnostics.future_events_discarded_plan_revision = diagnostics
                     .future_events_discarded_plan_revision
                     .saturating_add(plan_diagnostics.future_events_discarded_plan_revision);
+                diagnostics.future_events_discarded_generation = diagnostics
+                    .future_events_discarded_generation
+                    .saturating_add(plan_diagnostics.future_events_discarded_generation);
             }
         }
 
@@ -1512,12 +1570,14 @@ mod tests {
     use engine_protocol::{
         chorded_instrument_plan, diagnostic_tone_plan, event_endpoint, monophonic_instrument_plan,
         monophonic_voice_plan, scaled_monophonic_instrument_plan, scaled_monophonic_voice_plan,
-        transposed_monophonic_instrument_plan, transposed_monophonic_voice_plan, AudioBufferSlot,
-        EventDelayNodePlan, EventEndpoint, EventInputNodePlan, EventRoute, EventRouteMask,
-        InstrumentNodePlan, OutputNodePlan, PlanNode, PlanNodeKind, ScaleNodePlan,
-        ScheduledBeatEvent, ScheduledEngineEvent, TempoMapSnapshot, TransportLoop,
-        VelocityNodePlan, VoiceNodePlan, EVENT_DELAY_PORT_DELAYED, NODE_EVENT_DELAY,
-        NODE_EVENT_INPUT, NODE_INSTRUMENT, NODE_OUTPUT, NODE_VOICE, PARAM_GAIN_GAIN,
+        transposed_monophonic_instrument_plan, transposed_monophonic_voice_plan,
+        ArpeggiatorNodePlan, AudioBufferSlot, EventDelayNodePlan, EventEndpoint,
+        EventInputNodePlan, EventRoute, EventRouteMask, InstrumentNodePlan, OutputNodePlan,
+        PlanNode, PlanNodeKind, ScaleNodePlan, ScheduledBeatEvent, ScheduledEngineEvent,
+        TempoMapSnapshot, TransportLoop, VelocityNodePlan, VoiceNodePlan, ARPEGGIATOR_PORT_NOTES,
+        ARPEGGIATOR_PORT_TICK, ARPEGGIATOR_PORT_TICK_INPUT, EVENT_DELAY_PORT_DELAYED,
+        NODE_ARPEGGIATOR, NODE_EVENT_DELAY, NODE_EVENT_INPUT, NODE_INSTRUMENT, NODE_OUTPUT,
+        NODE_VOICE, PARAM_GAIN_GAIN,
     };
 
     fn plan_with_identity(
@@ -1614,6 +1674,86 @@ mod tests {
                     source: EventEndpoint {
                         node_id: NODE_EVENT_DELAY,
                         port_id: EVENT_DELAY_PORT_DELAYED,
+                    },
+                    destination: event_endpoint(NODE_INSTRUMENT),
+                    event_mask: EventRouteMask::NOTE,
+                    priority: 0,
+                    enabled: true,
+                },
+            ],
+            audio_execution_order: vec![NODE_INSTRUMENT, NODE_OUTPUT],
+        }
+    }
+
+    fn arpeggiated_instrument_plan_with_identity(
+        plan_id: u64,
+        plan_revision: u64,
+        step_samples: u32,
+        gate_samples: u32,
+    ) -> NativeExecutionPlan {
+        NativeExecutionPlan {
+            version: engine_protocol::NATIVE_EXECUTION_PLAN_VERSION,
+            plan_id,
+            plan_revision,
+            nodes: vec![
+                PlanNode {
+                    id: NODE_EVENT_INPUT,
+                    kind: PlanNodeKind::EventInput(EventInputNodePlan),
+                },
+                PlanNode {
+                    id: NODE_ARPEGGIATOR,
+                    kind: PlanNodeKind::Arpeggiator(ArpeggiatorNodePlan {
+                        step_samples,
+                        gate_samples,
+                        maximum_held_notes: 8,
+                    }),
+                },
+                PlanNode {
+                    id: NODE_INSTRUMENT,
+                    kind: PlanNodeKind::Instrument(InstrumentNodePlan {
+                        output_buffer: 1,
+                        voice_count: 4,
+                        attack_seconds: 0.0,
+                        decay_seconds: 0.0,
+                        sustain_level: 1.0,
+                        release_seconds: 0.0,
+                    }),
+                },
+                PlanNode {
+                    id: NODE_OUTPUT,
+                    kind: PlanNodeKind::Output(OutputNodePlan {
+                        input_buffer: 1,
+                        output_channels: 2,
+                    }),
+                },
+            ],
+            buffers: vec![AudioBufferSlot { id: 1, channels: 1 }],
+            parameters: vec![],
+            event_routes: vec![
+                EventRoute {
+                    source: event_endpoint(NODE_EVENT_INPUT),
+                    destination: event_endpoint(NODE_ARPEGGIATOR),
+                    event_mask: EventRouteMask::NOTE,
+                    priority: 0,
+                    enabled: true,
+                },
+                EventRoute {
+                    source: EventEndpoint {
+                        node_id: NODE_ARPEGGIATOR,
+                        port_id: ARPEGGIATOR_PORT_TICK,
+                    },
+                    destination: EventEndpoint {
+                        node_id: NODE_ARPEGGIATOR,
+                        port_id: ARPEGGIATOR_PORT_TICK_INPUT,
+                    },
+                    event_mask: EventRouteMask::TICK,
+                    priority: 0,
+                    enabled: true,
+                },
+                EventRoute {
+                    source: EventEndpoint {
+                        node_id: NODE_ARPEGGIATOR,
+                        port_id: ARPEGGIATOR_PORT_NOTES,
                     },
                     destination: event_endpoint(NODE_INSTRUMENT),
                     event_mask: EventRouteMask::NOTE,
@@ -2435,6 +2575,52 @@ mod tests {
 
         for _ in 0..4 {
             grouped_output.extend(process_frames(&mut grouped, 16));
+        }
+
+        assert_outputs_close(&single_output, &grouped_output);
+    }
+
+    #[test]
+    fn arpeggiated_instrument_output_is_independent_of_callback_grouping() {
+        let (command_sender_a, command_receiver_a) = crate::engine_command_queue();
+        let (telemetry_sender_a, _telemetry_receiver_a) = crate::engine_telemetry_queue();
+        let (command_sender_b, command_receiver_b) = crate::engine_command_queue();
+        let (telemetry_sender_b, _telemetry_receiver_b) = crate::engine_telemetry_queue();
+        let plan = arpeggiated_instrument_plan_with_identity(1, 1, 16, 8);
+        let mut single_block = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver_a, telemetry_sender_a);
+        let mut grouped = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver_b, telemetry_sender_b);
+
+        for sender in [&command_sender_a, &command_sender_b] {
+            sender
+                .push(EngineCommand::TransportStart {
+                    id: 1,
+                    at_sample: 0,
+                })
+                .unwrap();
+            sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 2,
+                    event: ScheduledEngineEvent::NoteOn {
+                        target_node: NODE_EVENT_INPUT,
+                        note: 60,
+                        velocity: 0.5,
+                        at_sample: 0,
+                    },
+                })
+                .unwrap();
+        }
+
+        let single_output = process_frames(&mut single_block, 128);
+        let mut grouped_output = Vec::new();
+
+        for _ in 0..4 {
+            grouped_output.extend(process_frames(&mut grouped, 32));
         }
 
         assert_outputs_close(&single_output, &grouped_output);

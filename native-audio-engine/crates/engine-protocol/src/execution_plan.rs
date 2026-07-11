@@ -12,6 +12,7 @@ pub const NODE_CHORD: u32 = 9;
 pub const NODE_VELOCITY: u32 = 10;
 pub const NODE_EVENT_SPLITTER: u32 = 11;
 pub const NODE_EVENT_DELAY: u32 = 12;
+pub const NODE_ARPEGGIATOR: u32 = 13;
 
 pub const DEFAULT_EVENT_PORT: u16 = 0;
 pub const SCALE_PORT_INPUT: u16 = 0;
@@ -19,6 +20,10 @@ pub const SCALE_PORT_ACCEPTED: u16 = 0;
 pub const SCALE_PORT_REJECTED: u16 = 1;
 pub const EVENT_DELAY_PORT_INPUT: u16 = 0;
 pub const EVENT_DELAY_PORT_DELAYED: u16 = 1;
+pub const ARPEGGIATOR_PORT_INPUT: u16 = 0;
+pub const ARPEGGIATOR_PORT_TICK_INPUT: u16 = 1;
+pub const ARPEGGIATOR_PORT_NOTES: u16 = 1;
+pub const ARPEGGIATOR_PORT_TICK: u16 = 2;
 
 pub const PARAM_OSCILLATOR_FREQUENCY: u32 = 1;
 pub const PARAM_GAIN_GAIN: u32 = 2;
@@ -66,18 +71,35 @@ pub struct FutureEventRequest {
     pub source: EventEndpoint,
     pub event: crate::ScheduledEngineEvent,
     pub at_sample: u64,
+    pub generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EventRouteMask {
     pub note: bool,
+    pub tick: bool,
 }
 
 impl EventRouteMask {
-    pub const NOTE: Self = Self { note: true };
+    pub const NOTE: Self = Self {
+        note: true,
+        tick: false,
+    };
+    pub const TICK: Self = Self {
+        note: false,
+        tick: true,
+    };
 
     pub fn accepts_note(self) -> bool {
         self.note
+    }
+
+    pub fn accepts_tick(self) -> bool {
+        self.tick
+    }
+
+    pub fn accepts_any(self) -> bool {
+        self.note || self.tick
     }
 }
 
@@ -92,6 +114,7 @@ pub enum PlanNodeKind {
     EventInput(EventInputNodePlan),
     EventSplitter(EventSplitterNodePlan),
     EventDelay(EventDelayNodePlan),
+    Arpeggiator(ArpeggiatorNodePlan),
     Oscillator(OscillatorNodePlan),
     Transpose(TransposeNodePlan),
     Scale(ScaleNodePlan),
@@ -115,6 +138,13 @@ pub struct EventSplitterNodePlan;
 #[derive(Clone, Debug, PartialEq)]
 pub struct EventDelayNodePlan {
     pub delay_samples: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ArpeggiatorNodePlan {
+    pub step_samples: u32,
+    pub gate_samples: u32,
+    pub maximum_held_notes: u16,
 }
 
 #[derive(Clone, Debug, PartialEq)]

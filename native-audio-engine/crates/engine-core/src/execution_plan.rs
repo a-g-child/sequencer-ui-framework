@@ -11,8 +11,10 @@ use engine_dsp::{MonophonicVoice, MonophonicVoiceState, SmoothedParameter};
 use engine_protocol::{
     AudioBufferSlot, BufferSlotId, EventEndpoint, EventGraphDiagnostics, EventRouteMask,
     FutureEventRequest, NativeExecutionPlan, NodeId, ParameterSlotId, PlanNodeKind,
-    ScheduledEngineEvent, DEFAULT_EVENT_PORT, EVENT_DELAY_PORT_DELAYED, EVENT_DELAY_PORT_INPUT,
-    NATIVE_EXECUTION_PLAN_VERSION, SCALE_PORT_ACCEPTED, SCALE_PORT_INPUT, SCALE_PORT_REJECTED,
+    ScheduledEngineEvent, ARPEGGIATOR_PORT_INPUT, ARPEGGIATOR_PORT_NOTES, ARPEGGIATOR_PORT_TICK,
+    ARPEGGIATOR_PORT_TICK_INPUT, DEFAULT_EVENT_PORT, EVENT_DELAY_PORT_DELAYED,
+    EVENT_DELAY_PORT_INPUT, NATIVE_EXECUTION_PLAN_VERSION, SCALE_PORT_ACCEPTED, SCALE_PORT_INPUT,
+    SCALE_PORT_REJECTED,
 };
 
 pub const MAX_EVENT_DEPTH: u16 = 32;
@@ -20,6 +22,7 @@ pub const MAX_EVENTS_PER_BLOCK: usize = 1024;
 pub const MAX_FUTURE_EVENTS_PER_DISPATCH: usize = 1024;
 pub const MAX_CHORD_INTERVALS: usize = 16;
 pub const MAX_INSTRUMENT_VOICES: u16 = 128;
+pub const MAX_ARPEGGIATOR_HELD_NOTES: u16 = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlanValidationError {
@@ -39,6 +42,7 @@ pub enum PlanValidationError {
     IncompatibleEventRoute,
     DuplicateEventPort,
     InvalidEventDelay,
+    InvalidArpeggiatorConfig,
     InvalidChordIntervals,
     DuplicateChordInterval,
     InvalidVelocityTransform,
@@ -133,6 +137,7 @@ pub enum RuntimeNodeKind {
     EventInput,
     EventSplitter,
     EventDelay,
+    Arpeggiator,
     Oscillator,
     Transpose,
     Scale,
@@ -157,7 +162,10 @@ pub struct EventPortMetadata {
     pub mask: EventRouteMask,
 }
 
-const EMPTY_EVENT_MASK: EventRouteMask = EventRouteMask { note: false };
+const EMPTY_EVENT_MASK: EventRouteMask = EventRouteMask {
+    note: false,
+    tick: false,
+};
 const DEFAULT_EVENT_PORTS: [EventPortMetadata; 2] = [
     EventPortMetadata {
         id: DEFAULT_EVENT_PORT,
@@ -219,6 +227,28 @@ const EVENT_DELAY_PORTS: [EventPortMetadata; 2] = [
         id: EVENT_DELAY_PORT_DELAYED,
         direction: EventPortDirection::Output,
         mask: EventRouteMask::NOTE,
+    },
+];
+const ARPEGGIATOR_EVENT_PORTS: [EventPortMetadata; 4] = [
+    EventPortMetadata {
+        id: ARPEGGIATOR_PORT_INPUT,
+        direction: EventPortDirection::Input,
+        mask: EventRouteMask::NOTE,
+    },
+    EventPortMetadata {
+        id: ARPEGGIATOR_PORT_TICK_INPUT,
+        direction: EventPortDirection::Input,
+        mask: EventRouteMask::TICK,
+    },
+    EventPortMetadata {
+        id: ARPEGGIATOR_PORT_NOTES,
+        direction: EventPortDirection::Output,
+        mask: EventRouteMask::NOTE,
+    },
+    EventPortMetadata {
+        id: ARPEGGIATOR_PORT_TICK,
+        direction: EventPortDirection::Output,
+        mask: EventRouteMask::TICK,
     },
 ];
 
@@ -322,6 +352,19 @@ impl PreparedExecutionPlan {
                     Ok(RuntimeNode::EventDelay(EventDelayNode {
                         delay_samples: node_plan.delay_samples,
                     }))
+                }
+                PlanNodeKind::Arpeggiator(node_plan) => {
+                    validate_arpeggiator_config(
+                        node_plan.step_samples,
+                        node_plan.gate_samples,
+                        node_plan.maximum_held_notes,
+                    )?;
+
+                    Ok(RuntimeNode::Arpeggiator(ArpeggiatorNode::new(
+                        node_plan.step_samples,
+                        node_plan.gate_samples,
+                        node_plan.maximum_held_notes,
+                    )))
                 }
                 PlanNodeKind::Oscillator(node_plan) => {
                     let output_buffer = buffer_index(plan, node_plan.output_buffer)?;
@@ -715,6 +758,26 @@ impl PreparedExecutionPlan {
             .event_graph_diagnostics
             .future_events_discarded_plan_revision
             .saturating_add(1);
+    }
+
+    pub fn record_future_generation_discard(&mut self) {
+        self.event_graph_diagnostics
+            .future_events_discarded_generation = self
+            .event_graph_diagnostics
+            .future_events_discarded_generation
+            .saturating_add(1);
+    }
+
+    pub fn future_event_generation_is_current(
+        &self,
+        source: EventEndpoint,
+        generation: u64,
+    ) -> bool {
+        let Some(source_node_index) = self.event_graph.source_node_index(source.node_id) else {
+            return false;
+        };
+
+        self.nodes[source_node_index as usize].future_generation_is_current(generation)
     }
 
     pub fn event_graph_diagnostics(&self) -> EventGraphDiagnostics {
@@ -1147,6 +1210,7 @@ enum RuntimeNode {
     EventInput(EventInputNode),
     EventSplitter(EventSplitterNode),
     EventDelay(EventDelayNode),
+    Arpeggiator(ArpeggiatorNode),
     Oscillator(OscillatorNode),
     Transpose(TransposeNode),
     Scale(ScaleNode),
@@ -1176,6 +1240,7 @@ impl RuntimeNode {
             Self::EventInput(_) => {}
             Self::EventSplitter(_) => {}
             Self::EventDelay(_) => {}
+            Self::Arpeggiator(_) => {}
             Self::Oscillator(node) => node.process(context, buffers, parameters),
             Self::Transpose(_) => {}
             Self::Scale(_) => {}
@@ -1193,6 +1258,7 @@ impl RuntimeNode {
     fn reset(&mut self) {
         match self {
             Self::Oscillator(node) => node.phase = 0.0,
+            Self::Arpeggiator(node) => node.reset(),
             Self::Instrument(node) => node.panic(),
             Self::Voice(node) => node.voice.panic(),
             _ => {}
@@ -1204,6 +1270,7 @@ impl RuntimeNode {
             Self::EventInput(_) => RuntimeNodeKind::EventInput,
             Self::EventSplitter(_) => RuntimeNodeKind::EventSplitter,
             Self::EventDelay(_) => RuntimeNodeKind::EventDelay,
+            Self::Arpeggiator(_) => RuntimeNodeKind::Arpeggiator,
             Self::Oscillator(_) => RuntimeNodeKind::Oscillator,
             Self::Transpose(_) => RuntimeNodeKind::Transpose,
             Self::Scale(_) => RuntimeNodeKind::Scale,
@@ -1273,6 +1340,7 @@ impl RuntimeNode {
         match self {
             Self::EventSplitter(node) => node.process_event(event, context, emitter),
             Self::EventDelay(node) => node.process_event(event, context, future_emitter),
+            Self::Arpeggiator(node) => node.process_event(event, context, emitter, future_emitter),
             Self::Transpose(node) => node.process_event(event, emitter),
             Self::Scale(node) => node.process_event(event, emitter),
             Self::Velocity(node) => node.process_event(event, emitter),
@@ -1288,12 +1356,34 @@ impl RuntimeNode {
             _ => false,
         }
     }
+
+    fn future_generation_is_current(&self, generation: u64) -> bool {
+        match self {
+            Self::Arpeggiator(node) => node.generation_is_current(generation),
+            _ => generation == 0,
+        }
+    }
 }
 
 struct EventInputNode;
 
 struct EventDelayNode {
     delay_samples: u32,
+}
+
+struct ArpeggiatorNode {
+    held_notes: Box<[Option<HeldNote>]>,
+    step_samples: u32,
+    gate_samples: u32,
+    held_count: usize,
+    current_index: usize,
+    generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct HeldNote {
+    note: u8,
+    velocity: f32,
 }
 
 struct EventSplitterNode;
@@ -1305,6 +1395,10 @@ impl EventDelayNode {
         context: RuntimeEventContext,
         future_emitter: &mut FutureEventEmitter<'_>,
     ) -> bool {
+        if context.input_port != EVENT_DELAY_PORT_INPUT {
+            return false;
+        }
+
         let at_sample = context
             .sample_position
             .saturating_add(self.delay_samples as u64);
@@ -1312,6 +1406,199 @@ impl EventDelayNode {
         future_emitter
             .request_from(EVENT_DELAY_PORT_DELAYED, *event, at_sample)
             .is_ok()
+    }
+}
+
+impl ArpeggiatorNode {
+    fn new(step_samples: u32, gate_samples: u32, maximum_held_notes: u16) -> Self {
+        Self {
+            held_notes: vec![None; maximum_held_notes as usize].into_boxed_slice(),
+            step_samples,
+            gate_samples,
+            held_count: 0,
+            current_index: 0,
+            generation: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.held_notes.fill(None);
+        self.held_count = 0;
+        self.current_index = 0;
+        self.generation = self.generation.saturating_add(1);
+    }
+
+    fn process_event(
+        &mut self,
+        event: &ScheduledEngineEvent,
+        context: RuntimeEventContext,
+        emitter: &mut EventEmitter<'_>,
+        future_emitter: &mut FutureEventEmitter<'_>,
+    ) -> bool {
+        match *event {
+            ScheduledEngineEvent::NoteOn { note, velocity, .. } => {
+                if context.input_port != ARPEGGIATOR_PORT_INPUT {
+                    return false;
+                }
+
+                self.add_or_update_note(note, velocity);
+                self.schedule_tick(context.sample_position, future_emitter);
+                true
+            }
+            ScheduledEngineEvent::NoteOff { note, .. } => {
+                if context.input_port != ARPEGGIATOR_PORT_INPUT {
+                    return false;
+                }
+
+                self.remove_note(note);
+                true
+            }
+            ScheduledEngineEvent::ArpeggiatorTick { generation, .. } => {
+                if context.input_port != ARPEGGIATOR_PORT_TICK_INPUT
+                    || generation != self.generation
+                    || self.held_count == 0
+                {
+                    return false;
+                }
+
+                let Some(note) = self.next_note() else {
+                    return false;
+                };
+                let at_sample = context.sample_position;
+
+                let note_on = ScheduledEngineEvent::NoteOn {
+                    target_node: future_emitter.source_node_id(),
+                    note: note.note,
+                    velocity: note.velocity,
+                    at_sample,
+                };
+                let note_off = ScheduledEngineEvent::NoteOff {
+                    target_node: future_emitter.source_node_id(),
+                    note: note.note,
+                    at_sample: at_sample.saturating_add(self.gate_samples as u64),
+                };
+
+                let emitted = emitter.emit_from(ARPEGGIATOR_PORT_NOTES, note_on).is_ok();
+                let _ = future_emitter.request_from_generation(
+                    ARPEGGIATOR_PORT_NOTES,
+                    note_off,
+                    at_sample.saturating_add(self.gate_samples as u64),
+                    0,
+                );
+                self.schedule_tick(at_sample, future_emitter);
+                emitted
+            }
+        }
+    }
+
+    fn add_or_update_note(&mut self, note: u8, velocity: f32) {
+        if let Some(existing) = self
+            .held_notes
+            .iter_mut()
+            .filter_map(Option::as_mut)
+            .find(|held| held.note == note)
+        {
+            existing.velocity = velocity;
+            self.invalidate_generation();
+            return;
+        }
+
+        if self.held_count >= self.held_notes.len() {
+            return;
+        }
+
+        if let Some(slot) = self.held_notes.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(HeldNote { note, velocity });
+            self.held_count += 1;
+            self.sort_held_notes();
+            self.invalidate_generation();
+        }
+    }
+
+    fn remove_note(&mut self, note: u8) {
+        let Some(slot) = self
+            .held_notes
+            .iter_mut()
+            .find(|slot| slot.is_some_and(|held| held.note == note))
+        else {
+            return;
+        };
+
+        *slot = None;
+        self.held_count = self.held_count.saturating_sub(1);
+        self.current_index = self.current_index.min(self.held_count.saturating_sub(1));
+        self.sort_held_notes();
+        self.invalidate_generation();
+    }
+
+    fn invalidate_generation(&mut self) {
+        self.generation = self.generation.saturating_add(1);
+        self.current_index = 0;
+    }
+
+    fn sort_held_notes(&mut self) {
+        let mut write_index = 0;
+
+        for read_index in 0..self.held_notes.len() {
+            if let Some(note) = self.held_notes[read_index].take() {
+                self.held_notes[write_index] = Some(note);
+                write_index += 1;
+            }
+        }
+
+        for slot in self.held_notes.iter_mut().skip(write_index) {
+            *slot = None;
+        }
+
+        for index in 1..write_index {
+            let note = self.held_notes[index]
+                .take()
+                .expect("compacted held note should exist");
+            let mut insert_index = index;
+
+            while insert_index > 0
+                && self.held_notes[insert_index - 1]
+                    .is_some_and(|candidate| candidate.note > note.note)
+            {
+                self.held_notes[insert_index] = self.held_notes[insert_index - 1].take();
+                insert_index -= 1;
+            }
+
+            self.held_notes[insert_index] = Some(note);
+        }
+    }
+
+    fn next_note(&mut self) -> Option<HeldNote> {
+        if self.held_count == 0 {
+            return None;
+        }
+
+        let note = self.held_notes.get(self.current_index).copied().flatten()?;
+
+        self.current_index = (self.current_index + 1) % self.held_count;
+        Some(note)
+    }
+
+    fn schedule_tick(&self, sample_position: u64, future_emitter: &mut FutureEventEmitter<'_>) {
+        if self.held_count == 0 {
+            return;
+        }
+
+        let at_sample = sample_position.saturating_add(self.step_samples as u64);
+        let _ = future_emitter.request_from_generation(
+            ARPEGGIATOR_PORT_TICK,
+            ScheduledEngineEvent::ArpeggiatorTick {
+                target_node: future_emitter.source_node_id(),
+                generation: self.generation,
+                at_sample,
+            },
+            at_sample,
+            self.generation,
+        );
+    }
+
+    fn generation_is_current(&self, generation: u64) -> bool {
+        generation == 0 || generation == self.generation
     }
 }
 
@@ -1437,6 +1724,7 @@ impl TransposeNode {
                     })
                     .is_ok()
             }
+            ScheduledEngineEvent::ArpeggiatorTick { .. } => false,
         }
     }
 }
@@ -1461,6 +1749,7 @@ impl ScaleNode {
         let note = match *event {
             ScheduledEngineEvent::NoteOn { note, .. }
             | ScheduledEngineEvent::NoteOff { note, .. } => note,
+            ScheduledEngineEvent::ArpeggiatorTick { .. } => return false,
         };
 
         if !self.accepts_note(note) {
@@ -1505,6 +1794,7 @@ impl VelocityNode {
                     .is_ok()
             }
             ScheduledEngineEvent::NoteOff { .. } => emitter.emit(*event).is_ok(),
+            ScheduledEngineEvent::ArpeggiatorTick { .. } => false,
         }
     }
 }
@@ -1568,6 +1858,7 @@ impl ChordNode {
 
                 true
             }
+            ScheduledEngineEvent::ArpeggiatorTick { .. } => false,
         }
     }
 }
@@ -1606,6 +1897,7 @@ impl InstrumentNode {
                 self.note_off(note);
                 true
             }
+            ScheduledEngineEvent::ArpeggiatorTick { .. } => false,
         }
     }
 
@@ -1784,6 +2076,7 @@ impl MonoInstrumentNode {
                 self.voice.note_off(note);
                 true
             }
+            ScheduledEngineEvent::ArpeggiatorTick { .. } => false,
         }
     }
 }
@@ -1877,6 +2170,7 @@ impl PreparedEventRoute {
             ScheduledEngineEvent::NoteOn { .. } | ScheduledEngineEvent::NoteOff { .. } => {
                 self.event_mask.accepts_note()
             }
+            ScheduledEngineEvent::ArpeggiatorTick { .. } => self.event_mask.accepts_tick(),
         }
     }
 }
@@ -1914,7 +2208,7 @@ impl PreparedEventGraph {
             .enumerate()
             .filter(|(_, route)| route.enabled)
             .map(|(plan_order, route)| {
-                if !route.event_mask.accepts_note() {
+                if !route.event_mask.accepts_any() {
                     return Err(PlanValidationError::InvalidEventRouteMask);
                 }
 
@@ -2225,6 +2519,16 @@ impl FutureEventEmitter<'_> {
         event: ScheduledEngineEvent,
         at_sample: u64,
     ) -> Result<(), FutureEventRequest> {
+        self.request_from_generation(output_port, event, at_sample, 0)
+    }
+
+    fn request_from_generation(
+        &mut self,
+        output_port: u16,
+        event: ScheduledEngineEvent,
+        at_sample: u64,
+        generation: u64,
+    ) -> Result<(), FutureEventRequest> {
         if at_sample <= self.current_sample {
             self.diagnostics.future_events_rejected_late = self
                 .diagnostics
@@ -2237,6 +2541,7 @@ impl FutureEventEmitter<'_> {
                 },
                 event,
                 at_sample,
+                generation,
             });
         }
 
@@ -2247,6 +2552,7 @@ impl FutureEventEmitter<'_> {
             },
             event: set_event_sample(event, at_sample),
             at_sample,
+            generation,
         };
 
         if self.queue.push(request).is_err() {
@@ -2261,12 +2567,17 @@ impl FutureEventEmitter<'_> {
             self.diagnostics.future_events_requested.saturating_add(1);
         Ok(())
     }
+
+    fn source_node_id(&self) -> NodeId {
+        self.source_node_id
+    }
 }
 
 fn event_endpoint_for_event(event: ScheduledEngineEvent) -> EventEndpoint {
     match event {
         ScheduledEngineEvent::NoteOn { target_node, .. }
-        | ScheduledEngineEvent::NoteOff { target_node, .. } => EventEndpoint {
+        | ScheduledEngineEvent::NoteOff { target_node, .. }
+        | ScheduledEngineEvent::ArpeggiatorTick { target_node, .. } => EventEndpoint {
             node_id: target_node,
             port_id: DEFAULT_EVENT_PORT,
         },
@@ -2291,6 +2602,15 @@ fn set_event_sample(event: ScheduledEngineEvent, at_sample: u64) -> ScheduledEng
         } => ScheduledEngineEvent::NoteOff {
             target_node,
             note,
+            at_sample,
+        },
+        ScheduledEngineEvent::ArpeggiatorTick {
+            target_node,
+            generation,
+            ..
+        } => ScheduledEngineEvent::ArpeggiatorTick {
+            target_node,
+            generation,
             at_sample,
         },
     }
@@ -2329,6 +2649,9 @@ fn add_event_graph_diagnostics(total: &mut EventGraphDiagnostics, delta: EventGr
     total.future_events_discarded_plan_revision = total
         .future_events_discarded_plan_revision
         .saturating_add(delta.future_events_discarded_plan_revision);
+    total.future_events_discarded_generation = total
+        .future_events_discarded_generation
+        .saturating_add(delta.future_events_discarded_generation);
 }
 
 #[cfg(test)]
@@ -2517,6 +2840,7 @@ fn event_ports_for_node(kind: &PlanNodeKind) -> &'static [EventPortMetadata] {
     match kind {
         PlanNodeKind::EventSplitter(_) => &EVENT_SPLITTER_PORTS,
         PlanNodeKind::EventDelay(_) => &EVENT_DELAY_PORTS,
+        PlanNodeKind::Arpeggiator(_) => &ARPEGGIATOR_EVENT_PORTS,
         PlanNodeKind::Scale(_) => &SCALE_EVENT_PORTS,
         _ => &DEFAULT_EVENT_PORTS,
     }
@@ -2548,6 +2872,10 @@ fn validate_event_endpoint(
     };
 
     if event_mask.accepts_note() && !port.mask.accepts_note() {
+        return Err(PlanValidationError::IncompatibleEventRoute);
+    }
+
+    if event_mask.accepts_tick() && !port.mask.accepts_tick() {
         return Err(PlanValidationError::IncompatibleEventRoute);
     }
 
@@ -2651,6 +2979,23 @@ fn validate_instrument_voice_count(voice_count: u16) -> Result<(), PlanValidatio
     Ok(())
 }
 
+fn validate_arpeggiator_config(
+    step_samples: u32,
+    gate_samples: u32,
+    maximum_held_notes: u16,
+) -> Result<(), PlanValidationError> {
+    if step_samples == 0
+        || gate_samples == 0
+        || gate_samples >= step_samples
+        || maximum_held_notes == 0
+        || maximum_held_notes > MAX_ARPEGGIATOR_HELD_NOTES
+    {
+        return Err(PlanValidationError::InvalidArpeggiatorConfig);
+    }
+
+    Ok(())
+}
+
 fn validate_voice_config(config: VoiceConfig) -> Result<(), PlanValidationError> {
     if !config.attack_seconds.is_finite()
         || !config.decay_seconds.is_finite()
@@ -2668,6 +3013,7 @@ fn runtime_node_kind(kind: &PlanNodeKind) -> Result<RuntimeNodeKind, PlanValidat
         PlanNodeKind::EventInput(_) => Ok(RuntimeNodeKind::EventInput),
         PlanNodeKind::EventSplitter(_) => Ok(RuntimeNodeKind::EventSplitter),
         PlanNodeKind::EventDelay(_) => Ok(RuntimeNodeKind::EventDelay),
+        PlanNodeKind::Arpeggiator(_) => Ok(RuntimeNodeKind::Arpeggiator),
         PlanNodeKind::Oscillator(_) => Ok(RuntimeNodeKind::Oscillator),
         PlanNodeKind::Transpose(_) => Ok(RuntimeNodeKind::Transpose),
         PlanNodeKind::Scale(_) => Ok(RuntimeNodeKind::Scale),
@@ -2718,6 +3064,7 @@ fn state_transfer_kind_for_node(node_kind: RuntimeNodeKind) -> Option<StateTrans
         RuntimeNodeKind::EventInput => None,
         RuntimeNodeKind::EventSplitter => None,
         RuntimeNodeKind::EventDelay => None,
+        RuntimeNodeKind::Arpeggiator => None,
         RuntimeNodeKind::Oscillator => Some(StateTransferKind::OscillatorPhase),
         RuntimeNodeKind::Transpose => None,
         RuntimeNodeKind::Scale => None,
@@ -2789,11 +3136,13 @@ mod tests {
     use super::*;
     use engine_protocol::{
         chorded_instrument_plan, diagnostic_tone_plan, event_endpoint, monophonic_instrument_plan,
-        monophonic_voice_plan, transposed_monophonic_voice_plan, AudioBufferSlot, ChordNodePlan,
-        EventDelayNodePlan, EventInputNodePlan, EventRoute, EventRouteMask, EventSplitterNodePlan,
-        GainNodePlan, InstrumentNodePlan, NativeExecutionPlan, OscillatorNodePlan, OutputNodePlan,
-        PlanNode, PlanNodeKind, ScaleNodePlan, ScheduledEngineEvent, TransposeNodePlan,
-        VelocityNodePlan, DEFAULT_EVENT_PORT, EVENT_DELAY_PORT_DELAYED, NODE_CHORD,
+        monophonic_voice_plan, transposed_monophonic_voice_plan, ArpeggiatorNodePlan,
+        AudioBufferSlot, ChordNodePlan, EventDelayNodePlan, EventInputNodePlan, EventRoute,
+        EventRouteMask, EventSplitterNodePlan, GainNodePlan, InstrumentNodePlan,
+        NativeExecutionPlan, OscillatorNodePlan, OutputNodePlan, PlanNode, PlanNodeKind,
+        ScaleNodePlan, ScheduledEngineEvent, TransposeNodePlan, VelocityNodePlan,
+        ARPEGGIATOR_PORT_NOTES, ARPEGGIATOR_PORT_TICK, ARPEGGIATOR_PORT_TICK_INPUT,
+        DEFAULT_EVENT_PORT, EVENT_DELAY_PORT_DELAYED, NODE_ARPEGGIATOR, NODE_CHORD,
         NODE_EVENT_DELAY, NODE_EVENT_INPUT, NODE_EVENT_SPLITTER, NODE_GAIN, NODE_INSTRUMENT,
         NODE_OSCILLATOR, NODE_OUTPUT, NODE_SCALE, NODE_TRANSPOSE, NODE_VELOCITY, NODE_VOICE,
         PARAM_GAIN_GAIN, PARAM_OSCILLATOR_FREQUENCY, SCALE_PORT_ACCEPTED, SCALE_PORT_REJECTED,
@@ -3433,6 +3782,84 @@ mod tests {
         }
     }
 
+    fn arpeggiator_to_recording_plan(
+        step_samples: u32,
+        gate_samples: u32,
+        maximum_held_notes: u16,
+    ) -> NativeExecutionPlan {
+        NativeExecutionPlan {
+            version: NATIVE_EXECUTION_PLAN_VERSION,
+            plan_id: 1,
+            plan_revision: 1,
+            nodes: vec![
+                PlanNode {
+                    id: NODE_EVENT_INPUT,
+                    kind: PlanNodeKind::EventInput(EventInputNodePlan),
+                },
+                PlanNode {
+                    id: NODE_ARPEGGIATOR,
+                    kind: PlanNodeKind::Arpeggiator(ArpeggiatorNodePlan {
+                        step_samples,
+                        gate_samples,
+                        maximum_held_notes,
+                    }),
+                },
+                PlanNode {
+                    id: NODE_VOICE,
+                    kind: PlanNodeKind::Voice(engine_protocol::VoiceNodePlan {
+                        output_buffer: 1,
+                        attack_seconds: 0.0,
+                        decay_seconds: 0.0,
+                        sustain_level: 1.0,
+                        release_seconds: 0.0,
+                    }),
+                },
+                PlanNode {
+                    id: NODE_OUTPUT,
+                    kind: PlanNodeKind::Output(OutputNodePlan {
+                        input_buffer: 1,
+                        output_channels: 2,
+                    }),
+                },
+            ],
+            buffers: vec![AudioBufferSlot { id: 1, channels: 1 }],
+            parameters: vec![],
+            event_routes: vec![
+                EventRoute {
+                    source: event_endpoint(NODE_EVENT_INPUT),
+                    destination: event_endpoint(NODE_ARPEGGIATOR),
+                    event_mask: EventRouteMask::NOTE,
+                    priority: 0,
+                    enabled: true,
+                },
+                EventRoute {
+                    source: EventEndpoint {
+                        node_id: NODE_ARPEGGIATOR,
+                        port_id: ARPEGGIATOR_PORT_TICK,
+                    },
+                    destination: EventEndpoint {
+                        node_id: NODE_ARPEGGIATOR,
+                        port_id: ARPEGGIATOR_PORT_TICK_INPUT,
+                    },
+                    event_mask: EventRouteMask::TICK,
+                    priority: 0,
+                    enabled: true,
+                },
+                EventRoute {
+                    source: EventEndpoint {
+                        node_id: NODE_ARPEGGIATOR,
+                        port_id: ARPEGGIATOR_PORT_NOTES,
+                    },
+                    destination: event_endpoint(NODE_VOICE),
+                    event_mask: EventRouteMask::NOTE,
+                    priority: 0,
+                    enabled: true,
+                },
+            ],
+            audio_execution_order: vec![NODE_VOICE, NODE_OUTPUT],
+        }
+    }
+
     fn note_on(source_node: u32, note: u8, velocity: f32, at_sample: u64) -> ScheduledEngineEvent {
         ScheduledEngineEvent::NoteOn {
             target_node: source_node,
@@ -3730,6 +4157,173 @@ mod tests {
             MAX_FUTURE_EVENTS_PER_DISPATCH as u64
         );
         assert_eq!(diagnostics.future_events_dropped_capacity, 1);
+    }
+
+    #[test]
+    fn arpeggiator_schedules_first_tick_from_held_note() {
+        let plan = arpeggiator_to_recording_plan(8, 3, 4);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.75, 4)));
+        assert!(recorded_events(&prepared, 2).is_empty());
+
+        let request = prepared.take_future_event_request().unwrap();
+
+        assert_eq!(
+            request.source,
+            EventEndpoint {
+                node_id: NODE_ARPEGGIATOR,
+                port_id: ARPEGGIATOR_PORT_TICK,
+            }
+        );
+        assert_eq!(request.at_sample, 12);
+        assert_eq!(request.generation, 1);
+        assert_eq!(
+            request.event,
+            ScheduledEngineEvent::ArpeggiatorTick {
+                target_node: NODE_ARPEGGIATOR,
+                generation: 1,
+                at_sample: 12,
+            }
+        );
+    }
+
+    #[test]
+    fn arpeggiator_tick_emits_note_and_schedules_gate_and_next_tick() {
+        let plan = arpeggiator_to_recording_plan(8, 3, 4);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.75, 0)));
+        let tick = prepared.take_future_event_request().unwrap();
+
+        assert!(prepared.dispatch_event_from(tick.source, tick.event));
+        assert_eq!(
+            recorded_events(&prepared, 2),
+            &[ScheduledEngineEvent::NoteOn {
+                target_node: NODE_ARPEGGIATOR,
+                note: 60,
+                velocity: 0.75,
+                at_sample: 8,
+            }]
+        );
+
+        let note_off = prepared.take_future_event_request().unwrap();
+        let next_tick = prepared.take_future_event_request().unwrap();
+
+        assert_eq!(
+            note_off.source,
+            EventEndpoint {
+                node_id: NODE_ARPEGGIATOR,
+                port_id: ARPEGGIATOR_PORT_NOTES,
+            }
+        );
+        assert_eq!(note_off.at_sample, 11);
+        assert_eq!(note_off.generation, 0);
+        assert_eq!(
+            note_off.event,
+            ScheduledEngineEvent::NoteOff {
+                target_node: NODE_ARPEGGIATOR,
+                note: 60,
+                at_sample: 11,
+            }
+        );
+        assert_eq!(next_tick.at_sample, 16);
+        assert_eq!(next_tick.generation, 1);
+    }
+
+    #[test]
+    fn arpeggiator_orders_held_notes_ascending() {
+        let plan = arpeggiator_to_recording_plan(8, 2, 4);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 64, 0.5, 0)));
+        let stale_tick = prepared.take_future_event_request().unwrap();
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.75, 1)));
+        let tick = prepared.take_future_event_request().unwrap();
+
+        assert!(!prepared.dispatch_event_from(stale_tick.source, stale_tick.event));
+        assert!(prepared.dispatch_event_from(tick.source, tick.event));
+        let _note_off = prepared.take_future_event_request().unwrap();
+        let next_tick = prepared.take_future_event_request().unwrap();
+        assert!(prepared.dispatch_event_from(next_tick.source, next_tick.event));
+
+        assert_eq!(
+            recorded_events(&prepared, 2),
+            &[
+                ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_ARPEGGIATOR,
+                    note: 60,
+                    velocity: 0.75,
+                    at_sample: 9,
+                },
+                ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_ARPEGGIATOR,
+                    note: 64,
+                    velocity: 0.5,
+                    at_sample: 17,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn arpeggiator_note_off_allows_generated_gate_note_off_to_complete() {
+        let plan = arpeggiator_to_recording_plan(8, 3, 4);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.75, 0)));
+        let tick = prepared.take_future_event_request().unwrap();
+        assert!(prepared.dispatch_event_from(tick.source, tick.event));
+        let generated_note_off = prepared.take_future_event_request().unwrap();
+        let next_tick = prepared.take_future_event_request().unwrap();
+
+        assert!(prepared.dispatch_event(note_off(NODE_EVENT_INPUT, 60, 9)));
+        assert!(prepared.dispatch_event_from(generated_note_off.source, generated_note_off.event));
+        assert!(!prepared.dispatch_event_from(next_tick.source, next_tick.event));
+
+        assert_eq!(
+            recorded_events(&prepared, 2),
+            &[
+                ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_ARPEGGIATOR,
+                    note: 60,
+                    velocity: 0.75,
+                    at_sample: 8,
+                },
+                ScheduledEngineEvent::NoteOff {
+                    target_node: NODE_ARPEGGIATOR,
+                    note: 60,
+                    at_sample: 11,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn arpeggiator_rejects_invalid_configuration() {
+        for (step_samples, gate_samples, maximum_held_notes) in [
+            (0, 1, 4),
+            (8, 0, 4),
+            (8, 8, 4),
+            (8, 1, 0),
+            (8, 1, MAX_ARPEGGIATOR_HELD_NOTES + 1),
+        ] {
+            let plan =
+                arpeggiator_to_recording_plan(step_samples, gate_samples, maximum_held_notes);
+
+            assert!(matches!(
+                PreparedExecutionPlan::prepare(&plan, 128),
+                Err(PlanValidationError::InvalidArpeggiatorConfig)
+            ));
+        }
     }
 
     #[test]
