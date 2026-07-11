@@ -15,6 +15,7 @@ use engine_protocol::{
 
 pub const MAX_EVENT_DEPTH: u16 = 32;
 pub const MAX_EVENTS_PER_BLOCK: usize = 1024;
+pub const MAX_CHORD_INTERVALS: usize = 16;
 pub const MAX_INSTRUMENT_VOICES: u16 = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,6 +31,8 @@ pub enum PlanValidationError {
     MultipleOutputs,
     InvalidBlockCapacity,
     InvalidEventRouteMask,
+    InvalidChordIntervals,
+    DuplicateChordInterval,
     InvalidInstrumentVoiceCount,
     InvalidInstrumentVoiceConfig,
 }
@@ -115,6 +118,7 @@ pub enum RuntimeNodeKind {
     Oscillator,
     Transpose,
     Scale,
+    Chord,
     Instrument,
     Voice,
     Gain,
@@ -250,6 +254,9 @@ impl PreparedExecutionPlan {
                 PlanNodeKind::Scale(node_plan) => Ok(RuntimeNode::Scale(ScaleNode {
                     root_note: node_plan.root_note,
                     pitch_class_mask: node_plan.pitch_class_mask,
+                })),
+                PlanNodeKind::Chord(node_plan) => Ok(RuntimeNode::Chord(ChordNode {
+                    intervals: prepare_chord_intervals(&node_plan.intervals)?,
                 })),
                 PlanNodeKind::Instrument(node_plan) => {
                     let output_buffer = buffer_index(plan, node_plan.output_buffer)?;
@@ -930,6 +937,7 @@ enum RuntimeNode {
     Oscillator(OscillatorNode),
     Transpose(TransposeNode),
     Scale(ScaleNode),
+    Chord(ChordNode),
     Instrument(InstrumentNode),
     Voice(MonoInstrumentNode),
     Gain(GainNode),
@@ -955,6 +963,7 @@ impl RuntimeNode {
             Self::Oscillator(node) => node.process(context, buffers, parameters),
             Self::Transpose(_) => {}
             Self::Scale(_) => {}
+            Self::Chord(_) => {}
             Self::Instrument(node) => node.process(context, buffers),
             Self::Voice(node) => node.process(context, buffers),
             Self::Gain(node) => node.process(context, buffers, parameters),
@@ -979,6 +988,7 @@ impl RuntimeNode {
             Self::Oscillator(_) => RuntimeNodeKind::Oscillator,
             Self::Transpose(_) => RuntimeNodeKind::Transpose,
             Self::Scale(_) => RuntimeNodeKind::Scale,
+            Self::Chord(_) => RuntimeNodeKind::Chord,
             Self::Instrument(_) => RuntimeNodeKind::Instrument,
             Self::Voice(_) => RuntimeNodeKind::Voice,
             Self::Gain(_) => RuntimeNodeKind::Gain,
@@ -1041,6 +1051,7 @@ impl RuntimeNode {
         match self {
             Self::Transpose(node) => node.process_event(event, emitter),
             Self::Scale(node) => node.process_event(event, emitter),
+            Self::Chord(node) => node.process_event(event, emitter),
             Self::Instrument(node) => node.process_event(event, emitter),
             Self::Voice(node) => node.process_event(event, emitter),
             #[cfg(test)]
@@ -1069,6 +1080,10 @@ struct TransposeNode {
 struct ScaleNode {
     root_note: u8,
     pitch_class_mask: u16,
+}
+
+struct ChordNode {
+    intervals: Box<[i8]>,
 }
 
 struct InstrumentNode {
@@ -1183,6 +1198,69 @@ impl ScaleNode {
         let mask = self.pitch_class_mask & 0x0fff;
 
         mask & (1 << pitch_class) != 0
+    }
+}
+
+impl ChordNode {
+    fn process_event(
+        &mut self,
+        event: &ScheduledEngineEvent,
+        emitter: &mut EventEmitter<'_>,
+    ) -> bool {
+        match *event {
+            ScheduledEngineEvent::NoteOn {
+                target_node,
+                note,
+                velocity,
+                at_sample,
+            } => {
+                for interval in self.intervals.iter().copied() {
+                    let Some(note) = transpose_note(note, interval) else {
+                        emitter.suppress();
+                        continue;
+                    };
+
+                    if emitter
+                        .emit(ScheduledEngineEvent::NoteOn {
+                            target_node,
+                            note,
+                            velocity,
+                            at_sample,
+                        })
+                        .is_err()
+                    {
+                        return true;
+                    }
+                }
+
+                true
+            }
+            ScheduledEngineEvent::NoteOff {
+                target_node,
+                note,
+                at_sample,
+            } => {
+                for interval in self.intervals.iter().copied() {
+                    let Some(note) = transpose_note(note, interval) else {
+                        emitter.suppress();
+                        continue;
+                    };
+
+                    if emitter
+                        .emit(ScheduledEngineEvent::NoteOff {
+                            target_node,
+                            note,
+                            at_sample,
+                        })
+                        .is_err()
+                    {
+                        return true;
+                    }
+                }
+
+                true
+            }
+        }
     }
 }
 
@@ -1924,6 +2002,24 @@ fn require_channels(
     Ok(())
 }
 
+fn prepare_chord_intervals(intervals: &[i8]) -> Result<Box<[i8]>, PlanValidationError> {
+    if intervals.is_empty() || intervals.len() > MAX_CHORD_INTERVALS {
+        return Err(PlanValidationError::InvalidChordIntervals);
+    }
+
+    for (index, interval) in intervals.iter().enumerate() {
+        if intervals
+            .iter()
+            .skip(index + 1)
+            .any(|candidate| candidate == interval)
+        {
+            return Err(PlanValidationError::DuplicateChordInterval);
+        }
+    }
+
+    Ok(intervals.to_vec().into_boxed_slice())
+}
+
 fn validate_instrument_voice_count(voice_count: u16) -> Result<(), PlanValidationError> {
     if voice_count == 0 || voice_count > MAX_INSTRUMENT_VOICES {
         return Err(PlanValidationError::InvalidInstrumentVoiceCount);
@@ -1950,6 +2046,7 @@ fn runtime_node_kind(kind: &PlanNodeKind) -> Result<RuntimeNodeKind, PlanValidat
         PlanNodeKind::Oscillator(_) => Ok(RuntimeNodeKind::Oscillator),
         PlanNodeKind::Transpose(_) => Ok(RuntimeNodeKind::Transpose),
         PlanNodeKind::Scale(_) => Ok(RuntimeNodeKind::Scale),
+        PlanNodeKind::Chord(_) => Ok(RuntimeNodeKind::Chord),
         PlanNodeKind::Instrument(_) => Ok(RuntimeNodeKind::Instrument),
         PlanNodeKind::Voice(_) => Ok(RuntimeNodeKind::Voice),
         PlanNodeKind::Gain(_) => Ok(RuntimeNodeKind::Gain),
@@ -1996,6 +2093,7 @@ fn state_transfer_kind_for_node(node_kind: RuntimeNodeKind) -> Option<StateTrans
         RuntimeNodeKind::Oscillator => Some(StateTransferKind::OscillatorPhase),
         RuntimeNodeKind::Transpose => None,
         RuntimeNodeKind::Scale => None,
+        RuntimeNodeKind::Chord => None,
         RuntimeNodeKind::Instrument => Some(StateTransferKind::InstrumentPool),
         RuntimeNodeKind::Voice => None,
         RuntimeNodeKind::Gain => Some(StateTransferKind::GainSmoother),
@@ -2061,12 +2159,13 @@ fn validate_state_transfer(
 mod tests {
     use super::*;
     use engine_protocol::{
-        diagnostic_tone_plan, monophonic_instrument_plan, monophonic_voice_plan, AudioBufferSlot,
-        EventInputNodePlan, EventRoute, EventRouteMask, GainNodePlan, InstrumentNodePlan,
-        NativeExecutionPlan, OscillatorNodePlan, OutputNodePlan, PlanNode, PlanNodeKind,
-        ScaleNodePlan, ScheduledEngineEvent, TransposeNodePlan, NODE_EVENT_INPUT, NODE_GAIN,
-        NODE_INSTRUMENT, NODE_OSCILLATOR, NODE_OUTPUT, NODE_SCALE, NODE_TRANSPOSE, NODE_VOICE,
-        PARAM_GAIN_GAIN, PARAM_OSCILLATOR_FREQUENCY,
+        chorded_instrument_plan, diagnostic_tone_plan, monophonic_instrument_plan,
+        monophonic_voice_plan, AudioBufferSlot, ChordNodePlan, EventInputNodePlan, EventRoute,
+        EventRouteMask, GainNodePlan, InstrumentNodePlan, NativeExecutionPlan, OscillatorNodePlan,
+        OutputNodePlan, PlanNode, PlanNodeKind, ScaleNodePlan, ScheduledEngineEvent,
+        TransposeNodePlan, NODE_CHORD, NODE_EVENT_INPUT, NODE_GAIN, NODE_INSTRUMENT,
+        NODE_OSCILLATOR, NODE_OUTPUT, NODE_SCALE, NODE_TRANSPOSE, NODE_VOICE, PARAM_GAIN_GAIN,
+        PARAM_OSCILLATOR_FREQUENCY,
     };
 
     #[test]
@@ -2460,6 +2559,60 @@ mod tests {
         }
     }
 
+    fn chord_to_recording_plan(intervals: Vec<i8>) -> NativeExecutionPlan {
+        NativeExecutionPlan {
+            version: NATIVE_EXECUTION_PLAN_VERSION,
+            plan_id: 1,
+            plan_revision: 1,
+            nodes: vec![
+                PlanNode {
+                    id: NODE_EVENT_INPUT,
+                    kind: PlanNodeKind::EventInput(EventInputNodePlan),
+                },
+                PlanNode {
+                    id: NODE_CHORD,
+                    kind: PlanNodeKind::Chord(ChordNodePlan { intervals }),
+                },
+                PlanNode {
+                    id: NODE_VOICE,
+                    kind: PlanNodeKind::Voice(engine_protocol::VoiceNodePlan {
+                        output_buffer: 1,
+                        attack_seconds: 0.0,
+                        decay_seconds: 0.0,
+                        sustain_level: 1.0,
+                        release_seconds: 0.0,
+                    }),
+                },
+                PlanNode {
+                    id: NODE_OUTPUT,
+                    kind: PlanNodeKind::Output(OutputNodePlan {
+                        input_buffer: 1,
+                        output_channels: 2,
+                    }),
+                },
+            ],
+            buffers: vec![AudioBufferSlot { id: 1, channels: 1 }],
+            parameters: vec![],
+            event_routes: vec![
+                EventRoute {
+                    source_node: NODE_EVENT_INPUT,
+                    destination_node: NODE_CHORD,
+                    event_mask: EventRouteMask::NOTE,
+                    priority: 0,
+                    enabled: true,
+                },
+                EventRoute {
+                    source_node: NODE_CHORD,
+                    destination_node: NODE_VOICE,
+                    event_mask: EventRouteMask::NOTE,
+                    priority: 0,
+                    enabled: true,
+                },
+            ],
+            audio_execution_order: vec![NODE_VOICE, NODE_OUTPUT],
+        }
+    }
+
     fn note_on(source_node: u32, note: u8, velocity: f32, at_sample: u64) -> ScheduledEngineEvent {
         ScheduledEngineEvent::NoteOn {
             target_node: source_node,
@@ -2797,6 +2950,220 @@ mod tests {
         assert_eq!(
             prepared.event_route_destination_at(start as usize + 1),
             Some(2)
+        );
+    }
+
+    #[test]
+    fn chord_node_emits_major_triad_note_on_in_interval_order() {
+        let plan = chord_to_recording_plan(vec![0, 4, 7]);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.75, 123)));
+        assert_eq!(
+            recorded_events(&prepared, 2),
+            &[
+                ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 60,
+                    velocity: 0.75,
+                    at_sample: 123,
+                },
+                ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 64,
+                    velocity: 0.75,
+                    at_sample: 123,
+                },
+                ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 67,
+                    velocity: 0.75,
+                    at_sample: 123,
+                },
+            ]
+        );
+
+        let diagnostics = prepared.event_graph_diagnostics();
+
+        assert_eq!(diagnostics.events_received, 4);
+        assert_eq!(diagnostics.events_emitted, 3);
+        assert_eq!(diagnostics.events_suppressed, 0);
+    }
+
+    #[test]
+    fn chord_node_emits_matching_note_off_fanout() {
+        let plan = chord_to_recording_plan(vec![0, 3, 7]);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_off(NODE_EVENT_INPUT, 62, 456)));
+        assert_eq!(
+            recorded_events(&prepared, 2),
+            &[
+                ScheduledEngineEvent::NoteOff {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 62,
+                    at_sample: 456,
+                },
+                ScheduledEngineEvent::NoteOff {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 65,
+                    at_sample: 456,
+                },
+                ScheduledEngineEvent::NoteOff {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 69,
+                    at_sample: 456,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn chord_node_suppresses_out_of_range_child_notes() {
+        let plan = chord_to_recording_plan(vec![0, 7, 12]);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 120, 1.0, 0)));
+        assert_eq!(
+            recorded_events(&prepared, 2),
+            &[
+                ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 120,
+                    velocity: 1.0,
+                    at_sample: 0,
+                },
+                ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 127,
+                    velocity: 1.0,
+                    at_sample: 0,
+                },
+            ]
+        );
+        assert_eq!(prepared.event_graph_diagnostics().events_suppressed, 1);
+    }
+
+    #[test]
+    fn chord_node_rejects_empty_duplicate_and_oversized_interval_sets() {
+        assert!(matches!(
+            PreparedExecutionPlan::prepare(&chord_to_recording_plan(vec![]), 128),
+            Err(PlanValidationError::InvalidChordIntervals)
+        ));
+        assert!(matches!(
+            PreparedExecutionPlan::prepare(&chord_to_recording_plan(vec![0, 4, 4]), 128),
+            Err(PlanValidationError::DuplicateChordInterval)
+        ));
+        assert!(matches!(
+            PreparedExecutionPlan::prepare(
+                &chord_to_recording_plan(vec![0; MAX_CHORD_INTERVALS + 1]),
+                128
+            ),
+            Err(PlanValidationError::InvalidChordIntervals)
+        ));
+    }
+
+    #[test]
+    fn chord_node_allocates_instrument_voices_for_all_child_notes() {
+        let mut prepared =
+            PreparedExecutionPlan::prepare(&chorded_instrument_plan(vec![0, 4, 7], 4, 2), 128)
+                .unwrap();
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.5, 0)));
+
+        assert_eq!(instrument_diagnostics(&prepared).active_voices, 3);
+        assert_eq!(instrument_diagnostics(&prepared).peak_active_voices, 3);
+
+        assert!(prepared.dispatch_event(note_off(NODE_EVENT_INPUT, 60, 128)));
+
+        assert_eq!(instrument_diagnostics(&prepared).active_voices, 0);
+    }
+
+    #[test]
+    fn transpose_scale_and_chord_compose_predictably() {
+        let mut plan = chord_to_recording_plan(vec![0, 4, 7]);
+
+        plan.nodes.insert(
+            1,
+            PlanNode {
+                id: NODE_TRANSPOSE,
+                kind: PlanNodeKind::Transpose(TransposeNodePlan { semitones: 2 }),
+            },
+        );
+        plan.nodes.insert(
+            2,
+            PlanNode {
+                id: NODE_SCALE,
+                kind: PlanNodeKind::Scale(ScaleNodePlan {
+                    root_note: 60,
+                    pitch_class_mask: ScaleNodePlan::MAJOR_MASK,
+                }),
+            },
+        );
+        plan.event_routes = vec![
+            EventRoute {
+                source_node: NODE_EVENT_INPUT,
+                destination_node: NODE_TRANSPOSE,
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+            EventRoute {
+                source_node: NODE_TRANSPOSE,
+                destination_node: NODE_SCALE,
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+            EventRoute {
+                source_node: NODE_SCALE,
+                destination_node: NODE_CHORD,
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+            EventRoute {
+                source_node: NODE_CHORD,
+                destination_node: NODE_VOICE,
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+        ];
+
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 4);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 60, 0.5, 99)));
+        assert_eq!(
+            recorded_events(&prepared, 4),
+            &[
+                ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 62,
+                    velocity: 0.5,
+                    at_sample: 99,
+                },
+                ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 66,
+                    velocity: 0.5,
+                    at_sample: 99,
+                },
+                ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 69,
+                    velocity: 0.5,
+                    at_sample: 99,
+                },
+            ]
         );
     }
 

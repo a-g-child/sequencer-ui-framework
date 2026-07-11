@@ -1371,8 +1371,8 @@ mod tests {
     use super::*;
     use crate::{build_state_transfer, PlanStateTransfer, StateTransferEntry, StateTransferKind};
     use engine_protocol::{
-        diagnostic_tone_plan, monophonic_instrument_plan, monophonic_voice_plan,
-        scaled_monophonic_instrument_plan, scaled_monophonic_voice_plan,
+        chorded_instrument_plan, diagnostic_tone_plan, monophonic_instrument_plan,
+        monophonic_voice_plan, scaled_monophonic_instrument_plan, scaled_monophonic_voice_plan,
         transposed_monophonic_instrument_plan, transposed_monophonic_voice_plan, EventRoute,
         EventRouteMask, PlanNodeKind, ScaleNodePlan, ScheduledBeatEvent, ScheduledEngineEvent,
         TempoMapSnapshot, TransportLoop, VoiceNodePlan, NODE_EVENT_INPUT, NODE_OUTPUT, NODE_VOICE,
@@ -1419,6 +1419,19 @@ mod tests {
             node.voice_count = voice_count;
         }
 
+        plan
+    }
+
+    fn chorded_instrument_plan_with_identity(
+        plan_id: u64,
+        plan_revision: u64,
+        intervals: Vec<i8>,
+        voice_count: u16,
+    ) -> NativeExecutionPlan {
+        let mut plan = chorded_instrument_plan(intervals, voice_count, 2);
+
+        plan.plan_id = plan_id;
+        plan.plan_revision = plan_revision;
         plan
     }
 
@@ -1474,6 +1487,21 @@ mod tests {
         state_transfer: PlanStateTransfer,
     ) -> crate::PreparedPlanTransfer {
         let plan = instrument_plan_with_identity(plan_id, plan_revision, voice_count);
+        let prepared = PreparedExecutionPlan::prepare(&plan, 512).unwrap();
+
+        crate::PreparedPlanTransfer::new(transfer_id, prepared, state_transfer)
+    }
+
+    fn prepared_chorded_instrument_transfer_with_state(
+        transfer_id: u64,
+        plan_id: u64,
+        plan_revision: u64,
+        intervals: Vec<i8>,
+        voice_count: u16,
+        state_transfer: PlanStateTransfer,
+    ) -> crate::PreparedPlanTransfer {
+        let plan =
+            chorded_instrument_plan_with_identity(plan_id, plan_revision, intervals, voice_count);
         let prepared = PreparedExecutionPlan::prepare(&plan, 512).unwrap();
 
         crate::PreparedPlanTransfer::new(transfer_id, prepared, state_transfer)
@@ -2469,6 +2497,62 @@ mod tests {
 
         assert!(frame_is_silent(&single, 80));
         assert!(frame_has_signal(&single, 97));
+        assert_outputs_close(&single, &grouped);
+    }
+
+    #[test]
+    fn chorded_instrument_plan_output_is_independent_of_callback_grouping() {
+        fn render(groups: &[u32]) -> Vec<f32> {
+            let (command_sender, command_receiver) = crate::engine_command_queue();
+            let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+            let plan = chorded_instrument_plan(vec![0, 4, 7], 4, 2);
+            let mut engine = AudioEngine::new()
+                .with_execution_plan(&plan, 512)
+                .unwrap()
+                .with_realtime_queues(command_receiver, telemetry_sender);
+            let mut rendered = Vec::new();
+
+            command_sender
+                .push(EngineCommand::TransportStart {
+                    id: 1,
+                    at_sample: 0,
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 2,
+                    event: ScheduledEngineEvent::NoteOn {
+                        target_node: NODE_EVENT_INPUT,
+                        note: 60,
+                        velocity: 0.5,
+                        at_sample: 32,
+                    },
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 3,
+                    event: ScheduledEngineEvent::NoteOff {
+                        target_node: NODE_EVENT_INPUT,
+                        note: 60,
+                        at_sample: 160,
+                    },
+                })
+                .unwrap();
+
+            for frames in groups {
+                rendered.extend(process_frames(&mut engine, *frames));
+            }
+
+            rendered
+        }
+
+        let single = render(&[256]);
+        let grouped = render(&[64, 32, 96, 64]);
+
+        assert!(frame_is_silent(&single, 31));
+        assert!(frame_has_signal(&single, 33));
+        assert!(frame_is_silent(&single, 161));
         assert_outputs_close(&single, &grouped);
     }
 
@@ -3529,6 +3613,73 @@ mod tests {
                     .push(EngineCommand::SwapExecutionPlan {
                         id: 4,
                         transfer_id: 32,
+                        requested_sample: 128,
+                    })
+                    .unwrap();
+            }
+
+            rendered.extend(process_frames(&mut engine, 128));
+            rendered.extend(process_frames(&mut engine, 128));
+            rendered
+        }
+
+        let uninterrupted = render(false);
+        let swapped = render(true);
+
+        assert_outputs_close(&uninterrupted, &swapped);
+    }
+
+    #[test]
+    fn state_transfer_preserves_held_chord_voices_across_plan_swap() {
+        fn render(swapped: bool) -> Vec<f32> {
+            let (command_sender, command_receiver) = crate::engine_command_queue();
+            let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+            let (prepared_sender, prepared_receiver) = crate::prepared_plan_transfer_queue();
+            let (retired_sender, _retired_receiver) = crate::retired_plan_queue();
+            let intervals = vec![0, 4, 7];
+            let plan_a = chorded_instrument_plan_with_identity(1, 1, intervals.clone(), 4);
+            let mut engine = AudioEngine::new()
+                .with_execution_plan(&plan_a, 512)
+                .unwrap()
+                .with_realtime_queues(command_receiver, telemetry_sender)
+                .with_plan_transfer_queues(prepared_receiver, retired_sender);
+            let mut rendered = Vec::new();
+
+            command_sender
+                .push(EngineCommand::TransportStart {
+                    id: 1,
+                    at_sample: 0,
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 2,
+                    event: ScheduledEngineEvent::NoteOn {
+                        target_node: NODE_EVENT_INPUT,
+                        note: 60,
+                        velocity: 0.5,
+                        at_sample: 0,
+                    },
+                })
+                .unwrap();
+
+            if swapped {
+                let plan_b = chorded_instrument_plan_with_identity(2, 1, intervals.clone(), 4);
+                let old_prepared = PreparedExecutionPlan::prepare(&plan_a, 512).unwrap();
+                let new_prepared = PreparedExecutionPlan::prepare(&plan_b, 512).unwrap();
+                let transfer =
+                    build_state_transfer(&old_prepared.metadata(), &new_prepared.metadata())
+                        .unwrap();
+
+                assert!(prepared_sender
+                    .push(prepared_chorded_instrument_transfer_with_state(
+                        33, 2, 1, intervals, 4, transfer,
+                    ))
+                    .is_ok());
+                command_sender
+                    .push(EngineCommand::SwapExecutionPlan {
+                        id: 3,
+                        transfer_id: 33,
                         requested_sample: 128,
                     })
                     .unwrap();
