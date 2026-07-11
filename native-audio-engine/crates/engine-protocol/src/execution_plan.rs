@@ -13,6 +13,9 @@ pub const NODE_VELOCITY: u32 = 10;
 pub const NODE_EVENT_SPLITTER: u32 = 11;
 
 pub const DEFAULT_EVENT_PORT: u16 = 0;
+pub const SCALE_PORT_INPUT: u16 = 0;
+pub const SCALE_PORT_ACCEPTED: u16 = 0;
+pub const SCALE_PORT_REJECTED: u16 = 1;
 
 pub const PARAM_OSCILLATOR_FREQUENCY: u32 = 1;
 pub const PARAM_GAIN_GAIN: u32 = 2;

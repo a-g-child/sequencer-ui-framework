@@ -11,7 +11,8 @@ use engine_dsp::{MonophonicVoice, MonophonicVoiceState, SmoothedParameter};
 use engine_protocol::{
     AudioBufferSlot, BufferSlotId, EventEndpoint, EventGraphDiagnostics, EventRouteMask,
     NativeExecutionPlan, NodeId, ParameterSlotId, PlanNodeKind, ScheduledEngineEvent,
-    DEFAULT_EVENT_PORT, NATIVE_EXECUTION_PLAN_VERSION,
+    DEFAULT_EVENT_PORT, NATIVE_EXECUTION_PLAN_VERSION, SCALE_PORT_ACCEPTED, SCALE_PORT_INPUT,
+    SCALE_PORT_REJECTED,
 };
 
 pub const MAX_EVENT_DEPTH: u16 = 32;
@@ -185,6 +186,23 @@ const EVENT_SPLITTER_PORTS: [EventPortMetadata; 4] = [
         id: EventSplitterNode::OUTPUT_EMPTY,
         direction: EventPortDirection::Output,
         mask: EMPTY_EVENT_MASK,
+    },
+];
+const SCALE_EVENT_PORTS: [EventPortMetadata; 3] = [
+    EventPortMetadata {
+        id: SCALE_PORT_INPUT,
+        direction: EventPortDirection::Input,
+        mask: EventRouteMask::NOTE,
+    },
+    EventPortMetadata {
+        id: SCALE_PORT_ACCEPTED,
+        direction: EventPortDirection::Output,
+        mask: EventRouteMask::NOTE,
+    },
+    EventPortMetadata {
+        id: SCALE_PORT_REJECTED,
+        direction: EventPortDirection::Output,
+        mask: EventRouteMask::NOTE,
     },
 ];
 
@@ -1328,6 +1346,9 @@ fn transpose_note(note: u8, semitones: i8) -> Option<u8> {
 }
 
 impl ScaleNode {
+    const OUTPUT_ACCEPTED: u16 = SCALE_PORT_ACCEPTED;
+    const OUTPUT_REJECTED: u16 = SCALE_PORT_REJECTED;
+
     fn process_event(
         &mut self,
         event: &ScheduledEngineEvent,
@@ -1341,11 +1362,10 @@ impl ScaleNode {
         };
 
         if !self.accepts_note(note) {
-            emitter.suppress();
-            return true;
+            return emitter.emit_from(Self::OUTPUT_REJECTED, *event).is_ok();
         }
 
-        emitter.emit(*event).is_ok()
+        emitter.emit_from(Self::OUTPUT_ACCEPTED, *event).is_ok()
     }
 
     fn accepts_note(&self, note: u8) -> bool {
@@ -2225,6 +2245,7 @@ fn validate_event_port_declarations(plan: &NativeExecutionPlan) -> Result<(), Pl
 fn event_ports_for_node(kind: &PlanNodeKind) -> &'static [EventPortMetadata] {
     match kind {
         PlanNodeKind::EventSplitter(_) => &EVENT_SPLITTER_PORTS,
+        PlanNodeKind::Scale(_) => &SCALE_EVENT_PORTS,
         _ => &DEFAULT_EVENT_PORTS,
     }
 }
@@ -2500,7 +2521,8 @@ mod tests {
         PlanNodeKind, ScaleNodePlan, ScheduledEngineEvent, TransposeNodePlan, VelocityNodePlan,
         DEFAULT_EVENT_PORT, NODE_CHORD, NODE_EVENT_INPUT, NODE_EVENT_SPLITTER, NODE_GAIN,
         NODE_INSTRUMENT, NODE_OSCILLATOR, NODE_OUTPUT, NODE_SCALE, NODE_TRANSPOSE, NODE_VELOCITY,
-        NODE_VOICE, PARAM_GAIN_GAIN, PARAM_OSCILLATOR_FREQUENCY,
+        NODE_VOICE, PARAM_GAIN_GAIN, PARAM_OSCILLATOR_FREQUENCY, SCALE_PORT_ACCEPTED,
+        SCALE_PORT_REJECTED,
     };
 
     #[test]
@@ -4027,7 +4049,7 @@ mod tests {
     }
 
     #[test]
-    fn scale_node_suppresses_out_of_scale_note_on() {
+    fn scale_helper_leaves_rejected_output_unconnected() {
         let plan = scale_to_recording_plan(60, ScaleNodePlan::MAJOR_MASK);
         let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
 
@@ -4038,8 +4060,8 @@ mod tests {
 
         let diagnostics = prepared.event_graph_diagnostics();
 
-        assert_eq!(diagnostics.events_emitted, 0);
-        assert_eq!(diagnostics.events_suppressed, 1);
+        assert_eq!(diagnostics.events_emitted, 1);
+        assert_eq!(diagnostics.events_suppressed, 0);
     }
 
     #[test]
@@ -4062,8 +4084,215 @@ mod tests {
 
         let diagnostics = prepared.event_graph_diagnostics();
 
-        assert_eq!(diagnostics.events_emitted, 1);
-        assert_eq!(diagnostics.events_suppressed, 1);
+        assert_eq!(diagnostics.events_emitted, 2);
+        assert_eq!(diagnostics.events_suppressed, 0);
+    }
+
+    #[test]
+    fn scale_node_routes_accepted_notes_from_accepted_output() {
+        let mut plan = scale_to_recording_plan(60, ScaleNodePlan::MAJOR_MASK);
+
+        plan.event_routes[1].source.port_id = SCALE_PORT_ACCEPTED;
+
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 64, 0.8, 321)));
+        assert_eq!(
+            recorded_events(&prepared, 2),
+            &[ScheduledEngineEvent::NoteOn {
+                target_node: NODE_EVENT_INPUT,
+                note: 64,
+                velocity: 0.8,
+                at_sample: 321,
+            }]
+        );
+    }
+
+    #[test]
+    fn scale_node_routes_rejected_notes_from_rejected_output() {
+        let mut plan = scale_to_recording_plan(60, ScaleNodePlan::MAJOR_MASK);
+
+        plan.event_routes[1].source.port_id = SCALE_PORT_REJECTED;
+
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 61, 0.8, 321)));
+        assert_eq!(
+            recorded_events(&prepared, 2),
+            &[ScheduledEngineEvent::NoteOn {
+                target_node: NODE_EVENT_INPUT,
+                note: 61,
+                velocity: 0.8,
+                at_sample: 321,
+            }]
+        );
+    }
+
+    #[test]
+    fn scale_outputs_can_route_to_different_destinations() {
+        let mut plan = scale_to_recording_plan(60, ScaleNodePlan::MAJOR_MASK);
+
+        plan.nodes.insert(
+            3,
+            PlanNode {
+                id: NODE_INSTRUMENT,
+                kind: PlanNodeKind::Instrument(InstrumentNodePlan {
+                    output_buffer: 1,
+                    voice_count: 4,
+                    attack_seconds: 0.0,
+                    decay_seconds: 0.0,
+                    sustain_level: 1.0,
+                    release_seconds: 0.0,
+                }),
+            },
+        );
+        plan.event_routes = vec![
+            EventRoute {
+                source: event_endpoint(NODE_EVENT_INPUT),
+                destination: event_endpoint(NODE_SCALE),
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+            EventRoute {
+                source: EventEndpoint {
+                    node_id: NODE_SCALE,
+                    port_id: SCALE_PORT_ACCEPTED,
+                },
+                destination: event_endpoint(NODE_VOICE),
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+            EventRoute {
+                source: EventEndpoint {
+                    node_id: NODE_SCALE,
+                    port_id: SCALE_PORT_REJECTED,
+                },
+                destination: event_endpoint(NODE_INSTRUMENT),
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+        ];
+
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+        install_recording_node(&mut prepared, 2);
+        install_recording_node(&mut prepared, 3);
+
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 64, 0.8, 10)));
+        assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, 61, 0.4, 11)));
+
+        assert_eq!(
+            recorded_events(&prepared, 2),
+            &[ScheduledEngineEvent::NoteOn {
+                target_node: NODE_EVENT_INPUT,
+                note: 64,
+                velocity: 0.8,
+                at_sample: 10,
+            }]
+        );
+        assert_eq!(
+            recorded_events(&prepared, 3),
+            &[ScheduledEngineEvent::NoteOn {
+                target_node: NODE_EVENT_INPUT,
+                note: 61,
+                velocity: 0.4,
+                at_sample: 11,
+            }]
+        );
+
+        let diagnostics = prepared.event_graph_diagnostics();
+
+        assert_eq!(diagnostics.events_emitted, 2);
+        assert_eq!(diagnostics.events_suppressed, 0);
+    }
+
+    #[test]
+    fn scale_output_priority_is_deterministic_per_port() {
+        let mut plan = scale_to_recording_plan(60, ScaleNodePlan::MAJOR_MASK);
+
+        plan.nodes.insert(
+            3,
+            PlanNode {
+                id: NODE_INSTRUMENT,
+                kind: PlanNodeKind::Instrument(InstrumentNodePlan {
+                    output_buffer: 1,
+                    voice_count: 4,
+                    attack_seconds: 0.0,
+                    decay_seconds: 0.0,
+                    sustain_level: 1.0,
+                    release_seconds: 0.0,
+                }),
+            },
+        );
+        plan.event_routes = vec![
+            EventRoute {
+                source: event_endpoint(NODE_EVENT_INPUT),
+                destination: event_endpoint(NODE_SCALE),
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+            EventRoute {
+                source: EventEndpoint {
+                    node_id: NODE_SCALE,
+                    port_id: SCALE_PORT_ACCEPTED,
+                },
+                destination: event_endpoint(NODE_INSTRUMENT),
+                event_mask: EventRouteMask::NOTE,
+                priority: 20,
+                enabled: true,
+            },
+            EventRoute {
+                source: EventEndpoint {
+                    node_id: NODE_SCALE,
+                    port_id: SCALE_PORT_ACCEPTED,
+                },
+                destination: event_endpoint(NODE_VOICE),
+                event_mask: EventRouteMask::NOTE,
+                priority: 10,
+                enabled: true,
+            },
+            EventRoute {
+                source: EventEndpoint {
+                    node_id: NODE_SCALE,
+                    port_id: SCALE_PORT_REJECTED,
+                },
+                destination: event_endpoint(NODE_VOICE),
+                event_mask: EventRouteMask::NOTE,
+                priority: 5,
+                enabled: true,
+            },
+        ];
+
+        let prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        assert_eq!(
+            prepared.event_route_range_for_source_endpoint(NODE_SCALE, SCALE_PORT_ACCEPTED),
+            Some((1, 2))
+        );
+        assert_eq!(
+            prepared.event_route_range_for_source_endpoint(NODE_SCALE, SCALE_PORT_REJECTED),
+            Some((3, 1))
+        );
+        assert_eq!(prepared.event_route_destination_at(1), Some(2));
+        assert_eq!(prepared.event_route_destination_at(2), Some(3));
+        assert_eq!(prepared.event_route_destination_at(3), Some(2));
+    }
+
+    #[test]
+    fn unknown_scale_output_port_rejects_during_compilation() {
+        let mut plan = scale_to_recording_plan(60, ScaleNodePlan::MAJOR_MASK);
+
+        plan.event_routes[1].source.port_id = 99;
+
+        assert!(matches!(
+            PreparedExecutionPlan::prepare(&plan, 128),
+            Err(PlanValidationError::UnknownEventSourcePort)
+        ));
     }
 
     #[test]
@@ -4113,8 +4342,8 @@ mod tests {
 
         let diagnostics = prepared.event_graph_diagnostics();
 
-        assert_eq!(diagnostics.events_emitted, 1);
-        assert_eq!(diagnostics.events_suppressed, 1);
+        assert_eq!(diagnostics.events_emitted, 2);
+        assert_eq!(diagnostics.events_suppressed, 0);
     }
 
     #[test]
