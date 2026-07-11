@@ -9,6 +9,7 @@ pub const NODE_TRANSPOSE: u32 = 6;
 pub const NODE_SCALE: u32 = 7;
 pub const NODE_INSTRUMENT: u32 = 8;
 pub const NODE_CHORD: u32 = 9;
+pub const NODE_VELOCITY: u32 = 10;
 
 pub const PARAM_OSCILLATOR_FREQUENCY: u32 = 1;
 pub const PARAM_GAIN_GAIN: u32 = 2;
@@ -63,6 +64,7 @@ pub enum PlanNodeKind {
     Oscillator(OscillatorNodePlan),
     Transpose(TransposeNodePlan),
     Scale(ScaleNodePlan),
+    Velocity(VelocityNodePlan),
     Chord(ChordNodePlan),
     Instrument(InstrumentNodePlan),
     Voice(VoiceNodePlan),
@@ -100,6 +102,14 @@ impl ScaleNodePlan {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChordNodePlan {
     pub intervals: Vec<i8>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VelocityNodePlan {
+    pub multiplier: f32,
+    pub offset: f32,
+    pub minimum: f32,
+    pub maximum: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -563,6 +573,107 @@ pub fn chorded_instrument_plan(
         event_routes: vec![
             EventRoute {
                 source_node: NODE_EVENT_INPUT,
+                destination_node: NODE_CHORD,
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+            EventRoute {
+                source_node: NODE_CHORD,
+                destination_node: NODE_INSTRUMENT,
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+        ],
+        audio_execution_order: vec![NODE_INSTRUMENT, NODE_OUTPUT],
+    }
+}
+
+pub fn velocity_chorded_instrument_plan(
+    transpose: i8,
+    scale_root_note: u8,
+    scale_mask: u16,
+    velocity: VelocityNodePlan,
+    intervals: Vec<i8>,
+    voice_count: u16,
+    output_channels: u16,
+) -> NativeExecutionPlan {
+    NativeExecutionPlan {
+        version: NATIVE_EXECUTION_PLAN_VERSION,
+        plan_id: 1,
+        plan_revision: 1,
+        nodes: vec![
+            PlanNode {
+                id: NODE_EVENT_INPUT,
+                kind: PlanNodeKind::EventInput(EventInputNodePlan),
+            },
+            PlanNode {
+                id: NODE_TRANSPOSE,
+                kind: PlanNodeKind::Transpose(TransposeNodePlan {
+                    semitones: transpose,
+                }),
+            },
+            PlanNode {
+                id: NODE_SCALE,
+                kind: PlanNodeKind::Scale(ScaleNodePlan {
+                    root_note: scale_root_note,
+                    pitch_class_mask: scale_mask,
+                }),
+            },
+            PlanNode {
+                id: NODE_VELOCITY,
+                kind: PlanNodeKind::Velocity(velocity),
+            },
+            PlanNode {
+                id: NODE_CHORD,
+                kind: PlanNodeKind::Chord(ChordNodePlan { intervals }),
+            },
+            PlanNode {
+                id: NODE_INSTRUMENT,
+                kind: PlanNodeKind::Instrument(InstrumentNodePlan {
+                    output_buffer: 1,
+                    voice_count,
+                    attack_seconds: 0.0,
+                    decay_seconds: 0.0,
+                    sustain_level: 1.0,
+                    release_seconds: 0.0,
+                }),
+            },
+            PlanNode {
+                id: NODE_OUTPUT,
+                kind: PlanNodeKind::Output(OutputNodePlan {
+                    input_buffer: 1,
+                    output_channels,
+                }),
+            },
+        ],
+        buffers: vec![AudioBufferSlot { id: 1, channels: 1 }],
+        parameters: vec![],
+        event_routes: vec![
+            EventRoute {
+                source_node: NODE_EVENT_INPUT,
+                destination_node: NODE_TRANSPOSE,
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+            EventRoute {
+                source_node: NODE_TRANSPOSE,
+                destination_node: NODE_SCALE,
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+            EventRoute {
+                source_node: NODE_SCALE,
+                destination_node: NODE_VELOCITY,
+                event_mask: EventRouteMask::NOTE,
+                priority: 0,
+                enabled: true,
+            },
+            EventRoute {
+                source_node: NODE_VELOCITY,
                 destination_node: NODE_CHORD,
                 event_mask: EventRouteMask::NOTE,
                 priority: 0,
