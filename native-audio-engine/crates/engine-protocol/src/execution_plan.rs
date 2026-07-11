@@ -202,6 +202,7 @@ pub struct ArpeggiatorNodePlan {
     pub pattern: ArpeggiatorPattern,
     pub octave_count: u8,
     pub octave_direction: ArpeggiatorOctaveDirection,
+    pub random_seed: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -216,6 +217,7 @@ pub enum ArpeggiatorPattern {
     Descending,
     UpDown,
     PlayedOrder,
+    Random,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -123,6 +123,7 @@ pub struct ArpeggiatorCompatibility {
     pub maximum_held_notes: u16,
     pub octave_count: u8,
     pub octave_direction: ArpeggiatorOctaveDirection,
+    pub random_seed: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -386,6 +387,7 @@ impl PreparedExecutionPlan {
                         node_plan.pattern,
                         node_plan.octave_count,
                         node_plan.octave_direction,
+                        node_plan.random_seed,
                     )))
                 }
                 PlanNodeKind::Oscillator(node_plan) => {
@@ -1610,6 +1612,8 @@ struct ArpeggiatorNode {
     pattern: ArpeggiatorPattern,
     octave_count: u8,
     octave_direction: ArpeggiatorOctaveDirection,
+    random_seed: u64,
+    random_state: u64,
     held_count: usize,
     current_index: usize,
     played_order_counter: u64,
@@ -1657,6 +1661,7 @@ impl ArpeggiatorNode {
         pattern: ArpeggiatorPattern,
         octave_count: u8,
         octave_direction: ArpeggiatorOctaveDirection,
+        random_seed: u64,
     ) -> Self {
         Self {
             held_notes: vec![None; maximum_held_notes as usize].into_boxed_slice(),
@@ -1666,6 +1671,8 @@ impl ArpeggiatorNode {
             pattern,
             octave_count,
             octave_direction,
+            random_seed,
+            random_state: initial_arpeggiator_random_state(random_seed),
             held_count: 0,
             current_index: 0,
             played_order_counter: 0,
@@ -1692,6 +1699,7 @@ impl ArpeggiatorNode {
             && self.pattern == other.pattern
             && self.octave_count == other.octave_count
             && self.octave_direction == other.octave_direction
+            && self.random_seed == other.random_seed
             && self.held_notes.len() == other.held_notes.len()
     }
 
@@ -1706,6 +1714,7 @@ impl ArpeggiatorNode {
         self.played_order_counter = old_node.played_order_counter;
         self.sequence_index = old_node.sequence_index;
         self.origin_beat = old_node.origin_beat;
+        self.random_state = old_node.random_state;
         self.generation = old_node.generation.saturating_add(1);
 
         if self.held_count == 0 {
@@ -1902,18 +1911,42 @@ impl ArpeggiatorNode {
             return None;
         }
 
-        let expanded_index = self
-            .loop_locked_pattern_index(
-                context.sample_position,
-                context.tempo_map,
-                context.transport_loop,
-            )
-            .unwrap_or(self.current_index);
+        let expanded_index = self.next_pattern_index(context);
 
         self.current_index = (expanded_index + 1) % self.expanded_pattern_length();
 
         let note = self.note_for_expanded_pattern_index(expanded_index)?;
         Some(note)
+    }
+
+    fn next_pattern_index(&mut self, context: RuntimeEventContext) -> usize {
+        if self.pattern == ArpeggiatorPattern::Random {
+            if let Some(step_index) = self.loop_locked_step_index(
+                context.sample_position,
+                context.tempo_map,
+                context.transport_loop,
+            ) {
+                return random_index_from_seed(
+                    self.random_seed,
+                    step_index,
+                    self.expanded_pattern_length(),
+                );
+            }
+
+            return self.next_free_running_random_index();
+        }
+
+        self.loop_locked_pattern_index(
+            context.sample_position,
+            context.tempo_map,
+            context.transport_loop,
+        )
+        .unwrap_or(self.current_index)
+    }
+
+    fn next_free_running_random_index(&mut self) -> usize {
+        self.random_state = next_arpeggiator_random_state(self.random_state);
+        (self.random_state % self.expanded_pattern_length() as u64) as usize
     }
 
     fn loop_locked_pattern_index(
@@ -1922,6 +1955,18 @@ impl ArpeggiatorNode {
         tempo_map: TempoMapSnapshot,
         transport_loop: TransportLoop,
     ) -> Option<usize> {
+        Some(
+            self.loop_locked_step_index(sample_position, tempo_map, transport_loop)? as usize
+                % self.expanded_pattern_length(),
+        )
+    }
+
+    fn loop_locked_step_index(
+        &self,
+        sample_position: u64,
+        tempo_map: TempoMapSnapshot,
+        transport_loop: TransportLoop,
+    ) -> Option<u64> {
         if self.phase_mode != ArpeggiatorPhaseMode::LoopLocked
             || !transport_loop.enabled
             || transport_loop.end_sample <= transport_loop.start_sample
@@ -1967,7 +2012,7 @@ impl ArpeggiatorNode {
         }
         .saturating_sub(1);
 
-        Some(step_index as usize % self.expanded_pattern_length())
+        Some(step_index)
     }
 
     fn pattern_length(&self) -> usize {
@@ -2067,6 +2112,7 @@ impl ArpeggiatorNode {
                 self.pitch_order_note(pitch_index)
             }
             ArpeggiatorPattern::PlayedOrder => self.played_order_note(index),
+            ArpeggiatorPattern::Random => self.pitch_order_note(index % self.held_count),
         }
     }
 
@@ -3754,6 +3800,40 @@ fn instrument_runtime_metadata(kind: &PlanNodeKind) -> Option<InstrumentRuntimeM
     }
 }
 
+fn initial_arpeggiator_random_state(seed: u64) -> u64 {
+    let state = mix_arpeggiator_random(seed);
+
+    if state == 0 {
+        0x9e37_79b9_7f4a_7c15
+    } else {
+        state
+    }
+}
+
+fn next_arpeggiator_random_state(mut state: u64) -> u64 {
+    if state == 0 {
+        state = 0x9e37_79b9_7f4a_7c15;
+    }
+
+    state ^= state << 13;
+    state ^= state >> 7;
+    state ^= state << 17;
+    state
+}
+
+fn random_index_from_seed(seed: u64, step_index: u64, candidate_count: usize) -> usize {
+    let value = mix_arpeggiator_random(seed ^ step_index.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+
+    (value % candidate_count as u64) as usize
+}
+
+fn mix_arpeggiator_random(mut value: u64) -> u64 {
+    value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
 fn arpeggiator_compatibility(kind: &PlanNodeKind) -> Option<ArpeggiatorCompatibility> {
     match kind {
         PlanNodeKind::Arpeggiator(node) => Some(ArpeggiatorCompatibility {
@@ -3764,6 +3844,7 @@ fn arpeggiator_compatibility(kind: &PlanNodeKind) -> Option<ArpeggiatorCompatibi
             maximum_held_notes: node.maximum_held_notes,
             octave_count: node.octave_count,
             octave_direction: node.octave_direction,
+            random_seed: node.random_seed,
         }),
         _ => None,
     }
@@ -4551,6 +4632,26 @@ mod tests {
         octave_count: u8,
         octave_direction: ArpeggiatorOctaveDirection,
     ) -> NativeExecutionPlan {
+        arpeggiator_to_recording_plan_with_pattern_octaves_and_seed(
+            step_beats,
+            gate_ratio,
+            maximum_held_notes,
+            pattern,
+            octave_count,
+            octave_direction,
+            1,
+        )
+    }
+
+    fn arpeggiator_to_recording_plan_with_pattern_octaves_and_seed(
+        step_beats: f64,
+        gate_ratio: f32,
+        maximum_held_notes: u16,
+        pattern: ArpeggiatorPattern,
+        octave_count: u8,
+        octave_direction: ArpeggiatorOctaveDirection,
+        random_seed: u64,
+    ) -> NativeExecutionPlan {
         NativeExecutionPlan {
             version: NATIVE_EXECUTION_PLAN_VERSION,
             plan_id: 1,
@@ -4570,6 +4671,7 @@ mod tests {
                         pattern,
                         octave_count,
                         octave_direction,
+                        random_seed,
                     }),
                 },
                 PlanNode {
@@ -5603,6 +5705,45 @@ mod tests {
             .collect()
     }
 
+    fn arpeggiator_recorded_note_ons_with_seed(
+        input_notes: &[u8],
+        tick_count: usize,
+        random_seed: u64,
+    ) -> Vec<u8> {
+        let plan = arpeggiator_to_recording_plan_with_pattern_octaves_and_seed(
+            8.0 / 24_000.0,
+            2.0 / 8.0,
+            8,
+            ArpeggiatorPattern::Random,
+            1,
+            ArpeggiatorOctaveDirection::Up,
+            random_seed,
+        );
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        for (index, note) in input_notes.iter().copied().enumerate() {
+            assert!(prepared.dispatch_event(note_on(NODE_EVENT_INPUT, note, 0.5, index as u64)));
+        }
+
+        for index in 0..tick_count {
+            dispatch_next_valid_arpeggiator_tick(&mut prepared);
+
+            if index + 1 < tick_count {
+                discard_generated_note_off(&mut prepared);
+            }
+        }
+
+        recorded_events(&prepared, 2)
+            .iter()
+            .filter_map(|event| match event {
+                ScheduledEngineEvent::NoteOn { note, .. } => Some(*note),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn arpeggiator_descending_pattern_orders_notes_high_to_low() {
         assert_eq!(
@@ -5625,6 +5766,22 @@ mod tests {
             arpeggiator_recorded_note_ons(ArpeggiatorPattern::PlayedOrder, &[64, 60, 67], 5),
             vec![64, 60, 67, 64, 60]
         );
+    }
+
+    #[test]
+    fn arpeggiator_random_pattern_is_deterministic_for_same_seed() {
+        let first = arpeggiator_recorded_note_ons_with_seed(&[60, 64, 67, 71], 12, 1234);
+        let second = arpeggiator_recorded_note_ons_with_seed(&[60, 64, 67, 71], 12, 1234);
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn arpeggiator_random_pattern_differs_for_different_seeds() {
+        let first = arpeggiator_recorded_note_ons_with_seed(&[60, 64, 67, 71], 12, 1234);
+        let second = arpeggiator_recorded_note_ons_with_seed(&[60, 64, 67, 71], 12, 5678);
+
+        assert_ne!(first, second);
     }
 
     #[test]
@@ -5708,6 +5865,7 @@ mod tests {
             ArpeggiatorPattern::Descending,
             ArpeggiatorPattern::UpDown,
             ArpeggiatorPattern::PlayedOrder,
+            ArpeggiatorPattern::Random,
         ] {
             assert_eq!(
                 arpeggiator_recorded_note_ons(pattern, &[65], 4),
@@ -5863,6 +6021,74 @@ mod tests {
     }
 
     #[test]
+    fn arpeggiator_random_octave_expansion_uses_expanded_candidate_set() {
+        let notes = arpeggiator_recorded_note_ons_with_octaves(
+            ArpeggiatorPattern::Random,
+            &[60, 64],
+            16,
+            2,
+            ArpeggiatorOctaveDirection::Up,
+        );
+
+        assert!(notes.iter().all(|note| [60, 64, 72, 76].contains(note)));
+        assert!(notes.iter().any(|note| *note >= 72));
+    }
+
+    #[test]
+    fn loop_locked_random_arpeggiator_repeats_seeded_phrase_each_loop() {
+        let tempo = TempoMapSnapshot::default();
+        let transport_loop = TransportLoop {
+            enabled: true,
+            start_sample: 0,
+            end_sample: 72_000,
+        };
+        let mut plan = arpeggiator_to_recording_plan_with_pattern_octaves_and_seed(
+            1.0,
+            0.5,
+            4,
+            ArpeggiatorPattern::Random,
+            1,
+            ArpeggiatorOctaveDirection::Up,
+            99,
+        );
+
+        if let PlanNodeKind::Arpeggiator(node) = &mut plan.nodes[1].kind {
+            node.phase_mode = ArpeggiatorPhaseMode::LoopLocked;
+        }
+
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        for (index, note) in [60, 64, 67].into_iter().enumerate() {
+            assert!(prepared.dispatch_event_from_with_tempo_and_loop(
+                event_endpoint(NODE_EVENT_INPUT),
+                note_on(NODE_EVENT_INPUT, note, 0.75, index as u64),
+                tempo,
+                transport_loop
+            ));
+        }
+
+        for index in 0..6 {
+            dispatch_next_valid_arpeggiator_tick_with_loop(&mut prepared, tempo, transport_loop);
+
+            if index < 5 {
+                discard_generated_note_off(&mut prepared);
+            }
+        }
+
+        let actual_notes: Vec<_> = recorded_events(&prepared, 2)
+            .iter()
+            .filter_map(|event| match event {
+                ScheduledEngineEvent::NoteOn { note, .. } => Some(*note),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(&actual_notes[0..3], &actual_notes[3..6]);
+    }
+
+    #[test]
     fn state_transfer_preserves_arpeggiator_played_order_position() {
         let old_plan = arpeggiator_to_recording_plan_with_pattern(
             8.0 / 24_000.0,
@@ -5946,6 +6172,81 @@ mod tests {
     }
 
     #[test]
+    fn state_transfer_preserves_arpeggiator_random_stream_position() {
+        let plan = arpeggiator_to_recording_plan_with_pattern_octaves_and_seed(
+            8.0 / 24_000.0,
+            2.0 / 8.0,
+            8,
+            ArpeggiatorPattern::Random,
+            1,
+            ArpeggiatorOctaveDirection::Up,
+            1234,
+        );
+        let mut new_plan = plan.clone();
+
+        new_plan.plan_revision = 2;
+
+        let mut continuous = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+        let mut old_prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+        let mut new_prepared = PreparedExecutionPlan::prepare(&new_plan, 128).unwrap();
+
+        install_recording_node(&mut continuous, 2);
+        install_recording_node(&mut old_prepared, 2);
+        install_recording_node(&mut new_prepared, 2);
+
+        for (index, note) in [60, 64, 67, 71].into_iter().enumerate() {
+            let event = note_on(NODE_EVENT_INPUT, note, 0.5, index as u64);
+
+            assert!(continuous.dispatch_event(event));
+            assert!(old_prepared.dispatch_event(event));
+        }
+
+        dispatch_next_valid_arpeggiator_tick(&mut continuous);
+        discard_generated_note_off(&mut continuous);
+        dispatch_next_valid_arpeggiator_tick(&mut old_prepared);
+
+        let first_note_off = old_prepared.take_future_event_request().unwrap();
+        let stale_next_tick = old_prepared.take_future_event_request().unwrap();
+        let transfer =
+            build_state_transfer(&old_prepared.metadata(), &new_prepared.metadata()).unwrap();
+
+        new_prepared
+            .apply_state_transfer_from(&old_prepared, &transfer)
+            .unwrap();
+
+        assert!(!new_prepared.dispatch_event_from(stale_next_tick.source, stale_next_tick.event));
+        assert!(new_prepared.dispatch_event_from(first_note_off.source, first_note_off.event));
+
+        new_prepared.regenerate_future_events_after_state_transfer(
+            8,
+            TempoMapSnapshot::default(),
+            TransportLoop::default(),
+        );
+
+        let regenerated_tick = new_prepared.take_future_event_request().unwrap();
+
+        dispatch_next_valid_arpeggiator_tick(&mut continuous);
+        assert!(new_prepared.dispatch_event_from(regenerated_tick.source, regenerated_tick.event));
+
+        let continuous_notes: Vec<_> = recorded_events(&continuous, 2)
+            .iter()
+            .filter_map(|event| match event {
+                ScheduledEngineEvent::NoteOn { note, .. } => Some(*note),
+                _ => None,
+            })
+            .collect();
+        let transferred_notes: Vec<_> = recorded_events(&new_prepared, 2)
+            .iter()
+            .filter_map(|event| match event {
+                ScheduledEngineEvent::NoteOn { note, .. } => Some(*note),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(transferred_notes, vec![continuous_notes[1]]);
+    }
+
+    #[test]
     fn incompatible_arpeggiator_pattern_is_not_transferred() {
         let old_plan = arpeggiator_to_recording_plan_with_pattern(
             8.0 / 24_000.0,
@@ -5958,6 +6259,34 @@ mod tests {
             2.0 / 8.0,
             8,
             ArpeggiatorPattern::Descending,
+        );
+        let old_prepared = PreparedExecutionPlan::prepare(&old_plan, 128).unwrap();
+        let new_prepared = PreparedExecutionPlan::prepare(&new_plan, 128).unwrap();
+        let transfer =
+            build_state_transfer(&old_prepared.metadata(), &new_prepared.metadata()).unwrap();
+
+        assert!(transfer.entries.is_empty());
+    }
+
+    #[test]
+    fn incompatible_arpeggiator_random_seed_is_not_transferred() {
+        let old_plan = arpeggiator_to_recording_plan_with_pattern_octaves_and_seed(
+            8.0 / 24_000.0,
+            2.0 / 8.0,
+            8,
+            ArpeggiatorPattern::Random,
+            1,
+            ArpeggiatorOctaveDirection::Up,
+            1234,
+        );
+        let new_plan = arpeggiator_to_recording_plan_with_pattern_octaves_and_seed(
+            8.0 / 24_000.0,
+            2.0 / 8.0,
+            8,
+            ArpeggiatorPattern::Random,
+            1,
+            ArpeggiatorOctaveDirection::Up,
+            5678,
         );
         let old_prepared = PreparedExecutionPlan::prepare(&old_plan, 128).unwrap();
         let new_prepared = PreparedExecutionPlan::prepare(&new_plan, 128).unwrap();
