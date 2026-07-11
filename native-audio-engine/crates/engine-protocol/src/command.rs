@@ -20,6 +20,13 @@ impl TempoMapSnapshot {
                 .saturating_add(samples_from_origin as u64)
         }
     }
+
+    pub fn sample_to_beat(&self, sample: u64) -> f64 {
+        let sample_delta = sample as i128 - self.origin_sample as i128;
+        let seconds_from_origin = sample_delta as f64 / self.sample_rate.max(1.0);
+
+        self.origin_beat + seconds_from_origin * self.bpm.max(1.0) / 60.0
+    }
 }
 
 impl Default for TempoMapSnapshot {
@@ -38,6 +45,16 @@ pub struct TransportLoop {
     pub enabled: bool,
     pub start_sample: u64,
     pub end_sample: u64,
+}
+
+impl Default for TransportLoop {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            start_sample: 0,
+            end_sample: 0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

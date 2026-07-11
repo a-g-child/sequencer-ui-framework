@@ -1127,7 +1127,12 @@ impl AudioEngine {
         event: ScheduledEngineEvent,
     ) -> bool {
         if let Some(plan) = self.execution_plan.as_mut() {
-            let handled = plan.dispatch_event_from(source, event);
+            let handled = plan.dispatch_event_from_with_tempo_and_loop(
+                source,
+                event,
+                self.tempo_map,
+                self.transport_loop,
+            );
             drain_future_event_requests_from(&mut self.scheduled_events, plan);
             return handled;
         }
@@ -1137,12 +1142,51 @@ impl AudioEngine {
             .as_mut()
             .and_then(|crossfade| crossfade.new_plan.as_mut())
         {
-            let handled = plan.dispatch_event_from(source, event);
+            let handled = plan.dispatch_event_from_with_tempo_and_loop(
+                source,
+                event,
+                self.tempo_map,
+                self.transport_loop,
+            );
             drain_future_event_requests_from(&mut self.scheduled_events, plan);
             return handled;
         }
 
         false
+    }
+
+    fn regenerate_future_events_for_tempo_change(
+        &mut self,
+        current_sample: u64,
+        committed_horizon: u64,
+        previous_tempo: TempoMapSnapshot,
+    ) {
+        if let Some(plan) = self.execution_plan.as_mut() {
+            plan.regenerate_future_events_for_tempo_change(
+                current_sample,
+                committed_horizon,
+                previous_tempo,
+                self.tempo_map,
+                self.transport_loop,
+            );
+            drain_future_event_requests_from(&mut self.scheduled_events, plan);
+            return;
+        }
+
+        if let Some(plan) = self
+            .crossfade
+            .as_mut()
+            .and_then(|crossfade| crossfade.new_plan.as_mut())
+        {
+            plan.regenerate_future_events_for_tempo_change(
+                current_sample,
+                committed_horizon,
+                previous_tempo,
+                self.tempo_map,
+                self.transport_loop,
+            );
+            drain_future_event_requests_from(&mut self.scheduled_events, plan);
+        }
     }
 
     fn active_plan_binding(&self) -> Option<PlanRevisionBinding> {
@@ -1365,10 +1409,16 @@ impl AudioEngine {
                 self.last_parameter = Some((parameter_id, value));
             }
             EngineCommand::SetTempoMap { tempo, .. } => {
+                let previous_tempo = self.tempo_map;
+                let committed_horizon =
+                    applied_sample.saturating_add(COMMITTED_SCHEDULING_HORIZON_SAMPLES);
                 self.tempo_map = tempo;
-                self.scheduled_events.retime_beat_events_outside_horizon(
-                    self.tempo_map,
-                    applied_sample.saturating_add(COMMITTED_SCHEDULING_HORIZON_SAMPLES),
+                self.scheduled_events
+                    .retime_beat_events_outside_horizon(self.tempo_map, committed_horizon);
+                self.regenerate_future_events_for_tempo_change(
+                    applied_sample,
+                    committed_horizon,
+                    previous_tempo,
                 );
             }
             EngineCommand::SetTransportLoop { transport_loop, .. } => {
@@ -1678,8 +1728,24 @@ mod tests {
     fn arpeggiated_instrument_plan_with_identity(
         plan_id: u64,
         plan_revision: u64,
-        step_samples: u32,
-        gate_samples: u32,
+        step_beats: f64,
+        gate_ratio: f32,
+    ) -> NativeExecutionPlan {
+        arpeggiated_instrument_plan_with_phase(
+            plan_id,
+            plan_revision,
+            step_beats,
+            gate_ratio,
+            engine_protocol::ArpeggiatorPhaseMode::FreeRunning,
+        )
+    }
+
+    fn arpeggiated_instrument_plan_with_phase(
+        plan_id: u64,
+        plan_revision: u64,
+        step_beats: f64,
+        gate_ratio: f32,
+        phase_mode: engine_protocol::ArpeggiatorPhaseMode,
     ) -> NativeExecutionPlan {
         NativeExecutionPlan {
             version: engine_protocol::NATIVE_EXECUTION_PLAN_VERSION,
@@ -1693,9 +1759,10 @@ mod tests {
                 PlanNode {
                     id: NODE_ARPEGGIATOR,
                     kind: PlanNodeKind::Arpeggiator(ArpeggiatorNodePlan {
-                        step_samples,
-                        gate_samples,
+                        step_beats,
+                        gate_ratio,
                         maximum_held_notes: 8,
+                        phase_mode,
                     }),
                 },
                 PlanNode {
@@ -2576,7 +2643,7 @@ mod tests {
         let (telemetry_sender_a, _telemetry_receiver_a) = crate::engine_telemetry_queue();
         let (command_sender_b, command_receiver_b) = crate::engine_command_queue();
         let (telemetry_sender_b, _telemetry_receiver_b) = crate::engine_telemetry_queue();
-        let plan = arpeggiated_instrument_plan_with_identity(1, 1, 16, 8);
+        let plan = arpeggiated_instrument_plan_with_identity(1, 1, 16.0 / 24_000.0, 0.5);
         let mut single_block = AudioEngine::new()
             .with_execution_plan(&plan, 512)
             .unwrap()
@@ -2617,10 +2684,73 @@ mod tests {
     }
 
     #[test]
+    fn loop_locked_arpeggiator_output_is_independent_of_callback_grouping() {
+        let (command_sender_a, command_receiver_a) = crate::engine_command_queue();
+        let (telemetry_sender_a, _telemetry_receiver_a) = crate::engine_telemetry_queue();
+        let (command_sender_b, command_receiver_b) = crate::engine_command_queue();
+        let (telemetry_sender_b, _telemetry_receiver_b) = crate::engine_telemetry_queue();
+        let plan = arpeggiated_instrument_plan_with_phase(
+            1,
+            1,
+            1.0,
+            0.5,
+            engine_protocol::ArpeggiatorPhaseMode::LoopLocked,
+        );
+        let mut single_block = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver_a, telemetry_sender_a);
+        let mut grouped = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver_b, telemetry_sender_b);
+
+        for sender in [&command_sender_a, &command_sender_b] {
+            sender
+                .push(EngineCommand::TransportStart {
+                    id: 1,
+                    at_sample: 0,
+                })
+                .unwrap();
+            sender
+                .push(EngineCommand::SetTransportLoop {
+                    id: 2,
+                    transport_loop: TransportLoop {
+                        enabled: true,
+                        start_sample: 0,
+                        end_sample: 36_000,
+                    },
+                    at_sample: 0,
+                })
+                .unwrap();
+            sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 3,
+                    event: ScheduledEngineEvent::NoteOn {
+                        target_node: NODE_EVENT_INPUT,
+                        note: 60,
+                        velocity: 0.5,
+                        at_sample: 0,
+                    },
+                })
+                .unwrap();
+        }
+
+        let single_output = process_frames(&mut single_block, 96_000);
+        let mut grouped_output = Vec::new();
+
+        for _ in 0..6 {
+            grouped_output.extend(process_frames(&mut grouped, 16_000));
+        }
+
+        assert_outputs_close(&single_output, &grouped_output);
+    }
+
+    #[test]
     fn arpeggiator_stale_tick_is_discarded_by_generation_owner() {
         let (command_sender, command_receiver) = crate::engine_command_queue();
         let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
-        let plan = arpeggiated_instrument_plan_with_identity(1, 1, 16, 8);
+        let plan = arpeggiated_instrument_plan_with_identity(1, 1, 16.0 / 24_000.0, 0.5);
         let mut engine = AudioEngine::new()
             .with_execution_plan(&plan, 512)
             .unwrap()
@@ -2748,7 +2878,7 @@ mod tests {
     fn transport_stop_clears_completion_required_future_events() {
         let (command_sender, command_receiver) = crate::engine_command_queue();
         let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
-        let plan = arpeggiated_instrument_plan_with_identity(1, 1, 8, 4);
+        let plan = arpeggiated_instrument_plan_with_identity(1, 1, 8.0 / 24_000.0, 0.5);
         let mut engine = AudioEngine::new()
             .with_execution_plan(&plan, 512)
             .unwrap()
@@ -2829,7 +2959,7 @@ mod tests {
     fn panic_clears_completion_required_future_events() {
         let (command_sender, command_receiver) = crate::engine_command_queue();
         let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
-        let plan = arpeggiated_instrument_plan_with_identity(1, 1, 8, 4);
+        let plan = arpeggiated_instrument_plan_with_identity(1, 1, 8.0 / 24_000.0, 0.5);
         let mut engine = AudioEngine::new()
             .with_execution_plan(&plan, 512)
             .unwrap()

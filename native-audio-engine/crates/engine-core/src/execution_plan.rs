@@ -9,12 +9,13 @@ use std::{
 
 use engine_dsp::{MonophonicVoice, MonophonicVoiceState, SmoothedParameter};
 use engine_protocol::{
-    AudioBufferSlot, BufferSlotId, EventEndpoint, EventGraphDiagnostics, EventRouteMask,
-    FutureEventLifetime, FutureEventOwner, FutureEventRequest, NativeExecutionPlan, NodeId,
-    ParameterSlotId, PlanNodeKind, ScheduledEngineEvent, ARPEGGIATOR_PORT_INPUT,
-    ARPEGGIATOR_PORT_NOTES, ARPEGGIATOR_PORT_TICK, ARPEGGIATOR_PORT_TICK_INPUT, DEFAULT_EVENT_PORT,
-    EVENT_DELAY_PORT_DELAYED, EVENT_DELAY_PORT_INPUT, NATIVE_EXECUTION_PLAN_VERSION,
-    SCALE_PORT_ACCEPTED, SCALE_PORT_INPUT, SCALE_PORT_REJECTED,
+    ArpeggiatorPhaseMode, AudioBufferSlot, BufferSlotId, EventEndpoint, EventGraphDiagnostics,
+    EventRouteMask, FutureEventLifetime, FutureEventOwner, FutureEventRequest, NativeExecutionPlan,
+    NodeId, ParameterSlotId, PlanNodeKind, ScheduledEngineEvent, TempoMapSnapshot, TransportLoop,
+    ARPEGGIATOR_PORT_INPUT, ARPEGGIATOR_PORT_NOTES, ARPEGGIATOR_PORT_TICK,
+    ARPEGGIATOR_PORT_TICK_INPUT, DEFAULT_EVENT_PORT, EVENT_DELAY_PORT_DELAYED,
+    EVENT_DELAY_PORT_INPUT, NATIVE_EXECUTION_PLAN_VERSION, SCALE_PORT_ACCEPTED, SCALE_PORT_INPUT,
+    SCALE_PORT_REJECTED,
 };
 
 pub const MAX_EVENT_DEPTH: u16 = 32;
@@ -119,10 +120,12 @@ pub struct VoiceConfig {
     pub release_seconds: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RuntimeEventContext {
     pub input_port: u16,
     pub sample_position: u64,
+    pub tempo_map: TempoMapSnapshot,
+    pub transport_loop: TransportLoop,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -355,15 +358,16 @@ impl PreparedExecutionPlan {
                 }
                 PlanNodeKind::Arpeggiator(node_plan) => {
                     validate_arpeggiator_config(
-                        node_plan.step_samples,
-                        node_plan.gate_samples,
+                        node_plan.step_beats,
+                        node_plan.gate_ratio,
                         node_plan.maximum_held_notes,
                     )?;
 
                     Ok(RuntimeNode::Arpeggiator(ArpeggiatorNode::new(
-                        node_plan.step_samples,
-                        node_plan.gate_samples,
+                        node_plan.step_beats,
+                        node_plan.gate_ratio,
                         node_plan.maximum_held_notes,
+                        node_plan.phase_mode,
                     )))
                 }
                 PlanNodeKind::Oscillator(node_plan) => {
@@ -631,10 +635,47 @@ impl PreparedExecutionPlan {
         self.dispatch_event_from(event_endpoint_for_event(event), event)
     }
 
+    pub fn dispatch_event_with_tempo(
+        &mut self,
+        event: ScheduledEngineEvent,
+        tempo_map: TempoMapSnapshot,
+    ) -> bool {
+        self.dispatch_event_from_with_tempo_and_loop(
+            event_endpoint_for_event(event),
+            event,
+            tempo_map,
+            TransportLoop::default(),
+        )
+    }
+
     pub fn dispatch_event_from(
         &mut self,
         source: EventEndpoint,
         event: ScheduledEngineEvent,
+    ) -> bool {
+        self.dispatch_event_from_with_tempo(source, event, TempoMapSnapshot::default())
+    }
+
+    pub fn dispatch_event_from_with_tempo(
+        &mut self,
+        source: EventEndpoint,
+        event: ScheduledEngineEvent,
+        tempo_map: TempoMapSnapshot,
+    ) -> bool {
+        self.dispatch_event_from_with_tempo_and_loop(
+            source,
+            event,
+            tempo_map,
+            TransportLoop::default(),
+        )
+    }
+
+    pub fn dispatch_event_from_with_tempo_and_loop(
+        &mut self,
+        source: EventEndpoint,
+        event: ScheduledEngineEvent,
+        tempo_map: TempoMapSnapshot,
+        transport_loop: TransportLoop,
     ) -> bool {
         self.future_event_queue.clear();
         let source_node = source.node_id;
@@ -718,11 +759,15 @@ impl PreparedExecutionPlan {
                         .source_node_id(route.destination_node_index)
                         .unwrap_or_default(),
                     current_sample: runtime_event.event.at_sample(),
+                    tempo_map,
+                    transport_loop,
                     diagnostics: &mut future_diagnostics,
                 };
                 let context = RuntimeEventContext {
                     input_port: route.destination_port_id,
                     sample_position: runtime_event.event.at_sample(),
+                    tempo_map,
+                    transport_loop,
                 };
 
                 handled |= self.nodes[route.destination_node_index as usize].process_event(
@@ -744,6 +789,51 @@ impl PreparedExecutionPlan {
 
     pub fn take_future_event_request(&mut self) -> Option<FutureEventRequest> {
         self.future_event_queue.pop()
+    }
+
+    pub fn regenerate_future_events_for_tempo_change(
+        &mut self,
+        current_sample: u64,
+        committed_horizon: u64,
+        previous_tempo: TempoMapSnapshot,
+        new_tempo: TempoMapSnapshot,
+        transport_loop: TransportLoop,
+    ) {
+        let plan_id = self.plan_id;
+        let plan_revision = self.plan_revision;
+
+        for (node_index, node) in self.nodes.iter_mut().enumerate() {
+            let node_id = self
+                .node_metadata
+                .get(node_index)
+                .map(|metadata| metadata.stable_id as NodeId)
+                .unwrap_or_default();
+
+            let Some(request) = node.future_request_for_tempo_change(
+                plan_id,
+                plan_revision,
+                node_id,
+                current_sample,
+                committed_horizon,
+                previous_tempo,
+                new_tempo,
+                transport_loop,
+            ) else {
+                continue;
+            };
+
+            if self.future_event_queue.push(request).is_err() {
+                self.event_graph_diagnostics.future_events_dropped_capacity = self
+                    .event_graph_diagnostics
+                    .future_events_dropped_capacity
+                    .saturating_add(1);
+            } else {
+                self.event_graph_diagnostics.future_events_requested = self
+                    .event_graph_diagnostics
+                    .future_events_requested
+                    .saturating_add(1);
+            }
+        }
     }
 
     pub fn record_future_scheduler_full(&mut self) {
@@ -1365,6 +1455,32 @@ impl RuntimeNode {
             _ => generation == 0,
         }
     }
+
+    fn future_request_for_tempo_change(
+        &mut self,
+        plan_id: u64,
+        plan_revision: u64,
+        node_id: NodeId,
+        current_sample: u64,
+        committed_horizon: u64,
+        previous_tempo: TempoMapSnapshot,
+        new_tempo: TempoMapSnapshot,
+        transport_loop: TransportLoop,
+    ) -> Option<FutureEventRequest> {
+        match self {
+            Self::Arpeggiator(node) => node.future_request_for_tempo_change(
+                plan_id,
+                plan_revision,
+                node_id,
+                current_sample,
+                committed_horizon,
+                previous_tempo,
+                new_tempo,
+                transport_loop,
+            ),
+            _ => None,
+        }
+    }
 }
 
 struct EventInputNode;
@@ -1375,10 +1491,13 @@ struct EventDelayNode {
 
 struct ArpeggiatorNode {
     held_notes: Box<[Option<HeldNote>]>,
-    step_samples: u32,
-    gate_samples: u32,
+    step_beats: f64,
+    gate_ratio: f32,
+    phase_mode: ArpeggiatorPhaseMode,
     held_count: usize,
     current_index: usize,
+    sequence_index: u64,
+    origin_beat: f64,
     generation: u64,
 }
 
@@ -1412,13 +1531,21 @@ impl EventDelayNode {
 }
 
 impl ArpeggiatorNode {
-    fn new(step_samples: u32, gate_samples: u32, maximum_held_notes: u16) -> Self {
+    fn new(
+        step_beats: f64,
+        gate_ratio: f32,
+        maximum_held_notes: u16,
+        phase_mode: ArpeggiatorPhaseMode,
+    ) -> Self {
         Self {
             held_notes: vec![None; maximum_held_notes as usize].into_boxed_slice(),
-            step_samples,
-            gate_samples,
+            step_beats,
+            gate_ratio,
+            phase_mode,
             held_count: 0,
             current_index: 0,
+            sequence_index: 1,
+            origin_beat: 0.0,
             generation: 0,
         }
     }
@@ -1427,6 +1554,8 @@ impl ArpeggiatorNode {
         self.held_notes.fill(None);
         self.held_count = 0;
         self.current_index = 0;
+        self.sequence_index = 1;
+        self.origin_beat = 0.0;
         self.generation = self.generation.saturating_add(1);
     }
 
@@ -1444,7 +1573,8 @@ impl ArpeggiatorNode {
                 }
 
                 self.add_or_update_note(note, velocity);
-                self.schedule_tick(context.sample_position, future_emitter);
+                self.restart_sequence(context);
+                self.schedule_tick(future_emitter);
                 true
             }
             ScheduledEngineEvent::NoteOff { note, .. } => {
@@ -1467,6 +1597,10 @@ impl ArpeggiatorNode {
                     return false;
                 };
                 let at_sample = context.sample_position;
+                let tick_beat = context.tempo_map.sample_to_beat(at_sample);
+                let note_off_sample = context
+                    .tempo_map
+                    .beat_to_sample(tick_beat + self.step_beats * self.gate_ratio as f64);
 
                 let note_on = ScheduledEngineEvent::NoteOn {
                     target_node: future_emitter.source_node_id(),
@@ -1477,18 +1611,19 @@ impl ArpeggiatorNode {
                 let note_off = ScheduledEngineEvent::NoteOff {
                     target_node: future_emitter.source_node_id(),
                     note: note.note,
-                    at_sample: at_sample.saturating_add(self.gate_samples as u64),
+                    at_sample: note_off_sample,
                 };
 
                 let emitted = emitter.emit_from(ARPEGGIATOR_PORT_NOTES, note_on).is_ok();
                 let _ = future_emitter.request_from_lifetime(
                     ARPEGGIATOR_PORT_NOTES,
                     note_off,
-                    at_sample.saturating_add(self.gate_samples as u64),
+                    note_off_sample,
                     FutureEventLifetime::CompletionRequired,
                     0,
                 );
-                self.schedule_tick(at_sample, future_emitter);
+                self.sequence_index = self.sequence_index.saturating_add(1);
+                self.schedule_tick(future_emitter);
                 emitted
             }
         }
@@ -1537,6 +1672,12 @@ impl ArpeggiatorNode {
     fn invalidate_generation(&mut self) {
         self.generation = self.generation.saturating_add(1);
         self.current_index = 0;
+        self.sequence_index = 1;
+    }
+
+    fn restart_sequence(&mut self, context: RuntimeEventContext) {
+        self.origin_beat = context.tempo_map.sample_to_beat(context.sample_position);
+        self.sequence_index = 1;
     }
 
     fn sort_held_notes(&mut self) {
@@ -1582,12 +1723,14 @@ impl ArpeggiatorNode {
         Some(note)
     }
 
-    fn schedule_tick(&self, sample_position: u64, future_emitter: &mut FutureEventEmitter<'_>) {
-        if self.held_count == 0 {
+    fn schedule_tick(&self, future_emitter: &mut FutureEventEmitter<'_>) {
+        let Some(at_sample) = self.next_tick_sample(
+            future_emitter.current_sample,
+            future_emitter.tempo_map,
+            future_emitter.transport_loop,
+        ) else {
             return;
-        }
-
-        let at_sample = sample_position.saturating_add(self.step_samples as u64);
+        };
         let _ = future_emitter.request_from_lifetime(
             ARPEGGIATOR_PORT_TICK,
             ScheduledEngineEvent::ArpeggiatorTick {
@@ -1599,6 +1742,127 @@ impl ArpeggiatorNode {
             FutureEventLifetime::GenerationBound,
             self.generation,
         );
+    }
+
+    fn next_tick_sample(
+        &self,
+        current_sample: u64,
+        tempo_map: TempoMapSnapshot,
+        transport_loop: TransportLoop,
+    ) -> Option<u64> {
+        if self.held_count == 0 {
+            return None;
+        }
+
+        match self.phase_mode {
+            ArpeggiatorPhaseMode::FreeRunning => {
+                let tick_beat = self.origin_beat + self.sequence_index as f64 * self.step_beats;
+                Some(tempo_map.beat_to_sample(tick_beat))
+            }
+            ArpeggiatorPhaseMode::LoopLocked => {
+                self.loop_locked_next_tick_sample(current_sample, tempo_map, transport_loop)
+            }
+        }
+    }
+
+    fn loop_locked_next_tick_sample(
+        &self,
+        current_sample: u64,
+        tempo_map: TempoMapSnapshot,
+        transport_loop: TransportLoop,
+    ) -> Option<u64> {
+        if !transport_loop.enabled || transport_loop.end_sample <= transport_loop.start_sample {
+            return self.next_tick_sample_free_running(tempo_map);
+        }
+
+        let loop_length_samples = transport_loop
+            .end_sample
+            .saturating_sub(transport_loop.start_sample);
+        let loop_iteration = current_sample
+            .saturating_sub(transport_loop.start_sample)
+            .checked_div(loop_length_samples)
+            .unwrap_or(0);
+        let loop_start_sample = transport_loop
+            .start_sample
+            .saturating_add(loop_length_samples.saturating_mul(loop_iteration));
+        let loop_end_sample = loop_start_sample.saturating_add(loop_length_samples);
+        let loop_start_beat = tempo_map.sample_to_beat(loop_start_sample);
+        let loop_end_beat = tempo_map.sample_to_beat(loop_end_sample);
+        let loop_length_beats = loop_end_beat - loop_start_beat;
+
+        if !loop_length_beats.is_finite() || loop_length_beats <= 0.0 {
+            return self.next_tick_sample_free_running(tempo_map);
+        }
+
+        let current_beat = tempo_map.sample_to_beat(current_sample);
+        let relative_beat = (current_beat - loop_start_beat).max(0.0);
+        let next_step_index = (relative_beat / self.step_beats).floor() as u64 + 1;
+        let next_relative_beat = next_step_index as f64 * self.step_beats;
+
+        if next_relative_beat >= loop_length_beats {
+            Some(loop_end_sample)
+        } else {
+            Some(tempo_map.beat_to_sample(loop_start_beat + next_relative_beat))
+        }
+    }
+
+    fn next_tick_sample_free_running(&self, tempo_map: TempoMapSnapshot) -> Option<u64> {
+        if self.held_count == 0 {
+            return None;
+        }
+
+        let tick_beat = self.origin_beat + self.sequence_index as f64 * self.step_beats;
+        Some(tempo_map.beat_to_sample(tick_beat))
+    }
+
+    fn future_request_for_tempo_change(
+        &mut self,
+        plan_id: u64,
+        plan_revision: u64,
+        node_id: NodeId,
+        current_sample: u64,
+        committed_horizon: u64,
+        previous_tempo: TempoMapSnapshot,
+        new_tempo: TempoMapSnapshot,
+        transport_loop: TransportLoop,
+    ) -> Option<FutureEventRequest> {
+        if self.held_count == 0 {
+            return None;
+        }
+
+        let previous_sample =
+            self.next_tick_sample(current_sample, previous_tempo, transport_loop)?;
+
+        if previous_sample < committed_horizon {
+            return None;
+        }
+
+        let at_sample = self.next_tick_sample(current_sample, new_tempo, transport_loop)?;
+
+        if at_sample <= current_sample {
+            return None;
+        }
+
+        self.generation = self.generation.saturating_add(1);
+
+        Some(FutureEventRequest {
+            source: EventEndpoint {
+                node_id,
+                port_id: ARPEGGIATOR_PORT_TICK,
+            },
+            event: ScheduledEngineEvent::ArpeggiatorTick {
+                target_node: node_id,
+                generation: self.generation,
+                at_sample,
+            },
+            at_sample,
+            owner: FutureEventOwner::generation_bound(
+                plan_id,
+                plan_revision,
+                node_id,
+                self.generation,
+            ),
+        })
     }
 
     fn generation_is_current(&self, generation: u64) -> bool {
@@ -2515,6 +2779,8 @@ struct FutureEventEmitter<'a> {
     plan_revision: u64,
     source_node_id: NodeId,
     current_sample: u64,
+    tempo_map: TempoMapSnapshot,
+    transport_loop: TransportLoop,
     diagnostics: &'a mut EventGraphDiagnostics,
 }
 
@@ -3012,13 +3278,15 @@ fn validate_instrument_voice_count(voice_count: u16) -> Result<(), PlanValidatio
 }
 
 fn validate_arpeggiator_config(
-    step_samples: u32,
-    gate_samples: u32,
+    step_beats: f64,
+    gate_ratio: f32,
     maximum_held_notes: u16,
 ) -> Result<(), PlanValidationError> {
-    if step_samples == 0
-        || gate_samples == 0
-        || gate_samples >= step_samples
+    if !step_beats.is_finite()
+        || step_beats <= 0.0
+        || !gate_ratio.is_finite()
+        || gate_ratio <= 0.0
+        || gate_ratio >= 1.0
         || maximum_held_notes == 0
         || maximum_held_notes > MAX_ARPEGGIATOR_HELD_NOTES
     {
@@ -3815,8 +4083,8 @@ mod tests {
     }
 
     fn arpeggiator_to_recording_plan(
-        step_samples: u32,
-        gate_samples: u32,
+        step_beats: f64,
+        gate_ratio: f32,
         maximum_held_notes: u16,
     ) -> NativeExecutionPlan {
         NativeExecutionPlan {
@@ -3831,9 +4099,10 @@ mod tests {
                 PlanNode {
                     id: NODE_ARPEGGIATOR,
                     kind: PlanNodeKind::Arpeggiator(ArpeggiatorNodePlan {
-                        step_samples,
-                        gate_samples,
+                        step_beats,
+                        gate_ratio,
                         maximum_held_notes,
+                        phase_mode: ArpeggiatorPhaseMode::FreeRunning,
                     }),
                 },
                 PlanNode {
@@ -4201,7 +4470,7 @@ mod tests {
 
     #[test]
     fn arpeggiator_schedules_first_tick_from_held_note() {
-        let plan = arpeggiator_to_recording_plan(8, 3, 4);
+        let plan = arpeggiator_to_recording_plan(8.0 / 24_000.0, 3.0 / 8.0, 4);
         let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
 
         install_recording_node(&mut prepared, 2);
@@ -4235,7 +4504,7 @@ mod tests {
 
     #[test]
     fn arpeggiator_tick_emits_note_and_schedules_gate_and_next_tick() {
-        let plan = arpeggiator_to_recording_plan(8, 3, 4);
+        let plan = arpeggiator_to_recording_plan(8.0 / 24_000.0, 3.0 / 8.0, 4);
         let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
 
         install_recording_node(&mut prepared, 2);
@@ -4285,8 +4554,385 @@ mod tests {
     }
 
     #[test]
+    fn arpeggiator_uses_beat_timing_at_fixed_tempo() {
+        let tempo = TempoMapSnapshot {
+            origin_sample: 0,
+            origin_beat: 0.0,
+            bpm: 120.0,
+            sample_rate: 48_000.0,
+        };
+        let plan = arpeggiator_to_recording_plan(0.5, 0.5, 4);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event_from_with_tempo(
+            event_endpoint(NODE_EVENT_INPUT),
+            note_on(NODE_EVENT_INPUT, 60, 0.75, 0),
+            tempo
+        ));
+
+        let tick = prepared.take_future_event_request().unwrap();
+
+        assert_eq!(tick.at_sample, 12_000);
+        assert!(prepared.dispatch_event_from_with_tempo(tick.source, tick.event, tempo));
+
+        let note_off = prepared.take_future_event_request().unwrap();
+        let next_tick = prepared.take_future_event_request().unwrap();
+
+        assert_eq!(note_off.at_sample, 18_000);
+        assert_eq!(next_tick.at_sample, 24_000);
+        assert_eq!(
+            recorded_events(&prepared, 2),
+            &[ScheduledEngineEvent::NoteOn {
+                target_node: NODE_ARPEGGIATOR,
+                note: 60,
+                velocity: 0.75,
+                at_sample: 12_000,
+            }]
+        );
+    }
+
+    #[test]
+    fn arpeggiator_tick_timing_does_not_accumulate_rounding_drift() {
+        let tempo = TempoMapSnapshot {
+            origin_sample: 0,
+            origin_beat: 0.0,
+            bpm: 123.0,
+            sample_rate: 48_000.0,
+        };
+        let step_beats = 1.0 / 7.0;
+        let plan = arpeggiator_to_recording_plan(step_beats, 0.5, 4);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event_from_with_tempo(
+            event_endpoint(NODE_EVENT_INPUT),
+            note_on(NODE_EVENT_INPUT, 60, 0.75, 0),
+            tempo
+        ));
+
+        let mut tick = prepared.take_future_event_request().unwrap();
+
+        for tick_index in 1..=512 {
+            let expected_sample = tempo.beat_to_sample(tick_index as f64 * step_beats);
+
+            assert_eq!(tick.at_sample, expected_sample);
+            assert!(prepared.dispatch_event_from_with_tempo(tick.source, tick.event, tempo));
+
+            let _note_off = prepared.take_future_event_request().unwrap();
+            tick = prepared.take_future_event_request().unwrap();
+        }
+    }
+
+    #[test]
+    fn arpeggiator_free_running_phase_continues_across_loop_boundary() {
+        let tempo = TempoMapSnapshot::default();
+        let transport_loop = TransportLoop {
+            enabled: true,
+            start_sample: 0,
+            end_sample: 36_000,
+        };
+        let plan = arpeggiator_to_recording_plan(1.0, 0.5, 4);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event_from_with_tempo_and_loop(
+            event_endpoint(NODE_EVENT_INPUT),
+            note_on(NODE_EVENT_INPUT, 60, 0.75, 0),
+            tempo,
+            transport_loop
+        ));
+
+        let first_tick = prepared.take_future_event_request().unwrap();
+
+        assert_eq!(first_tick.at_sample, 24_000);
+        assert!(prepared.dispatch_event_from_with_tempo_and_loop(
+            first_tick.source,
+            first_tick.event,
+            tempo,
+            transport_loop
+        ));
+
+        let _note_off = prepared.take_future_event_request().unwrap();
+        let second_tick = prepared.take_future_event_request().unwrap();
+
+        assert_eq!(second_tick.at_sample, 48_000);
+    }
+
+    #[test]
+    fn arpeggiator_loop_locked_phase_resets_to_loop_boundary() {
+        let tempo = TempoMapSnapshot::default();
+        let transport_loop = TransportLoop {
+            enabled: true,
+            start_sample: 0,
+            end_sample: 36_000,
+        };
+        let mut plan = arpeggiator_to_recording_plan(1.0, 0.5, 4);
+
+        if let PlanNodeKind::Arpeggiator(node) = &mut plan.nodes[1].kind {
+            node.phase_mode = ArpeggiatorPhaseMode::LoopLocked;
+        }
+
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event_from_with_tempo_and_loop(
+            event_endpoint(NODE_EVENT_INPUT),
+            note_on(NODE_EVENT_INPUT, 60, 0.75, 0),
+            tempo,
+            transport_loop
+        ));
+
+        let first_tick = prepared.take_future_event_request().unwrap();
+
+        assert_eq!(first_tick.at_sample, 24_000);
+        assert!(prepared.dispatch_event_from_with_tempo_and_loop(
+            first_tick.source,
+            first_tick.event,
+            tempo,
+            transport_loop
+        ));
+
+        let _note_off = prepared.take_future_event_request().unwrap();
+        let boundary_tick = prepared.take_future_event_request().unwrap();
+
+        assert_eq!(boundary_tick.at_sample, 36_000);
+        assert!(prepared.dispatch_event_from_with_tempo_and_loop(
+            boundary_tick.source,
+            boundary_tick.event,
+            tempo,
+            transport_loop
+        ));
+
+        let _boundary_note_off = prepared.take_future_event_request().unwrap();
+        let next_tick = prepared.take_future_event_request().unwrap();
+
+        assert_eq!(next_tick.at_sample, 60_000);
+    }
+
+    #[test]
+    fn arpeggiator_loop_locked_phase_does_not_drift_over_many_loops() {
+        let tempo = TempoMapSnapshot::default();
+        let transport_loop = TransportLoop {
+            enabled: true,
+            start_sample: 0,
+            end_sample: 36_000,
+        };
+        let mut plan = arpeggiator_to_recording_plan(1.0, 0.5, 4);
+
+        if let PlanNodeKind::Arpeggiator(node) = &mut plan.nodes[1].kind {
+            node.phase_mode = ArpeggiatorPhaseMode::LoopLocked;
+        }
+
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event_from_with_tempo_and_loop(
+            event_endpoint(NODE_EVENT_INPUT),
+            note_on(NODE_EVENT_INPUT, 60, 0.75, 0),
+            tempo,
+            transport_loop
+        ));
+
+        let mut tick = prepared.take_future_event_request().unwrap();
+
+        for step in 0..128 {
+            let loop_index = step / 2;
+            let expected_sample = if step % 2 == 0 {
+                loop_index * 36_000 + 24_000
+            } else {
+                (loop_index + 1) * 36_000
+            };
+
+            assert_eq!(tick.at_sample, expected_sample);
+            assert!(prepared.dispatch_event_from_with_tempo_and_loop(
+                tick.source,
+                tick.event,
+                tempo,
+                transport_loop
+            ));
+
+            let _note_off = prepared.take_future_event_request().unwrap();
+            tick = prepared.take_future_event_request().unwrap();
+        }
+    }
+
+    #[test]
+    fn arpeggiator_loop_locked_gate_note_off_can_cross_loop_boundary() {
+        let tempo = TempoMapSnapshot::default();
+        let transport_loop = TransportLoop {
+            enabled: true,
+            start_sample: 0,
+            end_sample: 36_000,
+        };
+        let mut plan = arpeggiator_to_recording_plan(1.0, 0.75, 4);
+
+        if let PlanNodeKind::Arpeggiator(node) = &mut plan.nodes[1].kind {
+            node.phase_mode = ArpeggiatorPhaseMode::LoopLocked;
+        }
+
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event_from_with_tempo_and_loop(
+            event_endpoint(NODE_EVENT_INPUT),
+            note_on(NODE_EVENT_INPUT, 60, 0.75, 0),
+            tempo,
+            transport_loop
+        ));
+
+        let first_tick = prepared.take_future_event_request().unwrap();
+
+        assert!(prepared.dispatch_event_from_with_tempo_and_loop(
+            first_tick.source,
+            first_tick.event,
+            tempo,
+            transport_loop
+        ));
+
+        let note_off = prepared.take_future_event_request().unwrap();
+        let boundary_tick = prepared.take_future_event_request().unwrap();
+
+        assert_eq!(note_off.at_sample, 42_000);
+        assert_eq!(boundary_tick.at_sample, 36_000);
+        assert!(prepared.dispatch_event_from_with_tempo_and_loop(
+            boundary_tick.source,
+            boundary_tick.event,
+            tempo,
+            transport_loop
+        ));
+        assert!(prepared.dispatch_event_from_with_tempo_and_loop(
+            note_off.source,
+            note_off.event,
+            tempo,
+            transport_loop
+        ));
+        assert!(
+            recorded_events(&prepared, 2).contains(&ScheduledEngineEvent::NoteOff {
+                target_node: NODE_ARPEGGIATOR,
+                note: 60,
+                at_sample: 42_000,
+            })
+        );
+    }
+
+    #[test]
+    fn arpeggiator_tempo_change_regenerates_uncommitted_tick() {
+        let initial_tempo = TempoMapSnapshot {
+            origin_sample: 0,
+            origin_beat: 0.0,
+            bpm: 120.0,
+            sample_rate: 48_000.0,
+        };
+        let slower_tempo = TempoMapSnapshot {
+            origin_sample: 0,
+            origin_beat: 0.0,
+            bpm: 60.0,
+            sample_rate: 48_000.0,
+        };
+        let plan = arpeggiator_to_recording_plan(1.0, 0.5, 4);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event_from_with_tempo(
+            event_endpoint(NODE_EVENT_INPUT),
+            note_on(NODE_EVENT_INPUT, 60, 0.75, 0),
+            initial_tempo
+        ));
+
+        let stale_tick = prepared.take_future_event_request().unwrap();
+
+        assert_eq!(stale_tick.at_sample, 24_000);
+
+        prepared.regenerate_future_events_for_tempo_change(
+            0,
+            1,
+            initial_tempo,
+            slower_tempo,
+            TransportLoop::default(),
+        );
+
+        let retimed_tick = prepared.take_future_event_request().unwrap();
+
+        assert_eq!(retimed_tick.at_sample, 48_000);
+        assert_eq!(
+            retimed_tick.owner,
+            FutureEventOwner::generation_bound(1, 1, NODE_ARPEGGIATOR, 2)
+        );
+        assert!(!prepared.dispatch_event_from_with_tempo(
+            stale_tick.source,
+            stale_tick.event,
+            slower_tempo
+        ));
+        assert!(prepared.dispatch_event_from_with_tempo(
+            retimed_tick.source,
+            retimed_tick.event,
+            slower_tempo
+        ));
+    }
+
+    #[test]
+    fn arpeggiator_tempo_change_keeps_committed_tick_sample() {
+        let initial_tempo = TempoMapSnapshot {
+            origin_sample: 0,
+            origin_beat: 0.0,
+            bpm: 120.0,
+            sample_rate: 48_000.0,
+        };
+        let slower_tempo = TempoMapSnapshot {
+            origin_sample: 0,
+            origin_beat: 0.0,
+            bpm: 60.0,
+            sample_rate: 48_000.0,
+        };
+        let plan = arpeggiator_to_recording_plan(1.0, 0.5, 4);
+        let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
+
+        install_recording_node(&mut prepared, 2);
+
+        assert!(prepared.dispatch_event_from_with_tempo(
+            event_endpoint(NODE_EVENT_INPUT),
+            note_on(NODE_EVENT_INPUT, 60, 0.75, 0),
+            initial_tempo
+        ));
+
+        let committed_tick = prepared.take_future_event_request().unwrap();
+
+        prepared.regenerate_future_events_for_tempo_change(
+            0,
+            24_001,
+            initial_tempo,
+            slower_tempo,
+            TransportLoop::default(),
+        );
+
+        assert!(prepared.take_future_event_request().is_none());
+        assert!(prepared.dispatch_event_from_with_tempo(
+            committed_tick.source,
+            committed_tick.event,
+            slower_tempo
+        ));
+        assert_eq!(
+            recorded_events(&prepared, 2),
+            &[ScheduledEngineEvent::NoteOn {
+                target_node: NODE_ARPEGGIATOR,
+                note: 60,
+                velocity: 0.75,
+                at_sample: 24_000,
+            }]
+        );
+    }
+
+    #[test]
     fn arpeggiator_orders_held_notes_ascending() {
-        let plan = arpeggiator_to_recording_plan(8, 2, 4);
+        let plan = arpeggiator_to_recording_plan(8.0 / 24_000.0, 2.0 / 8.0, 4);
         let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
 
         install_recording_node(&mut prepared, 2);
@@ -4323,7 +4969,7 @@ mod tests {
 
     #[test]
     fn arpeggiator_note_off_allows_generated_gate_note_off_to_complete() {
-        let plan = arpeggiator_to_recording_plan(8, 3, 4);
+        let plan = arpeggiator_to_recording_plan(8.0 / 24_000.0, 3.0 / 8.0, 4);
         let mut prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
 
         install_recording_node(&mut prepared, 2);
@@ -4358,15 +5004,16 @@ mod tests {
 
     #[test]
     fn arpeggiator_rejects_invalid_configuration() {
-        for (step_samples, gate_samples, maximum_held_notes) in [
-            (0, 1, 4),
-            (8, 0, 4),
-            (8, 8, 4),
-            (8, 1, 0),
-            (8, 1, MAX_ARPEGGIATOR_HELD_NOTES + 1),
+        for (step_beats, gate_ratio, maximum_held_notes) in [
+            (0.0, 0.5, 4),
+            (f64::NAN, 0.5, 4),
+            (0.25, 0.0, 4),
+            (0.25, 1.0, 4),
+            (0.25, f32::NAN, 4),
+            (0.25, 0.5, 0),
+            (0.25, 0.5, MAX_ARPEGGIATOR_HELD_NOTES + 1),
         ] {
-            let plan =
-                arpeggiator_to_recording_plan(step_samples, gate_samples, maximum_held_notes);
+            let plan = arpeggiator_to_recording_plan(step_beats, gate_ratio, maximum_held_notes);
 
             assert!(matches!(
                 PreparedExecutionPlan::prepare(&plan, 128),

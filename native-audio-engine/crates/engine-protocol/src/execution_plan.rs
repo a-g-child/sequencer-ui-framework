@@ -195,9 +195,16 @@ pub struct EventDelayNodePlan {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ArpeggiatorNodePlan {
-    pub step_samples: u32,
-    pub gate_samples: u32,
+    pub step_beats: f64,
+    pub gate_ratio: f32,
     pub maximum_held_notes: u16,
+    pub phase_mode: ArpeggiatorPhaseMode,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArpeggiatorPhaseMode {
+    FreeRunning,
+    LoopLocked,
 }
 
 #[derive(Clone, Debug, PartialEq)]
