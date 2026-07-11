@@ -1747,6 +1747,24 @@ mod tests {
         gate_ratio: f32,
         phase_mode: engine_protocol::ArpeggiatorPhaseMode,
     ) -> NativeExecutionPlan {
+        arpeggiated_instrument_plan_with_phase_and_pattern(
+            plan_id,
+            plan_revision,
+            step_beats,
+            gate_ratio,
+            phase_mode,
+            engine_protocol::ArpeggiatorPattern::Ascending,
+        )
+    }
+
+    fn arpeggiated_instrument_plan_with_phase_and_pattern(
+        plan_id: u64,
+        plan_revision: u64,
+        step_beats: f64,
+        gate_ratio: f32,
+        phase_mode: engine_protocol::ArpeggiatorPhaseMode,
+        pattern: engine_protocol::ArpeggiatorPattern,
+    ) -> NativeExecutionPlan {
         NativeExecutionPlan {
             version: engine_protocol::NATIVE_EXECUTION_PLAN_VERSION,
             plan_id,
@@ -1763,6 +1781,7 @@ mod tests {
                         gate_ratio,
                         maximum_held_notes: 8,
                         phase_mode,
+                        pattern,
                     }),
                 },
                 PlanNode {
@@ -2677,6 +2696,62 @@ mod tests {
         let mut grouped_output = Vec::new();
 
         for _ in 0..4 {
+            grouped_output.extend(process_frames(&mut grouped, 32));
+        }
+
+        assert_outputs_close(&single_output, &grouped_output);
+    }
+
+    #[test]
+    fn arpeggiator_up_down_pattern_output_is_independent_of_callback_grouping() {
+        let (command_sender_a, command_receiver_a) = crate::engine_command_queue();
+        let (telemetry_sender_a, _telemetry_receiver_a) = crate::engine_telemetry_queue();
+        let (command_sender_b, command_receiver_b) = crate::engine_command_queue();
+        let (telemetry_sender_b, _telemetry_receiver_b) = crate::engine_telemetry_queue();
+        let plan = arpeggiated_instrument_plan_with_phase_and_pattern(
+            1,
+            1,
+            16.0 / 24_000.0,
+            0.5,
+            engine_protocol::ArpeggiatorPhaseMode::FreeRunning,
+            engine_protocol::ArpeggiatorPattern::UpDown,
+        );
+        let mut single_block = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver_a, telemetry_sender_a);
+        let mut grouped = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver_b, telemetry_sender_b);
+
+        for sender in [&command_sender_a, &command_sender_b] {
+            sender
+                .push(EngineCommand::TransportStart {
+                    id: 1,
+                    at_sample: 0,
+                })
+                .unwrap();
+
+            for (index, note) in [64, 60, 67].into_iter().enumerate() {
+                sender
+                    .push(EngineCommand::ScheduleEvent {
+                        id: 2 + index as u64,
+                        event: ScheduledEngineEvent::NoteOn {
+                            target_node: NODE_EVENT_INPUT,
+                            note,
+                            velocity: 0.5,
+                            at_sample: index as u64,
+                        },
+                    })
+                    .unwrap();
+            }
+        }
+
+        let single_output = process_frames(&mut single_block, 256);
+        let mut grouped_output = Vec::new();
+
+        for _ in 0..8 {
             grouped_output.extend(process_frames(&mut grouped, 32));
         }
 

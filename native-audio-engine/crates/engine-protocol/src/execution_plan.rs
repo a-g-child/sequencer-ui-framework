@@ -199,12 +199,21 @@ pub struct ArpeggiatorNodePlan {
     pub gate_ratio: f32,
     pub maximum_held_notes: u16,
     pub phase_mode: ArpeggiatorPhaseMode,
+    pub pattern: ArpeggiatorPattern,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArpeggiatorPhaseMode {
     FreeRunning,
     LoopLocked,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArpeggiatorPattern {
+    Ascending,
+    Descending,
+    UpDown,
+    PlayedOrder,
 }
 
 #[derive(Clone, Debug, PartialEq)]
