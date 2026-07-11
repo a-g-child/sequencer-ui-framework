@@ -9,8 +9,8 @@ use std::{
 
 use engine_dsp::{MonophonicVoice, SmoothedParameter};
 use engine_protocol::{
-    AudioBufferSlot, BufferSlotId, NativeExecutionPlan, NodeId, ParameterSlotId, PlanNodeKind,
-    ScheduledEngineEvent, NATIVE_EXECUTION_PLAN_VERSION,
+    AudioBufferSlot, BufferSlotId, EventRouteMask, NativeExecutionPlan, NodeId, ParameterSlotId,
+    PlanNodeKind, ScheduledEngineEvent, NATIVE_EXECUTION_PLAN_VERSION,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +57,7 @@ pub struct PreparedExecutionPlan {
     buffers: AudioBufferArena,
     parameters: Box<[RuntimeParameter]>,
     execution_order: Box<[usize]>,
+    event_routes: Box<[RuntimeEventRoute]>,
     node_metadata: Box<[RuntimeNodeMetadata]>,
     output_scratch: Box<[f32]>,
     output_channels: usize,
@@ -224,6 +225,18 @@ impl PreparedExecutionPlan {
             .map(|node_id| node_index(plan, *node_id))
             .collect::<Result<Vec<_>, _>>()?
             .into_boxed_slice();
+        let event_routes = plan
+            .event_routes
+            .iter()
+            .map(|route| {
+                Ok(RuntimeEventRoute {
+                    source_node: route.source_node,
+                    destination_node_index: node_index(plan, route.destination_node)?,
+                    event_mask: route.event_mask,
+                })
+            })
+            .collect::<Result<Vec<_>, PlanValidationError>>()?
+            .into_boxed_slice();
         let node_metadata = plan
             .nodes
             .iter()
@@ -247,6 +260,7 @@ impl PreparedExecutionPlan {
             buffers,
             parameters,
             execution_order,
+            event_routes,
             node_metadata,
             output_scratch: vec![0.0; maximum_frames * output_channels.max(1)].into_boxed_slice(),
             output_channels: output_channels.max(1),
@@ -343,16 +357,17 @@ impl PreparedExecutionPlan {
             ScheduledEngineEvent::NoteOn { target_node, .. }
             | ScheduledEngineEvent::NoteOff { target_node, .. } => target_node,
         };
-        let Some(node_index) = self
-            .node_metadata
-            .iter()
-            .find(|metadata| metadata.stable_id == target_node as u64)
-            .map(|metadata| metadata.runtime_index as usize)
-        else {
-            return false;
-        };
+        let mut handled = false;
 
-        self.nodes[node_index].handle_event(event)
+        for route in self.event_routes.iter().copied() {
+            if route.source_node != target_node || !route.accepts(event) {
+                continue;
+            }
+
+            handled |= self.nodes[route.destination_node_index].handle_event(event);
+        }
+
+        handled
     }
 
     pub fn output_node_count(&self) -> usize {
@@ -891,6 +906,23 @@ struct RuntimeParameter {
     smoother: SmoothedParameter,
 }
 
+#[derive(Clone, Copy)]
+struct RuntimeEventRoute {
+    source_node: NodeId,
+    destination_node_index: usize,
+    event_mask: EventRouteMask,
+}
+
+impl RuntimeEventRoute {
+    fn accepts(&self, event: ScheduledEngineEvent) -> bool {
+        match event {
+            ScheduledEngineEvent::NoteOn { .. } | ScheduledEngineEvent::NoteOff { .. } => {
+                self.event_mask.accepts_note()
+            }
+        }
+    }
+}
+
 fn process_nodes(
     nodes: &mut [RuntimeNode],
     buffers: &mut AudioBufferArena,
@@ -1243,6 +1275,7 @@ mod tests {
                 AudioBufferSlot { id: 2, channels: 1 },
             ],
             parameters: diagnostic_tone_plan(440.0, 0.05, 2).parameters,
+            event_routes: vec![],
             audio_execution_order: vec![NODE_OSCILLATOR, NODE_GAIN],
         };
 

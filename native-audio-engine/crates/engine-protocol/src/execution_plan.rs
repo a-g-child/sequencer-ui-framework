@@ -20,7 +20,28 @@ pub struct NativeExecutionPlan {
     pub nodes: Vec<PlanNode>,
     pub buffers: Vec<AudioBufferSlot>,
     pub parameters: Vec<ParameterSlot>,
+    pub event_routes: Vec<EventRoute>,
     pub audio_execution_order: Vec<NodeId>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EventRoute {
+    pub source_node: NodeId,
+    pub destination_node: NodeId,
+    pub event_mask: EventRouteMask,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EventRouteMask {
+    pub note: bool,
+}
+
+impl EventRouteMask {
+    pub const NOTE: Self = Self { note: true };
+
+    pub fn accepts_note(self) -> bool {
+        self.note
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -131,6 +152,7 @@ pub fn diagnostic_tone_plan(
                 default_value: gain,
             },
         ],
+        event_routes: vec![],
         audio_execution_order: vec![NODE_OSCILLATOR, NODE_GAIN, NODE_OUTPUT],
     }
 }
@@ -161,6 +183,11 @@ pub fn monophonic_voice_plan(output_channels: u16) -> NativeExecutionPlan {
         ],
         buffers: vec![AudioBufferSlot { id: 1, channels: 1 }],
         parameters: vec![],
+        event_routes: vec![EventRoute {
+            source_node: NODE_VOICE,
+            destination_node: NODE_VOICE,
+            event_mask: EventRouteMask::NOTE,
+        }],
         audio_execution_order: vec![NODE_VOICE, NODE_OUTPUT],
     }
 }

@@ -1329,8 +1329,9 @@ mod tests {
     use super::*;
     use crate::{PlanStateTransfer, StateTransferEntry, StateTransferKind};
     use engine_protocol::{
-        diagnostic_tone_plan, monophonic_voice_plan, ScheduledBeatEvent, ScheduledEngineEvent,
-        TempoMapSnapshot, TransportLoop, VoiceNodePlan, NODE_VOICE, PARAM_GAIN_GAIN,
+        diagnostic_tone_plan, monophonic_voice_plan, EventRoute, EventRouteMask,
+        ScheduledBeatEvent, ScheduledEngineEvent, TempoMapSnapshot, TransportLoop, VoiceNodePlan,
+        NODE_OSCILLATOR, NODE_VOICE, PARAM_GAIN_GAIN,
     };
 
     fn plan_with_identity(
@@ -1859,6 +1860,47 @@ mod tests {
             .push(EngineCommand::ScheduleEvent {
                 id: 2,
                 event: scheduled_note_on(64),
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 128);
+
+        assert!(frame_is_silent(&output, 63));
+        assert!(frame_has_signal(&output, 65));
+    }
+
+    #[test]
+    fn execution_plan_routes_scheduled_events_to_destination_node() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut plan = monophonic_voice_plan(2);
+
+        plan.event_routes = vec![EventRoute {
+            source_node: NODE_OSCILLATOR,
+            destination_node: NODE_VOICE,
+            event_mask: EventRouteMask::NOTE,
+        }];
+
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 2,
+                event: ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_OSCILLATOR,
+                    note: 69,
+                    velocity: 0.5,
+                    at_sample: 64,
+                },
             })
             .unwrap();
 
