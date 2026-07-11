@@ -1371,10 +1371,12 @@ mod tests {
     use super::*;
     use crate::{PlanStateTransfer, StateTransferEntry, StateTransferKind};
     use engine_protocol::{
-        diagnostic_tone_plan, monophonic_voice_plan, scaled_monophonic_voice_plan,
-        transposed_monophonic_voice_plan, EventRoute, EventRouteMask, ScaleNodePlan,
-        ScheduledBeatEvent, ScheduledEngineEvent, TempoMapSnapshot, TransportLoop, VoiceNodePlan,
-        NODE_EVENT_INPUT, NODE_OUTPUT, NODE_VOICE, PARAM_GAIN_GAIN,
+        diagnostic_tone_plan, monophonic_instrument_plan, monophonic_voice_plan,
+        scaled_monophonic_instrument_plan, scaled_monophonic_voice_plan,
+        transposed_monophonic_instrument_plan, transposed_monophonic_voice_plan, EventRoute,
+        EventRouteMask, ScaleNodePlan, ScheduledBeatEvent, ScheduledEngineEvent, TempoMapSnapshot,
+        TransportLoop, VoiceNodePlan, NODE_EVENT_INPUT, NODE_INSTRUMENT, NODE_OUTPUT, NODE_VOICE,
+        PARAM_GAIN_GAIN,
     };
 
     fn plan_with_identity(
@@ -1913,6 +1915,40 @@ mod tests {
     }
 
     #[test]
+    fn instrument_plan_note_on_begins_at_exact_scheduled_sample() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let plan = monophonic_instrument_plan(2);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleEvent {
+                id: 2,
+                event: ScheduledEngineEvent::NoteOn {
+                    target_node: NODE_INSTRUMENT,
+                    note: 69,
+                    velocity: 0.5,
+                    at_sample: 64,
+                },
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 128);
+
+        assert!(frame_is_silent(&output, 63));
+        assert!(frame_has_signal(&output, 65));
+    }
+
+    #[test]
     fn execution_plan_routes_scheduled_events_to_destination_node() {
         let (command_sender, command_receiver) = crate::engine_command_queue();
         let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
@@ -2123,11 +2159,127 @@ mod tests {
     }
 
     #[test]
+    fn transposed_instrument_plan_output_is_independent_of_callback_grouping() {
+        fn render(groups: &[u32]) -> Vec<f32> {
+            let (command_sender, command_receiver) = crate::engine_command_queue();
+            let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+            let plan = transposed_monophonic_instrument_plan(12, 2);
+            let mut engine = AudioEngine::new()
+                .with_execution_plan(&plan, 512)
+                .unwrap()
+                .with_realtime_queues(command_receiver, telemetry_sender);
+            let mut rendered = Vec::new();
+
+            command_sender
+                .push(EngineCommand::TransportStart {
+                    id: 1,
+                    at_sample: 0,
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 2,
+                    event: ScheduledEngineEvent::NoteOn {
+                        target_node: NODE_EVENT_INPUT,
+                        note: 57,
+                        velocity: 0.5,
+                        at_sample: 32,
+                    },
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 3,
+                    event: ScheduledEngineEvent::NoteOff {
+                        target_node: NODE_EVENT_INPUT,
+                        note: 57,
+                        at_sample: 160,
+                    },
+                })
+                .unwrap();
+
+            for frames in groups {
+                rendered.extend(process_frames(&mut engine, *frames));
+            }
+
+            rendered
+        }
+
+        assert_outputs_close(&render(&[256]), &render(&[64, 32, 96, 64]));
+    }
+
+    #[test]
     fn scaled_voice_plan_output_is_independent_of_callback_grouping() {
         fn render(groups: &[u32]) -> Vec<f32> {
             let (command_sender, command_receiver) = crate::engine_command_queue();
             let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
             let plan = scaled_monophonic_voice_plan(60, ScaleNodePlan::MAJOR_MASK, 2);
+            let mut engine = AudioEngine::new()
+                .with_execution_plan(&plan, 512)
+                .unwrap()
+                .with_realtime_queues(command_receiver, telemetry_sender);
+            let mut rendered = Vec::new();
+
+            command_sender
+                .push(EngineCommand::TransportStart {
+                    id: 1,
+                    at_sample: 0,
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 2,
+                    event: ScheduledEngineEvent::NoteOn {
+                        target_node: NODE_EVENT_INPUT,
+                        note: 61,
+                        velocity: 0.5,
+                        at_sample: 32,
+                    },
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 3,
+                    event: ScheduledEngineEvent::NoteOn {
+                        target_node: NODE_EVENT_INPUT,
+                        note: 64,
+                        velocity: 0.5,
+                        at_sample: 96,
+                    },
+                })
+                .unwrap();
+            command_sender
+                .push(EngineCommand::ScheduleEvent {
+                    id: 4,
+                    event: ScheduledEngineEvent::NoteOff {
+                        target_node: NODE_EVENT_INPUT,
+                        note: 64,
+                        at_sample: 160,
+                    },
+                })
+                .unwrap();
+
+            for frames in groups {
+                rendered.extend(process_frames(&mut engine, *frames));
+            }
+
+            rendered
+        }
+
+        let single = render(&[256]);
+        let grouped = render(&[64, 32, 96, 64]);
+
+        assert!(frame_is_silent(&single, 80));
+        assert!(frame_has_signal(&single, 97));
+        assert_outputs_close(&single, &grouped);
+    }
+
+    #[test]
+    fn scaled_instrument_plan_output_is_independent_of_callback_grouping() {
+        fn render(groups: &[u32]) -> Vec<f32> {
+            let (command_sender, command_receiver) = crate::engine_command_queue();
+            let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+            let plan = scaled_monophonic_instrument_plan(60, ScaleNodePlan::MAJOR_MASK, 2);
             let mut engine = AudioEngine::new()
                 .with_execution_plan(&plan, 512)
                 .unwrap()

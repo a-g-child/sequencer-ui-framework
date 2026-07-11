@@ -88,9 +88,27 @@ pub enum RuntimeNodeKind {
     Oscillator,
     Transpose,
     Scale,
+    Instrument,
     Voice,
     Gain,
     Output,
+}
+
+pub struct RuntimeCompiler {
+    maximum_frames: usize,
+}
+
+impl RuntimeCompiler {
+    pub fn new(maximum_frames: usize) -> Self {
+        Self { maximum_frames }
+    }
+
+    pub fn compile(
+        &self,
+        plan: &NativeExecutionPlan,
+    ) -> Result<PreparedExecutionPlan, PlanValidationError> {
+        PreparedExecutionPlan::compile(plan, self.maximum_frames)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -127,6 +145,13 @@ pub enum StateTransferKind {
 
 impl PreparedExecutionPlan {
     pub fn prepare(
+        plan: &NativeExecutionPlan,
+        maximum_frames: usize,
+    ) -> Result<Self, PlanValidationError> {
+        RuntimeCompiler::new(maximum_frames).compile(plan)
+    }
+
+    fn compile(
         plan: &NativeExecutionPlan,
         maximum_frames: usize,
     ) -> Result<Self, PlanValidationError> {
@@ -175,7 +200,7 @@ impl PreparedExecutionPlan {
 
                     require_channels(plan, node_plan.output_buffer, 1)?;
 
-                    Ok(RuntimeNode::Voice(VoiceNode {
+                    Ok(RuntimeNode::Voice(InstrumentNode {
                         voice: MonophonicVoice::new(
                             node_plan.attack_seconds,
                             node_plan.decay_seconds,
@@ -192,6 +217,21 @@ impl PreparedExecutionPlan {
                     root_note: node_plan.root_note,
                     pitch_class_mask: node_plan.pitch_class_mask,
                 })),
+                PlanNodeKind::Instrument(node_plan) => {
+                    let output_buffer = buffer_index(plan, node_plan.output_buffer)?;
+
+                    require_channels(plan, node_plan.output_buffer, 1)?;
+
+                    Ok(RuntimeNode::Instrument(InstrumentNode {
+                        voice: MonophonicVoice::new(
+                            node_plan.attack_seconds,
+                            node_plan.decay_seconds,
+                            node_plan.sustain_level,
+                            node_plan.release_seconds,
+                        ),
+                        output_buffer,
+                    }))
+                }
                 PlanNodeKind::Gain(node_plan) => {
                     let input_buffer = buffer_index(plan, node_plan.input_buffer)?;
                     let output_buffer = buffer_index(plan, node_plan.output_buffer)?;
@@ -812,7 +852,8 @@ enum RuntimeNode {
     Oscillator(OscillatorNode),
     Transpose(TransposeNode),
     Scale(ScaleNode),
-    Voice(VoiceNode),
+    Instrument(InstrumentNode),
+    Voice(InstrumentNode),
     Gain(GainNode),
     Output(OutputNode),
     #[cfg(test)]
@@ -836,6 +877,7 @@ impl RuntimeNode {
             Self::Oscillator(node) => node.process(context, buffers, parameters),
             Self::Transpose(_) => {}
             Self::Scale(_) => {}
+            Self::Instrument(node) => node.process(context, buffers),
             Self::Voice(node) => node.process(context, buffers),
             Self::Gain(node) => node.process(context, buffers, parameters),
             Self::Output(node) => node.process(context, buffers, output),
@@ -847,6 +889,7 @@ impl RuntimeNode {
     fn reset(&mut self) {
         match self {
             Self::Oscillator(node) => node.phase = 0.0,
+            Self::Instrument(node) => node.voice.panic(),
             Self::Voice(node) => node.voice.panic(),
             _ => {}
         }
@@ -858,6 +901,7 @@ impl RuntimeNode {
             Self::Oscillator(_) => RuntimeNodeKind::Oscillator,
             Self::Transpose(_) => RuntimeNodeKind::Transpose,
             Self::Scale(_) => RuntimeNodeKind::Scale,
+            Self::Instrument(_) => RuntimeNodeKind::Instrument,
             Self::Voice(_) => RuntimeNodeKind::Voice,
             Self::Gain(_) => RuntimeNodeKind::Gain,
             Self::Output(_) => RuntimeNodeKind::Output,
@@ -898,6 +942,7 @@ impl RuntimeNode {
         match self {
             Self::Transpose(node) => node.process_event(event, emitter),
             Self::Scale(node) => node.process_event(event, emitter),
+            Self::Instrument(node) => node.process_event(event, emitter),
             Self::Voice(node) => node.process_event(event, emitter),
             #[cfg(test)]
             Self::Forwarding(node) => node.process_event(event, emitter),
@@ -927,7 +972,7 @@ struct ScaleNode {
     pitch_class_mask: u16,
 }
 
-struct VoiceNode {
+struct InstrumentNode {
     voice: MonophonicVoice,
     output_buffer: usize,
 }
@@ -1017,7 +1062,7 @@ impl ScaleNode {
     }
 }
 
-impl VoiceNode {
+impl InstrumentNode {
     fn process(&mut self, context: &NodeProcessContext, buffers: &mut AudioBufferArena) {
         let output = buffers.slot_mut(self.output_buffer);
 
@@ -1572,6 +1617,7 @@ fn runtime_node_kind(kind: &PlanNodeKind) -> Result<RuntimeNodeKind, PlanValidat
         PlanNodeKind::Oscillator(_) => Ok(RuntimeNodeKind::Oscillator),
         PlanNodeKind::Transpose(_) => Ok(RuntimeNodeKind::Transpose),
         PlanNodeKind::Scale(_) => Ok(RuntimeNodeKind::Scale),
+        PlanNodeKind::Instrument(_) => Ok(RuntimeNodeKind::Instrument),
         PlanNodeKind::Voice(_) => Ok(RuntimeNodeKind::Voice),
         PlanNodeKind::Gain(_) => Ok(RuntimeNodeKind::Gain),
         PlanNodeKind::Output(_) => Ok(RuntimeNodeKind::Output),
@@ -1602,6 +1648,7 @@ fn state_transfer_kind_for_node(node_kind: RuntimeNodeKind) -> Option<StateTrans
         RuntimeNodeKind::Oscillator => Some(StateTransferKind::OscillatorPhase),
         RuntimeNodeKind::Transpose => None,
         RuntimeNodeKind::Scale => None,
+        RuntimeNodeKind::Instrument => None,
         RuntimeNodeKind::Voice => None,
         RuntimeNodeKind::Gain => Some(StateTransferKind::GainSmoother),
         RuntimeNodeKind::Output => None,
@@ -1661,11 +1708,12 @@ fn validate_state_transfer(
 mod tests {
     use super::*;
     use engine_protocol::{
-        diagnostic_tone_plan, monophonic_voice_plan, AudioBufferSlot, EventInputNodePlan,
-        EventRoute, EventRouteMask, GainNodePlan, NativeExecutionPlan, OscillatorNodePlan,
-        OutputNodePlan, PlanNode, PlanNodeKind, ScaleNodePlan, ScheduledEngineEvent,
-        TransposeNodePlan, NODE_EVENT_INPUT, NODE_GAIN, NODE_OSCILLATOR, NODE_OUTPUT, NODE_SCALE,
-        NODE_TRANSPOSE, NODE_VOICE, PARAM_GAIN_GAIN, PARAM_OSCILLATOR_FREQUENCY,
+        diagnostic_tone_plan, monophonic_instrument_plan, monophonic_voice_plan, AudioBufferSlot,
+        EventInputNodePlan, EventRoute, EventRouteMask, GainNodePlan, NativeExecutionPlan,
+        OscillatorNodePlan, OutputNodePlan, PlanNode, PlanNodeKind, ScaleNodePlan,
+        ScheduledEngineEvent, TransposeNodePlan, NODE_EVENT_INPUT, NODE_GAIN, NODE_INSTRUMENT,
+        NODE_OSCILLATOR, NODE_OUTPUT, NODE_SCALE, NODE_TRANSPOSE, NODE_VOICE, PARAM_GAIN_GAIN,
+        PARAM_OSCILLATOR_FREQUENCY,
     };
 
     #[test]
@@ -1674,6 +1722,29 @@ mod tests {
         let prepared = PreparedExecutionPlan::prepare(&plan, 128).unwrap();
 
         assert_eq!(prepared.output_node_count(), 1);
+    }
+
+    #[test]
+    fn runtime_compiler_compiles_prepared_execution_plans() {
+        let plan = diagnostic_tone_plan(440.0, 0.05, 2);
+        let compiler = RuntimeCompiler::new(128);
+        let prepared = compiler.compile(&plan).unwrap();
+
+        assert_eq!(prepared.output_node_count(), 1);
+    }
+
+    #[test]
+    fn compiles_instrument_as_event_consuming_audio_producer() {
+        let plan = monophonic_instrument_plan(2);
+        let prepared = RuntimeCompiler::new(128).compile(&plan).unwrap();
+        let metadata = prepared.metadata();
+
+        assert_eq!(metadata.nodes[0].stable_id, NODE_INSTRUMENT as u64);
+        assert_eq!(metadata.nodes[0].node_kind, RuntimeNodeKind::Instrument);
+        assert_eq!(
+            prepared.event_route_range_for_source(NODE_INSTRUMENT),
+            Some((0, 1))
+        );
     }
 
     fn note_on_from(source_node: u32) -> ScheduledEngineEvent {
