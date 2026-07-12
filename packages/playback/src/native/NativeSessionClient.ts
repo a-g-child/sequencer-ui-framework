@@ -9,8 +9,19 @@ export type NativeSessionState =
   | 'shutting-down'
   | 'failed'
 
+export const NATIVE_SESSION_PROTOCOL_VERSION = 1
+
+export interface NativeRuntimeCapabilities {
+  readonly executionPlanVersion: number
+  readonly eventGraphVersion: number
+  readonly parameterGraphVersion: number
+  readonly assets: boolean
+  readonly telemetry: boolean
+}
+
 export interface NativeSessionCapabilities {
   readonly protocolVersion: number
+  readonly capabilities: NativeRuntimeCapabilities
   readonly drivers: readonly NativeAudioDriver[]
   readonly messages: readonly string[]
 }
@@ -51,7 +62,27 @@ export interface NativeEngineSnapshot {
     readonly sampleRate: number
     readonly callbackFrames: number
     readonly outputChannels: number
+    readonly plan?: {
+      readonly activePlanId: number | null
+      readonly activeRevision: number | null
+      readonly pendingPlanCount: number
+      readonly successfulSwaps: number
+      readonly rejectedSwaps: number
+    }
   } | null
+}
+
+export interface NativePreparedPlanHandle {
+  readonly transferId: number
+  readonly planId: number
+  readonly revision: number
+}
+
+export interface NativePlanActivation {
+  readonly planId: number
+  readonly revision: number
+  readonly requestedSample: number
+  readonly appliedSample: number
 }
 
 export interface NativeSessionClientOptions {
@@ -134,18 +165,33 @@ export class NativeSessionClient {
       this.readyRejecter = reject
     })
 
-    const hello = await this.request<{ readonly protocolVersion?: number }>(
-      'session:hello'
-    )
-    const capabilities = await this.request<Omit<NativeSessionCapabilities, 'protocolVersion'>>(
-      'session:capabilities'
-    )
+    const hello = await this.request<{
+      readonly protocolVersion?: number
+      readonly capabilities?: unknown
+    }>('session:hello')
+    const protocolVersion =
+      typeof hello.protocolVersion === 'number' ? hello.protocolVersion : 0
+
+    if (protocolVersion !== NATIVE_SESSION_PROTOCOL_VERSION) {
+      throw new Error(
+        `unsupported native session protocol ${protocolVersion}; expected ${NATIVE_SESSION_PROTOCOL_VERSION}`
+      )
+    }
+
+    const capabilities = await this.request<{
+      readonly drivers?: readonly NativeAudioDriver[]
+      readonly messages?: readonly string[]
+      readonly capabilities?: unknown
+    }>('session:capabilities')
 
     this.currentState = 'ready'
     return {
-      ...capabilities,
-      protocolVersion:
-        typeof hello.protocolVersion === 'number' ? hello.protocolVersion : 0
+      protocolVersion,
+      capabilities: parseRuntimeCapabilities(
+        capabilities.capabilities ?? hello.capabilities
+      ),
+      drivers: capabilities.drivers ?? [],
+      messages: capabilities.messages ?? []
     }
   }
 
@@ -194,6 +240,34 @@ export class NativeSessionClient {
   async getSnapshot(): Promise<NativeEngineSnapshot> {
     this.ensureReady()
     return this.request<NativeEngineSnapshot>('engine:snapshot')
+  }
+
+  async preparePlan(plan: unknown): Promise<NativePreparedPlanHandle> {
+    this.ensureReady()
+    const response = await this.request<{ readonly handle?: unknown }>(
+      'plan:prepare',
+      { plan }
+    )
+    const handle = parsePreparedPlanHandle(response.handle)
+
+    if (!handle) {
+      throw new Error('native plan:prepare response did not include a handle')
+    }
+
+    return handle
+  }
+
+  async activatePlan(
+    transferId: number,
+    requestedSample = 0
+  ): Promise<NativePlanActivation> {
+    this.ensureReady()
+    const response = await this.request<NativePlanActivation>('plan:activate', {
+      transferId,
+      requestedSample
+    })
+
+    return response
   }
 
   async shutdown(): Promise<void> {
@@ -368,4 +442,43 @@ function compactObject(
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) ? value : undefined
+}
+
+function parsePreparedPlanHandle(
+  value: unknown
+): NativePreparedPlanHandle | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
+
+  const candidate = value as Partial<NativePreparedPlanHandle>
+
+  if (
+    typeof candidate.transferId !== 'number' ||
+    typeof candidate.planId !== 'number' ||
+    typeof candidate.revision !== 'number'
+  ) {
+    return undefined
+  }
+
+  return {
+    transferId: candidate.transferId,
+    planId: candidate.planId,
+    revision: candidate.revision
+  }
+}
+
+function parseRuntimeCapabilities(value: unknown): NativeRuntimeCapabilities {
+  const candidate =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Partial<NativeRuntimeCapabilities>)
+      : {}
+
+  return {
+    executionPlanVersion: Number(candidate.executionPlanVersion ?? 0),
+    eventGraphVersion: Number(candidate.eventGraphVersion ?? 0),
+    parameterGraphVersion: Number(candidate.parameterGraphVersion ?? 0),
+    assets: Boolean(candidate.assets),
+    telemetry: Boolean(candidate.telemetry)
+  }
 }

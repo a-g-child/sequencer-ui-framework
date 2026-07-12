@@ -1,18 +1,31 @@
-use std::io::{BufRead, Write};
+use std::{
+    io::{BufRead, Write},
+    thread,
+    time::{Duration, Instant},
+};
 
 use engine_audio_io::{
     ActiveOutputStream, AudioDriver, AudioDriverError, AudioDriverEvent, CpalAudioDriver,
     EngineProcessor, NullAudioDriver, OutputStreamRequest,
 };
 use engine_core::{
-    engine_command_queue, engine_telemetry_queue, prepared_plan_transfer_queue, retired_plan_queue,
-    AudioEngine, EngineCommandSender, EngineTelemetryReceiver,
+    build_state_transfer, engine_command_queue, engine_telemetry_queue,
+    prepared_plan_transfer_queue, retired_plan_queue, AudioEngine, EngineCommandSender,
+    EngineTelemetryReceiver, PreparedExecutionPlan, PreparedExecutionPlanMetadata,
+    PreparedPlanSender, PreparedPlanTransfer,
 };
-use engine_protocol::{AudioTelemetry, EngineCommand, EngineEvent};
+use engine_protocol::{
+    diagnostic_tone_plan, AudioTelemetry, EngineCommand, EngineEvent, NATIVE_EXECUTION_PLAN_VERSION,
+};
 
 use crate::DriverKind;
 
 const SESSION_PROTOCOL_VERSION: u32 = 1;
+const EXECUTION_PLAN_VERSION: u32 = 1;
+const EVENT_GRAPH_VERSION: u32 = 1;
+const PARAMETER_GRAPH_VERSION: u32 = 0;
+const MAX_PREPARED_TRANSFERS: usize = 8;
+const PLAN_ACTIVATION_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub fn run_stdio_session<R, W>(reader: R, writer: W) -> Result<(), SessionError>
 where
@@ -55,8 +68,25 @@ struct Session<W: Write> {
     stream: Option<ActiveOutputStream>,
     command_sender: Option<EngineCommandSender>,
     telemetry_receiver: Option<EngineTelemetryReceiver>,
+    prepared_plan_sender: Option<PreparedPlanSender>,
+    prepared_plans: Vec<SessionPreparedPlan>,
+    active_plan_metadata: Option<PreparedExecutionPlanMetadata>,
+    next_transfer_id: u64,
     next_command_id: u64,
     last_telemetry: Option<AudioTelemetry>,
+}
+
+struct SessionPreparedPlan {
+    transfer_id: u64,
+    metadata: PreparedExecutionPlanMetadata,
+    plan: PreparedExecutionPlan,
+}
+
+struct PlanActivation {
+    plan_id: u64,
+    plan_revision: u64,
+    requested_sample: u64,
+    applied_sample: u64,
 }
 
 impl<W: Write> Session<W> {
@@ -67,6 +97,10 @@ impl<W: Write> Session<W> {
             stream: None,
             command_sender: None,
             telemetry_receiver: None,
+            prepared_plan_sender: None,
+            prepared_plans: Vec::new(),
+            active_plan_metadata: None,
+            next_transfer_id: 1,
             next_command_id: 1,
             last_telemetry: None,
         }
@@ -107,6 +141,8 @@ impl<W: Write> Session<W> {
             "audio:list-devices" => self.list_devices(&request),
             "audio:start" => self.start_audio(&request),
             "audio:stop" => self.stop_audio(&request),
+            "plan:prepare" => self.prepare_plan(&request),
+            "plan:activate" => self.activate_plan(&request),
             "engine:snapshot" => self.write_snapshot(&request),
             "session:shutdown" => {
                 if self.stream.is_some() {
@@ -114,6 +150,7 @@ impl<W: Write> Session<W> {
                         request_id: None,
                         command: "audio:stop".to_string(),
                         options: Vec::new(),
+                        raw_line: String::new(),
                     })?;
                 }
 
@@ -142,7 +179,8 @@ impl<W: Write> Session<W> {
         self.write_ok_prefix(request, "session:hello")?;
         writeln!(
             self.writer,
-            ",\"protocolVersion\":{SESSION_PROTOCOL_VERSION},\"host\":\"engine-host\"}}"
+            ",\"protocolVersion\":{SESSION_PROTOCOL_VERSION},\"host\":\"engine-host\",\"capabilities\":{}}}",
+            session_capabilities_json()
         )?;
         Ok(())
     }
@@ -151,7 +189,8 @@ impl<W: Write> Session<W> {
         self.write_ok_prefix(request, "session:capabilities")?;
         writeln!(
             self.writer,
-            ",\"drivers\":[\"null\",\"cpal\"],\"messages\":[\"session:hello\",\"session:capabilities\",\"audio:list-devices\",\"audio:start\",\"audio:stop\",\"engine:snapshot\",\"session:shutdown\"]}}"
+            ",\"protocolVersion\":{SESSION_PROTOCOL_VERSION},\"capabilities\":{},\"drivers\":[\"null\",\"cpal\"],\"messages\":[\"session:hello\",\"session:capabilities\",\"audio:list-devices\",\"audio:start\",\"audio:stop\",\"plan:prepare\",\"plan:activate\",\"engine:snapshot\",\"session:shutdown\"]}}",
+            session_capabilities_json()
         )?;
         Ok(())
     }
@@ -209,7 +248,7 @@ impl<W: Write> Session<W> {
         };
         let (command_sender, command_receiver) = engine_command_queue();
         let (telemetry_sender, telemetry_receiver) = engine_telemetry_queue();
-        let (_prepared_sender, prepared_receiver) = prepared_plan_transfer_queue();
+        let (prepared_sender, prepared_receiver) = prepared_plan_transfer_queue();
         let (retired_sender, _retired_receiver) = retired_plan_queue();
         let engine = AudioEngine::new()
             .with_realtime_queues(command_receiver, telemetry_sender)
@@ -235,6 +274,9 @@ impl<W: Write> Session<W> {
         self.stream = Some(stream);
         self.command_sender = Some(command_sender);
         self.telemetry_receiver = Some(telemetry_receiver);
+        self.prepared_plan_sender = Some(prepared_sender);
+        self.prepared_plans.clear();
+        self.active_plan_metadata = None;
         self.drain_runtime_events()?;
         Ok(())
     }
@@ -257,8 +299,199 @@ impl<W: Write> Session<W> {
         self.stream = None;
         self.command_sender = None;
         self.telemetry_receiver = None;
+        self.prepared_plan_sender = None;
+        self.prepared_plans.clear();
+        self.active_plan_metadata = None;
         self.write_ok_prefix(request, "audio:stopped")?;
         writeln!(self.writer, "}}")?;
+        Ok(())
+    }
+
+    fn prepare_plan(&mut self, request: &SessionRequest) -> Result<(), SessionError> {
+        let Some(stream) = self.stream.as_ref() else {
+            self.write_error(
+                request.request_id,
+                "error",
+                "AudioNotRunning",
+                "audio must be started before preparing an execution plan",
+            )?;
+            return Ok(());
+        };
+
+        if self.prepared_plans.len() >= MAX_PREPARED_TRANSFERS {
+            self.write_error(
+                request.request_id,
+                "error",
+                "PreparedPlanCapacityExceeded",
+                "prepared plan handle capacity is full",
+            )?;
+            return Ok(());
+        }
+
+        let maximum_frames = stream.requested_buffer_frames.unwrap_or(128).max(1) as usize;
+        let plan = match parse_session_execution_plan(request) {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.write_error(
+                    request.request_id,
+                    "error",
+                    "InvalidExecutionPlan",
+                    &error.message,
+                )?;
+                return Ok(());
+            }
+        };
+        let prepared = match PreparedExecutionPlan::prepare(&plan, maximum_frames) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.write_error(
+                    request.request_id,
+                    "error",
+                    "PlanValidationError",
+                    &format!("{error:?}"),
+                )?;
+                return Ok(());
+            }
+        };
+        let transfer_id = self.next_transfer_id;
+        let plan_id = prepared.plan_id();
+        let plan_revision = prepared.plan_revision();
+        let metadata = prepared.metadata();
+
+        self.next_transfer_id = self.next_transfer_id.saturating_add(1);
+        self.prepared_plans.push(SessionPreparedPlan {
+            transfer_id,
+            metadata,
+            plan: prepared,
+        });
+
+        self.write_ok_prefix(request, "plan:prepared")?;
+        writeln!(
+            self.writer,
+            ",\"handle\":{{\"transferId\":{transfer_id},\"planId\":{plan_id},\"revision\":{plan_revision}}}}}"
+        )?;
+        Ok(())
+    }
+
+    fn activate_plan(&mut self, request: &SessionRequest) -> Result<(), SessionError> {
+        let Some(transfer_id) = request.parse_u64("transferId")? else {
+            self.write_error(
+                request.request_id,
+                "error",
+                "MissingTransferId",
+                "plan activation requires transferId",
+            )?;
+            return Ok(());
+        };
+        let requested_sample = request.parse_u64("requestedSample")?.unwrap_or(0);
+
+        if self.command_sender.is_none() || self.prepared_plan_sender.is_none() {
+            self.write_error(
+                request.request_id,
+                "error",
+                "AudioNotRunning",
+                "audio must be started before activating an execution plan",
+            )?;
+            return Ok(());
+        }
+
+        let Some(prepared_index) = self
+            .prepared_plans
+            .iter()
+            .position(|prepared| prepared.transfer_id == transfer_id)
+        else {
+            self.write_error(
+                request.request_id,
+                "error",
+                "UnknownPreparedPlan",
+                "prepared plan handle is missing or already consumed",
+            )?;
+            return Ok(());
+        };
+
+        let prepared = self.prepared_plans.swap_remove(prepared_index);
+        let state_transfer = match &self.active_plan_metadata {
+            Some(active_metadata) => {
+                match build_state_transfer(active_metadata, &prepared.metadata) {
+                    Ok(transfer) => transfer,
+                    Err(error) => {
+                        self.write_error(
+                            request.request_id,
+                            "error",
+                            "StateTransferPlanningError",
+                            &format!("{error:?}"),
+                        )?;
+                        return Ok(());
+                    }
+                }
+            }
+            None => engine_core::PlanStateTransfer::empty(),
+        };
+        let metadata = prepared.metadata.clone();
+        let command_id = self.next_command_id;
+        let transfer = PreparedPlanTransfer::new(transfer_id, prepared.plan, state_transfer);
+
+        self.next_command_id = self.next_command_id.saturating_add(1);
+
+        if self
+            .prepared_plan_sender
+            .as_ref()
+            .expect("prepared plan sender checked above")
+            .push(transfer)
+            .is_err()
+        {
+            self.write_error(
+                request.request_id,
+                "error",
+                "PreparedPlanQueueFull",
+                "prepared plan transfer queue is full",
+            )?;
+            return Ok(());
+        }
+
+        if self
+            .command_sender
+            .as_ref()
+            .expect("command sender checked above")
+            .push(EngineCommand::SwapExecutionPlan {
+                id: command_id,
+                transfer_id,
+                requested_sample,
+            })
+            .is_err()
+        {
+            self.write_error(
+                request.request_id,
+                "error",
+                "CommandQueueFull",
+                "engine command queue is full",
+            )?;
+            return Ok(());
+        }
+
+        let activation = match self.wait_for_plan_activation(command_id) {
+            Ok(activation) => activation,
+            Err(error) => {
+                self.write_error(
+                    request.request_id,
+                    "error",
+                    "PlanActivationFailed",
+                    &error.message,
+                )?;
+                return Ok(());
+            }
+        };
+
+        self.active_plan_metadata = Some(metadata);
+        self.write_ok_prefix(request, "plan:activated")?;
+        writeln!(
+            self.writer,
+            ",\"planId\":{},\"revision\":{},\"requestedSample\":{},\"appliedSample\":{}}}",
+            activation.plan_id,
+            activation.plan_revision,
+            activation.requested_sample,
+            activation.applied_sample
+        )?;
         Ok(())
     }
 
@@ -280,14 +513,22 @@ impl<W: Write> Session<W> {
         }
 
         if let Some(telemetry) = self.last_telemetry {
+            let plan_status = telemetry.runtime_plan_status;
             write!(
                 self.writer,
-                ",\"telemetry\":{{\"samplePosition\":{},\"callbackCount\":{},\"sampleRate\":{},\"callbackFrames\":{},\"outputChannels\":{}}}",
+                ",\"telemetry\":{{\"samplePosition\":{},\"callbackCount\":{},\"sampleRate\":{},\"callbackFrames\":{},\"outputChannels\":{},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"pendingPlanCount\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}}}}",
                 telemetry.sample_position,
                 telemetry.callback_count,
                 telemetry.sample_rate,
                 telemetry.callback_frames,
-                telemetry.output_channels
+                telemetry.output_channels,
+                optional_u64_json(plan_status.active_plan_id),
+                optional_u64_json(plan_status.active_plan_revision),
+                plan_status
+                    .pending_plan_count
+                    .saturating_add(self.prepared_plans.len() as u32),
+                plan_status.successful_swaps,
+                plan_status.rejected_swaps
             )?;
         } else {
             write!(self.writer, ",\"telemetry\":null")?;
@@ -324,6 +565,82 @@ impl<W: Write> Session<W> {
         }
 
         Ok(())
+    }
+
+    fn wait_for_plan_activation(
+        &mut self,
+        command_id: u64,
+    ) -> Result<PlanActivation, SessionError> {
+        let deadline = Instant::now() + PLAN_ACTIVATION_TIMEOUT;
+
+        loop {
+            if let Some(driver) = &mut self.driver {
+                driver.process_one_block()?;
+            }
+
+            if let Some(driver) = &mut self.driver {
+                let driver_events = driver.drain_events();
+                let telemetry = driver.last_telemetry();
+
+                for event in driver_events {
+                    self.write_driver_event(event)?;
+                }
+
+                if let Some(telemetry) = telemetry {
+                    self.last_telemetry = Some(telemetry);
+                }
+            }
+
+            if let Some(receiver) = &self.telemetry_receiver {
+                let mut events = Vec::new();
+
+                while let Some(event) = receiver.pop() {
+                    events.push(event);
+                }
+
+                for event in events {
+                    match event {
+                        EngineEvent::ExecutionPlanSwapped {
+                            command_id: event_command_id,
+                            plan_id,
+                            plan_revision,
+                            requested_sample,
+                            applied_sample,
+                        } => {
+                            self.write_engine_event(event)?;
+
+                            if event_command_id == command_id {
+                                return Ok(PlanActivation {
+                                    plan_id,
+                                    plan_revision,
+                                    requested_sample,
+                                    applied_sample,
+                                });
+                            }
+                        }
+                        EngineEvent::CommandRejected {
+                            command_id: event_command_id,
+                            reason,
+                        } => {
+                            self.write_engine_event(event)?;
+
+                            if event_command_id == command_id {
+                                return Err(SessionError::new(format!(
+                                    "swap command rejected: {reason:?}"
+                                )));
+                            }
+                        }
+                        other => self.write_engine_event(other)?,
+                    }
+                }
+            }
+
+            if Instant::now() >= deadline {
+                return Err(SessionError::new("timed out waiting for plan activation"));
+            }
+
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 
     fn write_driver_event(&mut self, event: AudioDriverEvent) -> Result<(), SessionError> {
@@ -451,6 +768,7 @@ struct SessionRequest {
     request_id: Option<u64>,
     command: String,
     options: Vec<(String, String)>,
+    raw_line: String,
 }
 
 impl SessionRequest {
@@ -473,6 +791,7 @@ impl SessionRequest {
             request_id: None,
             command,
             options,
+            raw_line: line.to_string(),
         }
     }
 
@@ -496,6 +815,7 @@ impl SessionRequest {
             request_id,
             command,
             options,
+            raw_line: line.to_string(),
         }
     }
 
@@ -527,6 +847,16 @@ impl SessionRequest {
         self.option(key)
             .map(|value| {
                 value.parse::<u16>().map_err(|_| {
+                    SessionError::new(format!("invalid numeric value for {key}: {value}"))
+                })
+            })
+            .transpose()
+    }
+
+    fn parse_u64(&self, key: &str) -> Result<Option<u64>, SessionError> {
+        self.option(key)
+            .map(|value| {
+                value.parse::<u64>().map_err(|_| {
                     SessionError::new(format!("invalid numeric value for {key}: {value}"))
                 })
             })
@@ -582,6 +912,13 @@ impl SessionDriver {
             Self::Null(driver) => driver.last_telemetry(),
         }
     }
+
+    fn process_one_block(&mut self) -> Result<(), SessionError> {
+        match self {
+            Self::Cpal(_) => Ok(()),
+            Self::Null(driver) => driver.process_blocks(1).map_err(session_driver_error),
+        }
+    }
 }
 
 fn build_session_driver(kind: DriverKind) -> SessionDriver {
@@ -599,6 +936,150 @@ fn optional_u32_json(value: Option<u32>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "null".to_string())
+}
+
+fn optional_u64_json(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn parse_session_execution_plan(
+    request: &SessionRequest,
+) -> Result<engine_protocol::NativeExecutionPlan, SessionError> {
+    let plan_json = extract_json_value(&request.raw_line, "plan")
+        .ok_or_else(|| SessionError::new("plan:prepare requires a plan object"))?;
+    let fields = parse_flat_json_object(&plan_json);
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+
+    let version = parse_required_u32(field("version"), "plan.version")?;
+    if version != NATIVE_EXECUTION_PLAN_VERSION {
+        return Err(SessionError::new(format!(
+            "unsupported execution plan version {version}"
+        )));
+    }
+
+    match field("kind") {
+        Some("diagnostic-tone") => {
+            let frequency_hz = parse_required_f32(field("frequencyHz"), "plan.frequencyHz")?;
+            let gain = parse_required_f32(field("gain"), "plan.gain")?;
+            let output_channels =
+                parse_required_u16(field("outputChannels"), "plan.outputChannels")?;
+            let mut plan = diagnostic_tone_plan(frequency_hz, gain, output_channels);
+
+            plan.plan_id = parse_required_u64(field("planId"), "plan.planId")?;
+            plan.plan_revision = parse_required_u64(field("planRevision"), "plan.planRevision")?;
+
+            Ok(plan)
+        }
+        Some(kind) => Err(SessionError::new(format!("unsupported plan kind: {kind}"))),
+        None => Err(SessionError::new("plan.kind is required")),
+    }
+}
+
+fn parse_required_u16(value: Option<&str>, name: &str) -> Result<u16, SessionError> {
+    value
+        .ok_or_else(|| SessionError::new(format!("{name} is required")))?
+        .parse::<u16>()
+        .map_err(|_| SessionError::new(format!("{name} must be a u16")))
+}
+
+fn parse_required_u32(value: Option<&str>, name: &str) -> Result<u32, SessionError> {
+    value
+        .ok_or_else(|| SessionError::new(format!("{name} is required")))?
+        .parse::<u32>()
+        .map_err(|_| SessionError::new(format!("{name} must be a u32")))
+}
+
+fn parse_required_u64(value: Option<&str>, name: &str) -> Result<u64, SessionError> {
+    value
+        .ok_or_else(|| SessionError::new(format!("{name} is required")))?
+        .parse::<u64>()
+        .map_err(|_| SessionError::new(format!("{name} must be a u64")))
+}
+
+fn parse_required_f32(value: Option<&str>, name: &str) -> Result<f32, SessionError> {
+    let parsed = value
+        .ok_or_else(|| SessionError::new(format!("{name} is required")))?
+        .parse::<f32>()
+        .map_err(|_| SessionError::new(format!("{name} must be a finite f32")))?;
+
+    if parsed.is_finite() {
+        Ok(parsed)
+    } else {
+        Err(SessionError::new(format!("{name} must be finite")))
+    }
+}
+
+fn extract_json_value(line: &str, key: &str) -> Option<String> {
+    let pattern = format!("\"{key}\"");
+    let key_index = line.find(&pattern)?;
+    let mut index = key_index + pattern.len();
+    let bytes = line.as_bytes();
+
+    skip_ws(bytes, &mut index);
+    if bytes.get(index) != Some(&b':') {
+        return None;
+    }
+    index += 1;
+    skip_ws(bytes, &mut index);
+
+    let start = index;
+    match bytes.get(index).copied()? {
+        b'{' => {
+            let mut depth = 0usize;
+            let mut in_string = false;
+            let mut escaped = false;
+
+            while let Some(byte) = bytes.get(index).copied() {
+                if in_string {
+                    if escaped {
+                        escaped = false;
+                    } else if byte == b'\\' {
+                        escaped = true;
+                    } else if byte == b'"' {
+                        in_string = false;
+                    }
+                } else if byte == b'"' {
+                    in_string = true;
+                } else if byte == b'{' {
+                    depth += 1;
+                } else if byte == b'}' {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        index += 1;
+                        return Some(line[start..index].to_string());
+                    }
+                }
+
+                index += 1;
+            }
+
+            None
+        }
+        b'"' => parse_json_string(bytes, &mut index),
+        _ => {
+            while let Some(byte) = bytes.get(index) {
+                if matches!(byte, b',' | b'}') {
+                    break;
+                }
+                index += 1;
+            }
+
+            Some(line[start..index].trim().to_string())
+        }
+    }
+}
+
+fn session_capabilities_json() -> String {
+    format!(
+        "{{\"executionPlanVersion\":{EXECUTION_PLAN_VERSION},\"eventGraphVersion\":{EVENT_GRAPH_VERSION},\"parameterGraphVersion\":{PARAMETER_GRAPH_VERSION},\"assets\":false,\"telemetry\":true}}"
+    )
 }
 
 fn parse_flat_json_object(line: &str) -> Vec<(String, String)> {
