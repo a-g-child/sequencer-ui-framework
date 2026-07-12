@@ -9,6 +9,8 @@ import {
   WebAudioBackend,
   type RuntimeBackend
 } from '../src/native/RuntimeBackend.ts'
+import { compilePlaybackModelToNativePlan } from '../src/native/PlaybackModelCompiler.ts'
+import { freezePlaybackModel, type PlaybackModel } from '../src/model.ts'
 import { NodeNativeRuntimeTransport } from '@sequencer/native-runtime-node'
 import type {
   NativeAudioDriver,
@@ -101,6 +103,19 @@ describe('RuntimeBackend', () => {
     )
   })
 
+  it('compiles a PlaybackModel into a native plan with deterministic identity', () => {
+    const model = createPlaybackModelFixture()
+
+    const compilation = compilePlaybackModelToNativePlan(model)
+
+    assert.equal(compilation.diagnostics.length, 0)
+    assert.equal(compilation.plan.id.startsWith('native-plan:'), true)
+    assert.equal(compilation.plan.graphId, model.id)
+    assert.equal(compilation.plan.revision > 0, true)
+    assert.equal(compilation.plan.nodes.length, 4)
+    assert.equal(compilation.plan.nodes[0]?.descriptorId, 'sequencer.source.midi-input')
+  })
+
   it('lets WebAudio compile and activate a backend-neutral handle', async () => {
     const output = new FakeWebAudioOutput()
     const backend: RuntimeBackend = new WebAudioBackend(output)
@@ -133,7 +148,16 @@ describe('RuntimeBackend', () => {
     const backend = createNativeBackend()
 
     try {
-      await backend.start()
+      try {
+        await backend.start()
+      } catch (error) {
+        if (error instanceof Error && /spawn EPERM|spawn EACCES|spawn ENOENT/i.test(error.message)) {
+          console.info(`[skip] unable to launch engine-host: ${error.message}`)
+          return
+        }
+
+        throw error
+      }
 
       const handle = await backend.compile(
         createDiagnosticNativeExecutionPlan({
@@ -185,6 +209,57 @@ describe('RuntimeBackend', () => {
     }
   })
 })
+
+function createPlaybackModelFixture(): PlaybackModel {
+  return freezePlaybackModel({
+    id: 'project-alpha',
+    createdAt: 1_700_000_000_000,
+    length: 8,
+    tempoMap: {
+      defaultBpm: 120,
+      changes: [{ beat: 0, bpm: 120 }]
+    },
+    tracks: [
+      {
+        id: 'track-1',
+        name: 'Lead',
+        channel: 1,
+        mixer: { volume: 0.8, pan: 0 },
+        deviceInstanceIds: ['device-1']
+      }
+    ],
+    clips: [
+      {
+        id: 'clip-1',
+        trackId: 'track-1',
+        patternId: 'pattern-1',
+        name: 'Main',
+        start: 0,
+        length: 4,
+        loop: true,
+        loopStart: 0,
+        loopLength: 4,
+        sourceStart: 0,
+        sourceLength: 4,
+        loopIndex: 0
+      }
+    ],
+    notes: [
+      {
+        id: 'note-1',
+        sourceNoteId: 'note-1',
+        trackId: 'track-1',
+        clipId: 'clip-1',
+        patternId: 'pattern-1',
+        pitch: 69,
+        velocity: 0.8,
+        beat: 0,
+        duration: 1
+      }
+    ],
+    automations: []
+  })
+}
 
 class FakeWebAudioOutput {
   readonly id = 'fake-web-audio'

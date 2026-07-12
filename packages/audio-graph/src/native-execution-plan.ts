@@ -6,6 +6,7 @@ export type NativeExecutionRate = 'audio-rate' | 'control-rate' | 'event-rate';
 export interface NativeExecutionPlan {
   readonly id: string;
   readonly graphId: string;
+  readonly revision: number;
   readonly nodes: readonly NativeExecutionPlanNode[];
   readonly buffers: readonly NativeAudioBufferSlot[];
   readonly parameters: readonly NativeParameterSlot[];
@@ -67,6 +68,7 @@ export function createNativeExecutionPlan(
   return {
     id: `native-plan:${graph.document.id}`,
     graphId: graph.document.id,
+    revision: 1,
     nodes,
     buffers,
     parameters,

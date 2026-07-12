@@ -1,3 +1,4 @@
+import type { NativeExecutionPlan } from '@sequencer/audio-graph'
 import type { EngineCommand } from './schemas.ts'
 import type {
   PlaybackRuntimeControllerListener,
@@ -5,9 +6,12 @@ import type {
   PlaybackRuntimeControllerStatus,
   RuntimeSnapshot
 } from './RuntimeTypes.ts'
+import type { PreparedRuntimeHandle, RuntimeCompilePlan } from './RuntimeBackend.ts'
 
 export interface PlaybackRuntimeBackend {
   start(): Promise<void>
+  compile(plan: RuntimeCompilePlan): Promise<PreparedRuntimeHandle>
+  activate(handle: PreparedRuntimeHandle): Promise<void>
   sendCommands(commands: readonly EngineCommand[]): void
   getSnapshot(): Promise<RuntimeSnapshot>
   dispose(): Promise<void>
@@ -69,6 +73,35 @@ export class PlaybackRuntimeController {
       this.currentState = 'ready'
       await this.refreshSnapshot()
       this.startPolling()
+    } catch (error) {
+      this.fail(error)
+      throw error
+    }
+  }
+
+  async compileAndActivate(plan: NativeExecutionPlan): Promise<RuntimeSnapshot> {
+    await this.start()
+
+    try {
+      const handle = await this.backend.compile(plan)
+      await this.backend.activate(handle)
+      const snapshot = await this.refreshSnapshot()
+      const expectedPlanId = Number(handle.planId)
+      const expectedRevision = handle.revision ?? null
+
+      if (!Number.isNaN(expectedPlanId) && snapshot.plan.activePlanId !== expectedPlanId) {
+        throw new Error(
+          `runtime activation did not confirm plan ${expectedPlanId}; observed ${snapshot.plan.activePlanId}`
+        )
+      }
+
+      if (expectedRevision !== null && snapshot.plan.activeRevision !== expectedRevision) {
+        throw new Error(
+          `runtime activation did not confirm revision ${expectedRevision}; observed ${snapshot.plan.activeRevision}`
+        )
+      }
+
+      return snapshot
     } catch (error) {
       this.fail(error)
       throw error
@@ -172,7 +205,7 @@ export class PlaybackRuntimeController {
     this.pollTimer = undefined
   }
 
-  private fail(error: unknown): void {
+  fail(error: unknown): void {
     this.currentState = 'failed'
     this.commandPending = false
     this.failure = error instanceof Error ? error.message : String(error)

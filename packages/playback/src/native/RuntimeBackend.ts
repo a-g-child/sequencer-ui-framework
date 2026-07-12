@@ -199,9 +199,9 @@ export class NativeBackend implements RuntimeBackend {
       throw new Error('NativeBackend must be started before compiling a plan')
     }
 
-    if (!isNativeDiagnosticExecutionPlan(plan)) {
+    if (!isNativeDiagnosticExecutionPlan(plan) && !isNativeExecutionPlan(plan)) {
       throw new Error(
-        'NativeBackend.compile currently accepts NativeDiagnosticExecutionPlan wire plans'
+        'NativeBackend.compile currently accepts NativeExecutionPlan or NativeDiagnosticExecutionPlan wire plans'
       )
     }
 
@@ -320,6 +320,14 @@ function isNativeDiagnosticExecutionPlan(
   return (
     typeof (plan as NativeDiagnosticExecutionPlan).kind === 'string' &&
     (plan as NativeDiagnosticExecutionPlan).kind === 'diagnostic-tone'
+  )
+}
+
+function isNativeExecutionPlan(plan: RuntimeCompilePlan): plan is NativeExecutionPlan {
+  return (
+    typeof (plan as NativeExecutionPlan).id === 'string' &&
+    typeof (plan as NativeExecutionPlan).graphId === 'string' &&
+    Array.isArray((plan as NativeExecutionPlan).nodes)
   )
 }
 

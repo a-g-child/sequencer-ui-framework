@@ -17,22 +17,23 @@ import {
   SamplerFactory,
   getRuntimeParameterEffectiveValue
 } from '@sequencer/device'
-import { PlaybackModelBuilder } from './builder'
-import type { ClockState } from './clock'
+import { PlaybackModelBuilder } from './builder.ts'
+import type { ClockState } from './clock.ts'
 import {
   PlaybackDeviceManager,
   type PlaybackDeviceDiagnostics,
   type PlaybackDeviceManagerStatus
-} from './device'
-import type { PlaybackEvent } from './events'
+} from './device.ts'
+import type { PlaybackEvent } from './events.ts'
 import {
   LiveClipService,
   type AppliedClipLaunch,
   type ClipLaunchQuantize,
   type LiveClipState
-} from './live-clips'
-import type { PlaybackModel } from './model'
+} from './live-clips.ts'
+import type { PlaybackModel } from './model.ts'
 import { NativeAudioAdapter } from './native/NativeAudioAdapter.ts'
+import { compilePlaybackModelToNativePlan } from './native/PlaybackModelCompiler.ts'
 import {
   compileNativeClipSchedule,
   createNativeTempoMapCommand,
@@ -54,21 +55,21 @@ import {
   WebAudioOutput,
   WebMidiOutput,
   type OutputManagerStatus
-} from './output'
-import type { PlaybackOutputStatistics } from './output/StatisticsOutput'
+} from './output.ts'
+import type { PlaybackOutputStatistics } from './output/StatisticsOutput.ts'
 import type {
   WebAudioOscillatorSettings,
   WebAudioOscillatorSettingsUpdate,
   WebAudioWaveform
-} from './output/WebAudioOutput'
-import type { WebMidiOutputStatus } from './output/WebMidiOutput'
+} from './output/WebAudioOutput.ts'
+import type { WebMidiOutputStatus } from './output/WebMidiOutput.ts'
 import {
   samplePlaybackAutomationValues,
   TypeScriptScheduler,
   type PlaybackRuntimeParameterValue,
   type Scheduler,
   type SchedulerStatus
-} from './scheduler'
+} from './scheduler.ts'
 
 export interface PlaybackServiceStatus extends SchedulerStatus {
   readonly modelId: string
@@ -134,6 +135,11 @@ export class PlaybackService implements Service, DocumentObserver {
   private readonly nativeClipScheduleSubmissions = new NativeClipScheduleSubmissionState()
   private unsubscribeServiceEvents?: () => void
   private unsubscribeRuntimeController?: () => void
+  private activeNativeCompilation?: {
+    readonly planId: string
+    readonly revision: number
+    readonly modelKey: string
+  }
 
   constructor(
     scheduler?: Scheduler & { readonly status?: SchedulerStatus },
@@ -158,6 +164,9 @@ export class PlaybackService implements Service, DocumentObserver {
       await this.runtimeController.start()
     }
     this.rebuildModel()
+    if (this.runtimeController) {
+      await this.prepareNativeRuntimePlan(this.model)
+    }
     this.emitStatus()
   }
 
@@ -483,6 +492,11 @@ export class PlaybackService implements Service, DocumentObserver {
     this.syncTrackMixersToWebAudio()
     this.syncRuntimeParametersToWebAudio()
     this.statisticsOutput.recordPlaybackModelRebuild(nowMs() - startedAt)
+    if (this.runtimeController) {
+      void this.prepareNativeRuntimePlan(this.model).catch((error) => {
+        this.runtimeController?.fail(error)
+      })
+    }
     this.submitNativeClipScheduleReplacement()
     this.emitStatus()
   }
@@ -533,8 +547,9 @@ export class PlaybackService implements Service, DocumentObserver {
       this.clearTrackVoicesForAppliedLaunches(this.liveClips.applyDueLaunches(state))
       this.rebuildModel()
       if (this.runtimeController) {
-        this.submitNativeClipSchedule(state, 'begin')
-        void this.runtimeController.play().catch(() => {})
+        void this.prepareAndStartNativeRuntime(state).catch((error) => {
+          this.runtimeController?.fail(error)
+        })
       } else {
         this.scheduler.start(state.beat)
       }
@@ -610,6 +625,79 @@ export class PlaybackService implements Service, DocumentObserver {
       this.emitRuntimeParameterValues(state)
       this.emitStatus()
     }
+  }
+
+  private async prepareAndStartNativeRuntime(state: ClockState): Promise<void> {
+    if (!this.runtimeController || !this.model) return
+
+    await this.prepareNativeRuntimePlan(this.model)
+    this.submitNativeClipSchedule(state, 'begin')
+    await this.runtimeController.play()
+  }
+
+  private async prepareNativeRuntimePlan(playbackModel: PlaybackModel | undefined): Promise<void> {
+    if (!this.runtimeController || !playbackModel) return
+
+    const modelKey = this.nativePlanInputKey(playbackModel)
+    const currentCompilation = this.activeNativeCompilation
+
+    if (
+      currentCompilation &&
+      currentCompilation.modelKey === modelKey &&
+      (this.runtimeController.status.snapshot?.plan.activePlanId ?? null) !== null
+    ) {
+      return
+    }
+
+    const compilation = compilePlaybackModelToNativePlan(playbackModel)
+
+    if (compilation.diagnostics.some((diagnostic) => diagnostic.severity === 'error')) {
+      const message = compilation.diagnostics
+        .filter((diagnostic) => diagnostic.severity === 'error')
+        .map((diagnostic) => diagnostic.message)
+        .join('; ')
+
+      this.runtimeController.fail(new Error(message))
+      throw new Error(message)
+    }
+
+    const snapshot = await this.runtimeController.compileAndActivate(compilation.plan)
+
+    if (
+      snapshot.plan.activePlanId === null ||
+      snapshot.plan.activeRevision !== compilation.plan.revision
+    ) {
+      const message = `native runtime reported active plan ${snapshot.plan.activePlanId}/${snapshot.plan.activeRevision} instead of revision ${compilation.plan.revision}`
+      this.runtimeController.fail(new Error(message))
+      throw new Error(message)
+    }
+
+    this.activeNativeCompilation = {
+      planId: compilation.plan.id,
+      revision: compilation.plan.revision,
+      modelKey
+    }
+  }
+
+  private nativePlanInputKey(playbackModel: PlaybackModel): string {
+    return JSON.stringify({
+      id: playbackModel.id,
+      bpm: playbackModel.tempoMap.defaultBpm,
+      tracks: playbackModel.tracks.map((track) => ({
+        id: track.id,
+        name: track.name,
+        mixer: track.mixer,
+        deviceInstanceIds: track.deviceInstanceIds ?? track.deviceInstanceId
+      })),
+      clips: playbackModel.clips.map((clip) => ({
+        id: clip.id,
+        trackId: clip.trackId,
+        loop: clip.loop,
+        loopStart: clip.loopStart,
+        loopLength: clip.loopLength,
+        length: clip.length
+      }))
+    })
   }
 
   private submitNativeClipScheduleReplacement(): void {

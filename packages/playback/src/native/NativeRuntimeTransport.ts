@@ -98,8 +98,16 @@ export interface NativeEngineCommandResponse {
   readonly commandId: number
 }
 
+export interface NativeRuntimeStartOptions {
+  readonly driver?: NativeAudioDriver
+  readonly device?: string
+  readonly sampleRate?: number
+  readonly bufferFrames?: number
+  readonly channels?: number
+}
+
 export interface NativeRuntimeTransport {
-  start(): Promise<NativeSessionCapabilities>
+  start(options?: NativeRuntimeStartOptions): Promise<NativeSessionCapabilities>
   listAudioDevices(driver: NativeAudioDriver): Promise<NativeAudioDeviceInfo[]>
   startAudio(request: NativeAudioStartRequest): Promise<NativeActiveStreamInfo>
   stopAudio(): Promise<void>
@@ -115,56 +123,15 @@ export interface NativeRuntimeTransport {
   dispose(): Promise<void>
 }
 
-export class RendererNativeRuntimeTransport implements NativeRuntimeTransport {
-  private get api(): NativeRuntimeTransport {
-    const api = (globalThis as { nativeRuntime?: NativeRuntimeTransport })
-      .nativeRuntime
-
-    if (!api) {
-      throw new Error('Native playback requires the desktop host.')
-    }
-
-    return api
-  }
-
-  start(): Promise<NativeSessionCapabilities> {
-    return this.api.start()
-  }
-
-  listAudioDevices(driver: NativeAudioDriver): Promise<NativeAudioDeviceInfo[]> {
-    return this.api.listAudioDevices(driver)
-  }
-
-  startAudio(request: NativeAudioStartRequest): Promise<NativeActiveStreamInfo> {
-    return this.api.startAudio(request)
-  }
-
-  stopAudio(): Promise<void> {
-    return this.api.stopAudio()
-  }
-
-  preparePlan(plan: unknown): Promise<NativePreparedPlanHandle> {
-    return this.api.preparePlan(plan)
-  }
-
-  activatePlan(
-    transferId: number,
-    requestedSample?: number
-  ): Promise<NativePlanActivation> {
-    return this.api.activatePlan(transferId, requestedSample)
-  }
-
-  sendCommands(
-    commands: readonly EngineCommand[]
-  ): Promise<readonly NativeEngineCommandResponse[]> {
-    return this.api.sendCommands(commands)
-  }
-
-  getSnapshot(): Promise<NativeEngineSnapshot> {
-    return this.api.getSnapshot()
-  }
-
-  dispose(): Promise<void> {
-    return this.api.dispose()
-  }
-}
+export type {
+  NativeRuntimeApi,
+  NativeRuntimeBridgeError,
+  NativeRuntimeBridgeInvoker,
+  NativeRuntimeBridgeRequest
+} from './NativeRuntimeApi.ts'
+export {
+  createNativeRuntimePreloadApi,
+  installNativeRuntimeApi,
+  RendererNativeRuntimeTransport,
+  NativeRuntimeBridgeError
+} from './NativeRuntimeApi.ts'
