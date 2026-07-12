@@ -1,0 +1,81 @@
+import assert from 'node:assert/strict'
+import { describe, it } from 'node:test'
+import { NativeSessionClient, parseNativeSessionLine } from '../src/native/NativeSessionClient.ts'
+
+const nativeEngineCwd = new URL('../../../native-audio-engine/', import.meta.url)
+  .pathname
+
+function createClient(): NativeSessionClient {
+  return new NativeSessionClient({
+    command: process.env.CARGO ?? '/Users/andrew/.cargo/bin/cargo',
+    args: ['run', '-p', 'engine-host', '--', '--session-stdio'],
+    cwd: nativeEngineCwd,
+    shutdownTimeoutMs: 2_000
+  })
+}
+
+describe('NativeSessionClient', () => {
+  it('handshakes, starts null audio, snapshots, stops and shuts down', async () => {
+    const client = createClient()
+
+    try {
+      const capabilities = await client.start()
+
+      assert.equal(client.state, 'ready')
+      assert.equal(capabilities.protocolVersion, 1)
+      assert.ok(capabilities.drivers.includes('null'))
+
+      const devices = await client.listAudioDevices('null')
+
+      assert.equal(devices[0]?.id, 'null')
+
+      const stream = await client.startAudio({
+        driver: 'null',
+        sampleRate: 48_000,
+        bufferFrames: 128,
+        channels: 2
+      })
+
+      assert.equal(client.state, 'audio-running')
+      assert.equal(stream.deviceId, 'null')
+      assert.equal(stream.sampleRate, 48_000)
+
+      const snapshot = await client.getSnapshot()
+
+      assert.equal(snapshot.stream?.deviceId, 'null')
+      assert.ok((snapshot.telemetry?.samplePosition ?? 0) > 0)
+
+      await client.stopAudio()
+      assert.equal(client.state, 'ready')
+    } finally {
+      await client.shutdown()
+    }
+
+    assert.equal(client.state, 'stopped')
+  })
+
+  it('can create and dispose repeated sessions', async () => {
+    for (let index = 0; index < 2; index += 1) {
+      const client = createClient()
+
+      await client.start()
+      await client.startAudio({
+        driver: 'null',
+        sampleRate: 48_000,
+        bufferFrames: 64,
+        channels: 2
+      })
+      await client.stopAudio()
+      await client.shutdown()
+
+      assert.equal(client.state, 'stopped')
+    }
+  })
+
+  it('rejects malformed protocol lines', () => {
+    assert.throws(
+      () => parseNativeSessionLine('human log line'),
+      /failed to parse native session JSONL/
+    )
+  })
+})

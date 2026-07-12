@@ -87,7 +87,7 @@ impl<W: Write> Session<W> {
             let shutdown = request.command == "session:shutdown";
 
             if let Err(error) = self.handle_request(request) {
-                self.write_error("session:error", &error.message)?;
+                self.write_error(None, "session:error", "SessionError", &error.message)?;
             }
 
             self.writer.flush()?;
@@ -102,21 +102,31 @@ impl<W: Write> Session<W> {
 
     fn handle_request(&mut self, request: SessionRequest) -> Result<(), SessionError> {
         match request.command.as_str() {
-            "session:hello" => self.write_hello(),
-            "session:capabilities" => self.write_capabilities(),
-            "audio:list-devices" => self.list_devices(request.driver()),
+            "session:hello" => self.write_hello(&request),
+            "session:capabilities" => self.write_capabilities(&request),
+            "audio:list-devices" => self.list_devices(&request),
             "audio:start" => self.start_audio(&request),
-            "audio:stop" => self.stop_audio(),
-            "engine:snapshot" => self.write_snapshot(),
+            "audio:stop" => self.stop_audio(&request),
+            "engine:snapshot" => self.write_snapshot(&request),
             "session:shutdown" => {
                 if self.stream.is_some() {
-                    self.stop_audio()?;
+                    self.stop_audio(&SessionRequest {
+                        request_id: None,
+                        command: "audio:stop".to_string(),
+                        options: Vec::new(),
+                    })?;
                 }
 
-                writeln!(self.writer, "{{\"type\":\"session:shutdown\",\"ok\":true}}")?;
+                self.write_ok_prefix(&request, "session:shutdown")?;
+                writeln!(self.writer, "}}")?;
                 Ok(())
             }
-            other => self.write_error("session:error", &format!("unknown command: {other}")),
+            other => self.write_error(
+                request.request_id,
+                "error",
+                "UnknownCommand",
+                &format!("unknown command: {other}"),
+            ),
         }
     }
 
@@ -128,31 +138,35 @@ impl<W: Write> Session<W> {
         Ok(())
     }
 
-    fn write_hello(&mut self) -> Result<(), SessionError> {
+    fn write_hello(&mut self, request: &SessionRequest) -> Result<(), SessionError> {
+        self.write_ok_prefix(request, "session:hello")?;
         writeln!(
             self.writer,
-            "{{\"type\":\"session:hello\",\"ok\":true,\"protocolVersion\":{SESSION_PROTOCOL_VERSION},\"host\":\"engine-host\"}}"
+            ",\"protocolVersion\":{SESSION_PROTOCOL_VERSION},\"host\":\"engine-host\"}}"
         )?;
         Ok(())
     }
 
-    fn write_capabilities(&mut self) -> Result<(), SessionError> {
+    fn write_capabilities(&mut self, request: &SessionRequest) -> Result<(), SessionError> {
+        self.write_ok_prefix(request, "session:capabilities")?;
         writeln!(
             self.writer,
-            "{{\"type\":\"session:capabilities\",\"ok\":true,\"drivers\":[\"null\",\"cpal\"],\"messages\":[\"session:hello\",\"session:capabilities\",\"audio:list-devices\",\"audio:start\",\"audio:stop\",\"engine:snapshot\",\"session:shutdown\"]}}"
+            ",\"drivers\":[\"null\",\"cpal\"],\"messages\":[\"session:hello\",\"session:capabilities\",\"audio:list-devices\",\"audio:start\",\"audio:stop\",\"engine:snapshot\",\"session:shutdown\"]}}"
         )?;
         Ok(())
     }
 
-    fn list_devices(&mut self, driver_kind: DriverKind) -> Result<(), SessionError> {
+    fn list_devices(&mut self, request: &SessionRequest) -> Result<(), SessionError> {
+        let driver_kind = request.driver();
         let driver = build_session_driver(driver_kind);
         let devices = driver
             .available_output_devices()
             .map_err(session_driver_error)?;
 
+        self.write_ok_prefix(request, "audio:devices")?;
         write!(
             self.writer,
-            "{{\"type\":\"audio:devices\",\"ok\":true,\"driver\":\"{}\",\"devices\":[",
+            ",\"driver\":\"{}\",\"devices\":[",
             driver_kind.as_str()
         )?;
 
@@ -176,7 +190,12 @@ impl<W: Write> Session<W> {
 
     fn start_audio(&mut self, request: &SessionRequest) -> Result<(), SessionError> {
         if self.stream.is_some() {
-            self.write_error("audio:start", "audio stream is already active")?;
+            self.write_error(
+                request.request_id,
+                "error",
+                "AudioAlreadyRunning",
+                "audio stream is already active",
+            )?;
             return Ok(());
         }
 
@@ -199,9 +218,10 @@ impl<W: Write> Session<W> {
             .start_output(output_request, Box::new(EngineProcessor::new(engine)))
             .map_err(session_driver_error)?;
 
+        self.write_ok_prefix(request, "audio:started")?;
         writeln!(
             self.writer,
-            "{{\"type\":\"audio:started\",\"ok\":true,\"driver\":\"{}\",\"deviceId\":\"{}\",\"deviceName\":\"{}\",\"sampleRate\":{},\"channels\":{},\"sampleFormat\":\"{:?}\",\"requestedBufferFrames\":{}}}",
+            ",\"driver\":\"{}\",\"deviceId\":\"{}\",\"deviceName\":\"{}\",\"sampleRate\":{},\"channels\":{},\"sampleFormat\":\"{:?}\",\"requestedBufferFrames\":{}}}",
             driver_kind.as_str(),
             escape_json(&stream.device_id),
             escape_json(&stream.device_name),
@@ -219,7 +239,7 @@ impl<W: Write> Session<W> {
         Ok(())
     }
 
-    fn stop_audio(&mut self) -> Result<(), SessionError> {
+    fn stop_audio(&mut self, request: &SessionRequest) -> Result<(), SessionError> {
         if let Some(command_sender) = &self.command_sender {
             let _ = command_sender.push(EngineCommand::TransportStop {
                 id: self.next_command_id,
@@ -237,14 +257,15 @@ impl<W: Write> Session<W> {
         self.stream = None;
         self.command_sender = None;
         self.telemetry_receiver = None;
-        writeln!(self.writer, "{{\"type\":\"audio:stopped\",\"ok\":true}}")?;
+        self.write_ok_prefix(request, "audio:stopped")?;
+        writeln!(self.writer, "}}")?;
         Ok(())
     }
 
-    fn write_snapshot(&mut self) -> Result<(), SessionError> {
+    fn write_snapshot(&mut self, request: &SessionRequest) -> Result<(), SessionError> {
         self.drain_runtime_events()?;
 
-        write!(self.writer, "{{\"type\":\"engine:snapshot\",\"ok\":true")?;
+        self.write_ok_prefix(request, "engine:snapshot")?;
 
         if let Some(stream) = &self.stream {
             write!(
@@ -378,11 +399,47 @@ impl<W: Write> Session<W> {
         Ok(())
     }
 
-    fn write_error(&mut self, message_type: &str, message: &str) -> Result<(), SessionError> {
+    fn write_ok_prefix(
+        &mut self,
+        request: &SessionRequest,
+        message_type: &str,
+    ) -> Result<(), SessionError> {
+        self.write_response_prefix(request.request_id, message_type, true)
+    }
+
+    fn write_response_prefix(
+        &mut self,
+        request_id: Option<u64>,
+        message_type: &str,
+        ok: bool,
+    ) -> Result<(), SessionError> {
+        write!(self.writer, "{{")?;
+
+        if let Some(request_id) = request_id {
+            write!(self.writer, "\"requestId\":{request_id},")?;
+        }
+
+        write!(
+            self.writer,
+            "\"type\":\"{}\",\"ok\":{}",
+            escape_json(message_type),
+            ok
+        )?;
+        Ok(())
+    }
+
+    fn write_error(
+        &mut self,
+        request_id: Option<u64>,
+        message_type: &str,
+        code: &str,
+        message: &str,
+    ) -> Result<(), SessionError> {
+        self.write_response_prefix(request_id, message_type, false)?;
         writeln!(
             self.writer,
-            "{{\"type\":\"{}\",\"ok\":false,\"error\":\"{}\"}}",
-            escape_json(message_type),
+            ",\"code\":\"{}\",\"message\":\"{}\"}}",
+            escape_json(code),
             escape_json(message)
         )?;
         Ok(())
@@ -391,12 +448,17 @@ impl<W: Write> Session<W> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SessionRequest {
+    request_id: Option<u64>,
     command: String,
     options: Vec<(String, String)>,
 }
 
 impl SessionRequest {
     fn parse(line: &str) -> Self {
+        if line.starts_with('{') {
+            return Self::parse_json(line);
+        }
+
         let mut parts = line.split_whitespace();
         let command = parts.next().unwrap_or_default().to_string();
         let options = parts
@@ -407,7 +469,34 @@ impl SessionRequest {
             })
             .collect();
 
-        Self { command, options }
+        Self {
+            request_id: None,
+            command,
+            options,
+        }
+    }
+
+    fn parse_json(line: &str) -> Self {
+        let fields = parse_flat_json_object(line);
+        let command = fields
+            .iter()
+            .find(|(key, _)| key == "type")
+            .map(|(_, value)| value.clone())
+            .unwrap_or_default();
+        let request_id = fields
+            .iter()
+            .find(|(key, _)| key == "requestId")
+            .and_then(|(_, value)| value.parse::<u64>().ok());
+        let options = fields
+            .into_iter()
+            .filter(|(key, _)| key != "type" && key != "requestId")
+            .collect();
+
+        Self {
+            request_id,
+            command,
+            options,
+        }
     }
 
     fn option(&self, key: &str) -> Option<&str> {
@@ -512,6 +601,106 @@ fn optional_u32_json(value: Option<u32>) -> String {
         .unwrap_or_else(|| "null".to_string())
 }
 
+fn parse_flat_json_object(line: &str) -> Vec<(String, String)> {
+    let mut fields = Vec::new();
+    let mut index = 0;
+    let bytes = line.as_bytes();
+
+    skip_ws(bytes, &mut index);
+    if bytes.get(index) != Some(&b'{') {
+        return fields;
+    }
+    index += 1;
+
+    loop {
+        skip_ws(bytes, &mut index);
+
+        if bytes.get(index) == Some(&b'}') || index >= bytes.len() {
+            break;
+        }
+
+        let Some(key) = parse_json_string(bytes, &mut index) else {
+            break;
+        };
+
+        skip_ws(bytes, &mut index);
+        if bytes.get(index) != Some(&b':') {
+            break;
+        }
+        index += 1;
+        skip_ws(bytes, &mut index);
+
+        let value = if bytes.get(index) == Some(&b'"') {
+            parse_json_string(bytes, &mut index).unwrap_or_default()
+        } else {
+            parse_json_scalar(bytes, &mut index)
+        };
+
+        fields.push((key, value));
+        skip_ws(bytes, &mut index);
+
+        match bytes.get(index) {
+            Some(b',') => index += 1,
+            Some(b'}') | None => break,
+            _ => break,
+        }
+    }
+
+    fields
+}
+
+fn parse_json_string(bytes: &[u8], index: &mut usize) -> Option<String> {
+    if bytes.get(*index) != Some(&b'"') {
+        return None;
+    }
+    *index += 1;
+    let mut value = String::new();
+
+    while let Some(byte) = bytes.get(*index).copied() {
+        *index += 1;
+
+        match byte {
+            b'"' => return Some(value),
+            b'\\' => {
+                let escaped = bytes.get(*index).copied()?;
+                *index += 1;
+                match escaped {
+                    b'"' => value.push('"'),
+                    b'\\' => value.push('\\'),
+                    b'n' => value.push('\n'),
+                    b'r' => value.push('\r'),
+                    b't' => value.push('\t'),
+                    other => value.push(other as char),
+                }
+            }
+            other => value.push(other as char),
+        }
+    }
+
+    None
+}
+
+fn parse_json_scalar(bytes: &[u8], index: &mut usize) -> String {
+    let start = *index;
+
+    while let Some(byte) = bytes.get(*index) {
+        if matches!(byte, b',' | b'}') {
+            break;
+        }
+        *index += 1;
+    }
+
+    String::from_utf8_lossy(&bytes[start..*index])
+        .trim()
+        .to_string()
+}
+
+fn skip_ws(bytes: &[u8], index: &mut usize) {
+    while bytes.get(*index).is_some_and(u8::is_ascii_whitespace) {
+        *index += 1;
+    }
+}
+
 fn escape_json(value: &str) -> String {
     let mut escaped = String::new();
 
@@ -577,5 +766,18 @@ mod tests {
         assert!(output.contains("\"type\":\"engine:snapshot\""));
         assert!(output.contains("\"samplePosition\":128"));
         assert!(output.contains("\"type\":\"audio:stopped\""));
+    }
+
+    #[test]
+    fn json_requests_echo_request_ids() {
+        let output = run_session(
+            "{\"requestId\":1,\"type\":\"session:hello\"}\n\
+             {\"requestId\":2,\"type\":\"audio:list-devices\",\"driver\":\"null\"}\n\
+             {\"requestId\":3,\"type\":\"session:shutdown\"}\n",
+        );
+
+        assert!(output.contains("\"requestId\":1,\"type\":\"session:hello\""));
+        assert!(output.contains("\"requestId\":2,\"type\":\"audio:devices\""));
+        assert!(output.contains("\"requestId\":3,\"type\":\"session:shutdown\""));
     }
 }

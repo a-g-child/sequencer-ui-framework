@@ -1,4 +1,5 @@
 export * from './NativeAudioAdapter.ts'
+export * from './NativeSessionClient.ts'
 export * from './NativeSchedulerAdapter.ts'
 export * from './WasmSchedulerAdapter.ts'
 export * from './schemas.ts'
