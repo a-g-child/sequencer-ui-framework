@@ -33,6 +33,10 @@ import {
 } from './live-clips'
 import type { PlaybackModel } from './model'
 import { NativeAudioAdapter } from './native/NativeAudioAdapter.ts'
+import {
+  PlaybackRuntimeController,
+  type PlaybackRuntimeControllerStatus
+} from './native/PlaybackRuntimeController.ts'
 import { createPanicDeviceCommand } from './native/voice-action-commands.ts'
 import {
   ConsoleOutput,
@@ -74,6 +78,7 @@ export interface PlaybackServiceStatus extends SchedulerStatus {
     readonly trackSettings: Readonly<Record<string, WebAudioOscillatorSettings>>
   }
   readonly webMidi: WebMidiOutputStatus
+  readonly runtime?: PlaybackRuntimeControllerStatus
 }
 
 export interface PlaybackTrackGraphDiagnostics {
@@ -120,8 +125,12 @@ export class PlaybackService implements Service, DocumentObserver {
   private readonly webAudioOutput = new WebAudioOutput()
   private readonly webMidiOutput = new WebMidiOutput()
   private unsubscribeServiceEvents?: () => void
+  private unsubscribeRuntimeController?: () => void
 
-  constructor(scheduler?: Scheduler & { readonly status?: SchedulerStatus }) {
+  constructor(
+    scheduler?: Scheduler & { readonly status?: SchedulerStatus },
+    private readonly runtimeController?: PlaybackRuntimeController
+  ) {
     this.scheduler = scheduler ?? new TypeScriptScheduler()
   }
 
@@ -133,6 +142,13 @@ export class PlaybackService implements Service, DocumentObserver {
     )
     await this.initialiseOutputs()
     await this.initialiseDevices()
+    if (this.runtimeController) {
+      this.unsubscribeRuntimeController = this.runtimeController.subscribe(() => {
+        this.emitRuntimeSnapshot()
+        this.emitStatus()
+      })
+      await this.runtimeController.start()
+    }
     this.rebuildModel()
     this.emitStatus()
   }
@@ -140,6 +156,8 @@ export class PlaybackService implements Service, DocumentObserver {
   async shutdown(): Promise<void> {
     this.panicRuntimeVoices()
     this.scheduler.stop()
+    this.unsubscribeRuntimeController?.()
+    await this.runtimeController?.dispose()
     await this.deviceManager.disconnectAll()
     await this.outputManager.disconnectAll()
     this.context?.documentStore.removeObserver(this)
@@ -172,7 +190,8 @@ export class PlaybackService implements Service, DocumentObserver {
       voice: this.voiceStatus(),
       statistics: this.statisticsOutput.statistics,
       webAudio: this.webAudioOutput.settings,
-      webMidi: this.webMidiOutput.status
+      webMidi: this.webMidiOutput.status,
+      runtime: this.runtimeController?.status
     }
   }
 
@@ -293,6 +312,7 @@ export class PlaybackService implements Service, DocumentObserver {
         timeMs: nowMs()
       })
     ])
+    void this.runtimeController?.panic().catch(() => {})
   }
 
   requestClipLaunch(
@@ -503,14 +523,22 @@ export class PlaybackService implements Service, DocumentObserver {
       }
       this.clearTrackVoicesForAppliedLaunches(this.liveClips.applyDueLaunches(state))
       this.rebuildModel()
-      this.scheduler.start(state.beat)
+      if (this.runtimeController) {
+        void this.runtimeController.play().catch(() => {})
+      } else {
+        this.scheduler.start(state.beat)
+      }
       this.emitStatus()
     }
 
     if (event.type === 'clock:stopped') {
       this.latestClockState = event.payload as ClockState
       this.scheduler.stop()
-      this.panicRuntimeVoices()
+      if (this.runtimeController) {
+        void this.runtimeController.stop().catch(() => {})
+      } else {
+        this.panicRuntimeVoices()
+      }
       this.liveClips.resetLaunchOrigins(0)
       this.rebuildModel()
       this.emitStatus()
@@ -534,6 +562,12 @@ export class PlaybackService implements Service, DocumentObserver {
       const state = event.payload as ClockState
       const previousTimeMs = this.latestClockState?.timeMs ?? state.timeMs
       this.latestClockState = state
+
+      if (this.runtimeController) {
+        void this.runtimeController.refreshSnapshot().catch(() => {})
+        this.emitStatus()
+        return
+      }
 
       const appliedLaunches = this.liveClips.applyDueLaunches(state)
 
@@ -729,6 +763,18 @@ export class PlaybackService implements Service, DocumentObserver {
       type: 'playback:runtime-parameters',
       serviceId: this.id,
       payload: values
+    })
+  }
+
+  private emitRuntimeSnapshot(): void {
+    const snapshot = this.runtimeController?.status.snapshot
+
+    if (!snapshot) return
+
+    this.context?.events.emit({
+      type: 'playback:runtime-snapshot',
+      serviceId: this.id,
+      payload: snapshot
     })
   }
 
