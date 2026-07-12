@@ -413,6 +413,9 @@ outperform them.
 
 Status: boundary proven. See `docs/native-runtime-status.md`.
 
+For the browser-to-native bridge and kiosk implementation plan, see
+`docs/browser-native-runtime-kiosk-tasks.md`.
+
 ### Phase 9.1: Serializable Runtime Schemas
 
 Define shared plain-data shapes for the native boundary:
