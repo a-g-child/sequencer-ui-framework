@@ -9,6 +9,7 @@ import { readFile } from 'node:fs/promises'
 import { extname, resolve, sep } from 'node:path'
 import { NativeRuntimeManager } from '@sequencer/native-runtime-node'
 import type {
+  NativeAudioStartRequest,
   EngineCommand,
   NativeRuntimeStartOptions
 } from '@sequencer/playback'
@@ -186,6 +187,9 @@ export class NativeRuntimeServer {
       start: async (options?: NativeRuntimeStartOptions) => {
         const manager = this.acquireOwnerManager(connectionId)
         return manager.start(options)
+      },
+      startAudio: async (request: NativeAudioStartRequest) => {
+        return this.requireOwnerManager(connectionId).startAudio(request)
       },
       preparePlan: async (plan: unknown) => {
         return this.requireOwnerManager(connectionId).preparePlan(plan)

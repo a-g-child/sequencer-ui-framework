@@ -2,6 +2,7 @@ import { NativeRuntimeManager } from '@sequencer/native-runtime-node'
 import {
   NATIVE_RUNTIME_SOCKET_PROTOCOL_VERSION,
   type EngineCommand,
+  type NativeAudioStartRequest,
   type NativeRuntimeSocketEvent,
   type NativeRuntimeSocketFailure,
   type NativeRuntimeSocketHandshakeFailure,
@@ -35,6 +36,7 @@ export interface NativeRuntimeSocketSessionOptions {
 
 export interface NativeRuntimeRequestHandler {
   start(options?: NativeRuntimeStartOptions): Promise<unknown>
+  startAudio(request: NativeAudioStartRequest): Promise<unknown>
   preparePlan(plan: unknown): Promise<unknown>
   activatePlan(transferId: number, requestedSample?: number): Promise<unknown>
   sendCommands(commands: readonly EngineCommand[]): Promise<unknown>
@@ -167,8 +169,16 @@ export class NativeRuntimeSocketSession {
 
   private dispatch(request: NativeRuntimeSocketRequest): Promise<unknown> {
     switch (request.method) {
-      case 'runtime:start':
-        return this.manager.start((request.params ?? undefined) as NativeRuntimeStartOptions)
+      case 'runtime:start': {
+        const options = (request.params ?? undefined) as
+          | NativeRuntimeStartOptions
+          | undefined
+
+        return this.manager.start(options).then(async (session) => {
+          await this.manager.startAudio(toNativeAudioStartRequest(options))
+          return session
+        })
+      }
       case 'plan:prepare':
         return this.manager.preparePlan(request.params)
       case 'plan:activate': {
@@ -188,6 +198,18 @@ export class NativeRuntimeSocketSession {
       case 'runtime:dispose':
         return this.manager.dispose().then(() => undefined)
     }
+  }
+}
+
+function toNativeAudioStartRequest(
+  options?: NativeRuntimeStartOptions
+): NativeAudioStartRequest {
+  return {
+    driver: options?.driver ?? 'null',
+    device: options?.device,
+    sampleRate: options?.sampleRate,
+    bufferFrames: options?.bufferFrames,
+    channels: options?.channels
   }
 }
 
