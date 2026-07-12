@@ -121,6 +121,30 @@ describe('NativeSessionClient', () => {
         }
       })
 
+      await client.sendEngineCommand({
+        id: 'schedule-batch',
+        type: 'event:schedule-beat-batch',
+        clipId: 'clip-1',
+        generation: 2,
+        timeMs: 0,
+        atSample: 0,
+        events: [
+          {
+            kind: 'note-on',
+            targetNode: 5,
+            note: 62,
+            velocity: 0.8,
+            atBeat: 2
+          },
+          {
+            kind: 'note-off',
+            targetNode: 5,
+            note: 62,
+            atBeat: 2.5
+          }
+        ]
+      })
+
       await client.stopAudio()
       assert.equal(client.state, 'ready')
     } finally {

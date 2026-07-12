@@ -1,6 +1,7 @@
 import type { PlaybackClip, PlaybackModel, PlaybackNote } from '../model.ts'
 import type {
   NativeScheduledBeatEvent,
+  ScheduleBeatEventBatchCommand,
   ScheduleBeatEventCommand,
   SetTempoMapCommand,
   SetTransportLoopCommand
@@ -48,6 +49,34 @@ export interface NativeTransportLoopCommandOptions {
   readonly timeMs: number
 }
 
+export class NativeClipScheduleSubmissionState {
+  private readonly generations = new Map<string, number>()
+  private active = false
+
+  begin(clipId: string): number | undefined {
+    if (this.active) return undefined
+
+    return this.nextGeneration(clipId)
+  }
+
+  replace(clipId: string): number {
+    return this.nextGeneration(clipId)
+  }
+
+  stop(): void {
+    this.active = false
+  }
+
+  private nextGeneration(clipId: string): number {
+    const generation = (this.generations.get(clipId) ?? 0) + 1
+
+    this.generations.set(clipId, generation)
+    this.active = true
+
+    return generation
+  }
+}
+
 export function applyClipTiming(
   sourceBeat: number,
   _timing: ClipTimingSettings
@@ -88,6 +117,21 @@ export function nativeClipScheduleCommands(
     atSample,
     timeMs: options.timeMs
   }))
+}
+
+export function nativeClipScheduleBatchCommand(
+  schedule: NativeClipSchedule,
+  options: NativeClipScheduleCommandOptions
+): ScheduleBeatEventBatchCommand {
+  return {
+    id: `${schedule.clipId}:${schedule.generation}:schedule-batch`,
+    type: 'event:schedule-beat-batch',
+    clipId: schedule.clipId,
+    generation: schedule.generation,
+    events: schedule.events,
+    atSample: options.atSample ?? 0,
+    timeMs: options.timeMs
+  }
 }
 
 export function createNativeTempoMapCommand(

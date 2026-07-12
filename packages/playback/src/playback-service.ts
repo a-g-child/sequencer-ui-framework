@@ -37,7 +37,8 @@ import {
   compileNativeClipSchedule,
   createNativeTempoMapCommand,
   createNativeTransportLoopCommand,
-  nativeClipScheduleCommands
+  nativeClipScheduleBatchCommand,
+  NativeClipScheduleSubmissionState,
 } from './native/NativeClipSchedule.ts'
 import {
   PlaybackRuntimeController,
@@ -130,7 +131,7 @@ export class PlaybackService implements Service, DocumentObserver {
   private readonly statisticsOutput = new StatisticsOutput()
   private readonly webAudioOutput = new WebAudioOutput()
   private readonly webMidiOutput = new WebMidiOutput()
-  private readonly nativeClipScheduleGenerations = new Map<string, number>()
+  private readonly nativeClipScheduleSubmissions = new NativeClipScheduleSubmissionState()
   private unsubscribeServiceEvents?: () => void
   private unsubscribeRuntimeController?: () => void
 
@@ -482,6 +483,7 @@ export class PlaybackService implements Service, DocumentObserver {
     this.syncTrackMixersToWebAudio()
     this.syncRuntimeParametersToWebAudio()
     this.statisticsOutput.recordPlaybackModelRebuild(nowMs() - startedAt)
+    this.submitNativeClipScheduleReplacement()
     this.emitStatus()
   }
 
@@ -531,7 +533,7 @@ export class PlaybackService implements Service, DocumentObserver {
       this.clearTrackVoicesForAppliedLaunches(this.liveClips.applyDueLaunches(state))
       this.rebuildModel()
       if (this.runtimeController) {
-        this.submitNativeClipSchedule(state)
+        this.submitNativeClipSchedule(state, 'begin')
         void this.runtimeController.play().catch(() => {})
       } else {
         this.scheduler.start(state.beat)
@@ -542,6 +544,7 @@ export class PlaybackService implements Service, DocumentObserver {
     if (event.type === 'clock:stopped') {
       this.latestClockState = event.payload as ClockState
       this.scheduler.stop()
+      this.nativeClipScheduleSubmissions.stop()
       if (this.runtimeController) {
         void this.runtimeController.stop().catch(() => {})
       } else {
@@ -609,14 +612,24 @@ export class PlaybackService implements Service, DocumentObserver {
     }
   }
 
-  private submitNativeClipSchedule(state: ClockState): void {
+  private submitNativeClipScheduleReplacement(): void {
+    if (!this.runtimeController || !this.latestClockState?.running) return
+    if (!this.runtimeController.status.snapshot?.transport.playing) return
+
+    this.submitNativeClipSchedule(this.latestClockState, 'replace')
+  }
+
+  private submitNativeClipSchedule(state: ClockState, mode: 'begin' | 'replace'): void {
     if (!this.runtimeController || !this.model) return
 
     const clip = this.model.clips[0]
     if (!clip) return
 
-    const generation = (this.nativeClipScheduleGenerations.get(clip.id) ?? 0) + 1
-    this.nativeClipScheduleGenerations.set(clip.id, generation)
+    const generation =
+      mode === 'replace'
+        ? this.nativeClipScheduleSubmissions.replace(clip.id)
+        : this.nativeClipScheduleSubmissions.begin(clip.id)
+    if (generation === undefined) return
 
     const snapshot = this.runtimeController.status.snapshot
     const sampleRate = snapshot?.stream.sampleRate || snapshot?.sampleRate || 48_000
@@ -642,7 +655,7 @@ export class PlaybackService implements Service, DocumentObserver {
         atSample,
         timeMs
       }),
-      ...nativeClipScheduleCommands(schedule, {
+      nativeClipScheduleBatchCommand(schedule, {
         atSample,
         timeMs
       })

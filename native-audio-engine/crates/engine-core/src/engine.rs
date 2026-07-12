@@ -4,7 +4,8 @@ use engine_dsp::{DiagnosticOscillator, PARAM_DIAGNOSTIC_FREQUENCY, PARAM_DIAGNOS
 use engine_protocol::{
     AudioTelemetry, CommandDiagnostics, CommandRejection, EngineCommand, EngineEvent,
     EventEndpoint, FutureEventLifetime, FutureEventOwner, FutureEventRequest, NativeExecutionPlan,
-    RuntimePlanStatus, ScheduledBeatEvent, ScheduledEngineEvent, TempoMapSnapshot, TransportLoop,
+    RuntimePlanStatus, ScheduledBeatEvent, ScheduledEngineEvent, ScheduledEventLifetime,
+    ScheduledEventOwner, TempoMapSnapshot, TransportLoop,
 };
 
 use crate::{
@@ -15,6 +16,7 @@ use crate::{
 
 const PENDING_COMMAND_CAPACITY: usize = 1024;
 const SCHEDULED_EVENT_CAPACITY: usize = 2048;
+const SCHEDULED_EVENT_OWNER_CAPACITY: usize = 128;
 const COMMITTED_SCHEDULING_HORIZON_SAMPLES: u64 = 128;
 const DEFAULT_PLAN_CROSSFADE_SAMPLES: u32 = 128;
 const DEFERRED_RETIREMENT_CAPACITY: usize = RETIRED_PLAN_TRANSFER_CAPACITY * 2;
@@ -93,6 +95,7 @@ struct ScheduledEventEntry {
     original_sample: u64,
     loop_iteration: u64,
     beat_event: Option<ScheduledBeatEvent>,
+    owner: Option<ScheduledEventOwner>,
     future_owner: Option<FutureEventOwner>,
 }
 
@@ -119,6 +122,7 @@ impl ScheduledEventSet {
         &mut self,
         event: ScheduledEngineEvent,
         beat_event: Option<ScheduledBeatEvent>,
+        owner: Option<ScheduledEventOwner>,
     ) -> Result<(), ScheduledEngineEvent> {
         let entry = ScheduledEventEntry {
             source: event_endpoint_for_event(event),
@@ -126,6 +130,7 @@ impl ScheduledEventSet {
             original_sample: event.at_sample(),
             loop_iteration: 0,
             beat_event,
+            owner,
             future_owner: None,
         };
 
@@ -144,6 +149,7 @@ impl ScheduledEventSet {
             original_sample: request.at_sample,
             loop_iteration: 0,
             beat_event: None,
+            owner: None,
             future_owner: Some(request.owner),
         };
 
@@ -202,6 +208,60 @@ impl ScheduledEventSet {
             entry.original_sample = entry.event.at_sample();
             entry.loop_iteration = 0;
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ScheduledEventOwnerGeneration {
+    owner_id: u64,
+    generation: u64,
+}
+
+struct ScheduledEventOwnerSet {
+    entries: [Option<ScheduledEventOwnerGeneration>; SCHEDULED_EVENT_OWNER_CAPACITY],
+}
+
+impl Default for ScheduledEventOwnerSet {
+    fn default() -> Self {
+        Self {
+            entries: std::array::from_fn(|_| None),
+        }
+    }
+}
+
+impl ScheduledEventOwnerSet {
+    fn set_generation(&mut self, owner_id: u64, generation: u64) -> bool {
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .filter_map(Option::as_mut)
+            .find(|entry| entry.owner_id == owner_id)
+        {
+            entry.generation = generation;
+            return true;
+        }
+
+        let Some(slot) = self.entries.iter_mut().find(|slot| slot.is_none()) else {
+            return false;
+        };
+
+        *slot = Some(ScheduledEventOwnerGeneration {
+            owner_id,
+            generation,
+        });
+        true
+    }
+
+    fn generation_is_current(&self, owner_id: u64, generation: u64) -> bool {
+        self.entries
+            .iter()
+            .filter_map(Option::as_ref)
+            .find(|entry| entry.owner_id == owner_id)
+            .is_some_and(|entry| entry.generation == generation)
+    }
+
+    fn clear(&mut self) {
+        self.entries.fill(None);
     }
 }
 
@@ -320,6 +380,7 @@ pub struct AudioEngine {
     tempo_map: TempoMapSnapshot,
     transport_loop: TransportLoop,
     scheduled_events: ScheduledEventSet,
+    scheduled_event_owners: ScheduledEventOwnerSet,
     execution_plan: Option<PreparedExecutionPlan>,
     crossfade: Option<ActivePlanCrossfade>,
     deferred_retirements: DeferredRetirements,
@@ -362,6 +423,7 @@ impl AudioEngine {
                 end_sample: 0,
             },
             scheduled_events: ScheduledEventSet::default(),
+            scheduled_event_owners: ScheduledEventOwnerSet::default(),
             execution_plan: None,
             crossfade: None,
             deferred_retirements: DeferredRetirements::default(),
@@ -1107,6 +1169,10 @@ impl AudioEngine {
     }
 
     fn apply_scheduled_event(&mut self, entry: &ScheduledEventEntry) -> bool {
+        if !self.scheduled_event_owner_is_active(entry.owner) {
+            return false;
+        }
+
         if !self.future_event_owner_is_active(entry.future_owner) {
             return false;
         }
@@ -1126,6 +1192,26 @@ impl AudioEngine {
         }
 
         true
+    }
+
+    fn scheduled_event_owner_is_active(&mut self, owner: Option<ScheduledEventOwner>) -> bool {
+        let Some(owner) = owner else {
+            return true;
+        };
+
+        if owner.lifetime == ScheduledEventLifetime::CompletionRequired {
+            return true;
+        }
+
+        let current = self
+            .scheduled_event_owners
+            .generation_is_current(owner.owner_id, owner.generation);
+
+        if !current {
+            self.record_future_generation_discard();
+        }
+
+        current
     }
 
     fn dispatch_event_to_execution_plan(
@@ -1382,6 +1468,7 @@ impl AudioEngine {
             EngineCommand::TransportStop { .. } => {
                 self.playing = false;
                 self.scheduled_events.clear();
+                self.scheduled_event_owners.clear();
                 self.scheduled_test_voice.note_off();
                 if let Some(plan) = self.execution_plan.as_mut() {
                     plan.reset();
@@ -1396,6 +1483,7 @@ impl AudioEngine {
                 self.diagnostic_signal.panic_muted = true;
                 self.diagnostic_signal.oscillator.reset();
                 self.scheduled_events.clear();
+                self.scheduled_event_owners.clear();
                 self.scheduled_test_voice.panic();
                 if let Some(plan) = self.execution_plan.as_mut() {
                     plan.reset();
@@ -1435,18 +1523,31 @@ impl AudioEngine {
             EngineCommand::SetTransportLoop { transport_loop, .. } => {
                 self.transport_loop = transport_loop;
             }
+            EngineCommand::SetScheduledEventOwnerGeneration {
+                owner_id,
+                generation,
+                ..
+            } => {
+                if !self
+                    .scheduled_event_owners
+                    .set_generation(owner_id, generation)
+                {
+                    self.reject_command(command.id(), CommandRejection::SchedulerFull);
+                    return;
+                }
+            }
             EngineCommand::ScheduleEvent { event, .. } => {
                 if !self.playing {
                     return;
                 }
 
-                if self.scheduled_events.insert(event, None).is_err() {
+                if self.scheduled_events.insert(event, None, None).is_err() {
                     self.reject_command(command.id(), CommandRejection::SchedulerFull);
                     return;
                 }
             }
-            EngineCommand::ScheduleBeatEvent { event, .. } => {
-                if !self.playing {
+            EngineCommand::ScheduleBeatEvent { event, owner, .. } => {
+                if !self.playing && owner.is_none() {
                     return;
                 }
 
@@ -1454,7 +1555,7 @@ impl AudioEngine {
 
                 if self
                     .scheduled_events
-                    .insert(sample_event, Some(event))
+                    .insert(sample_event, Some(event), owner)
                     .is_err()
                 {
                     self.reject_command(command.id(), CommandRejection::SchedulerFull);
@@ -1625,10 +1726,10 @@ mod tests {
         ArpeggiatorNodePlan, AudioBufferSlot, EventDelayNodePlan, EventEndpoint,
         EventInputNodePlan, EventRoute, EventRouteMask, InstrumentNodePlan, OutputNodePlan,
         PlanNode, PlanNodeKind, ScaleNodePlan, ScheduledBeatEvent, ScheduledEngineEvent,
-        TempoMapSnapshot, TransportLoop, VelocityNodePlan, VoiceNodePlan, ARPEGGIATOR_PORT_NOTES,
-        ARPEGGIATOR_PORT_TICK, ARPEGGIATOR_PORT_TICK_INPUT, EVENT_DELAY_PORT_DELAYED,
-        NODE_ARPEGGIATOR, NODE_EVENT_DELAY, NODE_EVENT_INPUT, NODE_INSTRUMENT, NODE_OUTPUT,
-        NODE_VOICE, PARAM_GAIN_GAIN,
+        ScheduledEventOwner, TempoMapSnapshot, TransportLoop, VelocityNodePlan, VoiceNodePlan,
+        ARPEGGIATOR_PORT_NOTES, ARPEGGIATOR_PORT_TICK, ARPEGGIATOR_PORT_TICK_INPUT,
+        EVENT_DELAY_PORT_DELAYED, NODE_ARPEGGIATOR, NODE_EVENT_DELAY, NODE_EVENT_INPUT,
+        NODE_INSTRUMENT, NODE_OUTPUT, NODE_VOICE, PARAM_GAIN_GAIN,
     };
 
     fn plan_with_identity(
@@ -2305,6 +2406,119 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_clip_generation_replacement_drops_uncommitted_note_on() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine = AudioEngine::new()
+            .with_scheduled_test_voice()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::SetScheduledEventOwnerGeneration {
+                id: 1,
+                owner_id: 42,
+                generation: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleBeatEvent {
+                id: 2,
+                event: ScheduledBeatEvent::NoteOn {
+                    target_node: 1,
+                    note: 69,
+                    velocity: 1.0,
+                    at_beat: 1.0,
+                },
+                owner: Some(ScheduledEventOwner::generation_bound(42, 1)),
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetScheduledEventOwnerGeneration {
+                id: 3,
+                owner_id: 42,
+                generation: 2,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 4,
+                at_sample: 0,
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 24_128);
+
+        assert!(output.iter().all(|sample| *sample == 0.0));
+    }
+
+    #[test]
+    fn scheduled_clip_completion_required_note_off_survives_generation_change() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine = AudioEngine::new()
+            .with_scheduled_test_voice()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetScheduledEventOwnerGeneration {
+                id: 2,
+                owner_id: 42,
+                generation: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleBeatEvent {
+                id: 3,
+                event: ScheduledBeatEvent::NoteOn {
+                    target_node: 1,
+                    note: 69,
+                    velocity: 1.0,
+                    at_beat: 0.0,
+                },
+                owner: Some(ScheduledEventOwner::generation_bound(42, 1)),
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleBeatEvent {
+                id: 4,
+                event: ScheduledBeatEvent::NoteOff {
+                    target_node: 1,
+                    note: 69,
+                    at_beat: 1.0,
+                },
+                owner: Some(ScheduledEventOwner::completion_required(42, 1)),
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetScheduledEventOwnerGeneration {
+                id: 5,
+                owner_id: 42,
+                generation: 2,
+                at_sample: 1,
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 25_000);
+        let before_note_off = &output[..48_000.min(output.len())];
+        let after_note_off = &output[(24_128 * 2).min(output.len())..];
+
+        assert!(before_note_off.iter().any(|sample| *sample != 0.0));
+        assert!(after_note_off.iter().all(|sample| *sample == 0.0));
+    }
+
+    #[test]
     fn tempo_change_affects_only_events_outside_committed_horizon() {
         let (command_sender, command_receiver) = crate::engine_command_queue();
         let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
@@ -2346,6 +2560,7 @@ mod tests {
                     velocity: 0.5,
                     at_beat: 0.004,
                 },
+                owner: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -2358,6 +2573,7 @@ mod tests {
                     velocity: 0.5,
                     at_beat: 1.0,
                 },
+                owner: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -3290,6 +3506,7 @@ mod tests {
                         at_sample: sample,
                     },
                     None,
+                    None,
                 )
                 .unwrap();
         }
@@ -3869,6 +4086,7 @@ mod tests {
                     velocity: 0.5,
                     at_beat: 1.0,
                 },
+                owner: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -3880,6 +4098,7 @@ mod tests {
                     note: 69,
                     at_beat: 1.5,
                 },
+                owner: None,
                 at_sample: 0,
             })
             .unwrap();

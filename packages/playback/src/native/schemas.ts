@@ -24,6 +24,7 @@ export type EngineCommand =
   | SetTempoMapCommand
   | SetTransportLoopCommand
   | ScheduleBeatEventCommand
+  | ScheduleBeatEventBatchCommand
   | LaunchClipCommand
   | ParameterModulateCommand
   | SwapExecutionPlanCommand
@@ -148,6 +149,14 @@ export interface ScheduleBeatEventCommand extends DeviceCommandBase {
   readonly atSample: number
   readonly clipId?: string
   readonly generation?: number
+}
+
+export interface ScheduleBeatEventBatchCommand extends DeviceCommandBase {
+  readonly type: 'event:schedule-beat-batch'
+  readonly clipId: string
+  readonly generation: number
+  readonly events: readonly NativeScheduledBeatEvent[]
+  readonly atSample: number
 }
 
 export interface LaunchClipCommand extends DeviceCommandBase {

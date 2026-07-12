@@ -16,7 +16,7 @@ use engine_core::{
 };
 use engine_protocol::{
     diagnostic_tone_plan, AudioTelemetry, EngineCommand, EngineEvent, ScheduledBeatEvent,
-    TempoMapSnapshot, TransportLoop, NATIVE_EXECUTION_PLAN_VERSION,
+    ScheduledEventOwner, TempoMapSnapshot, TransportLoop, NATIVE_EXECUTION_PLAN_VERSION,
 };
 
 use crate::DriverKind;
@@ -26,6 +26,7 @@ const EXECUTION_PLAN_VERSION: u32 = 1;
 const EVENT_GRAPH_VERSION: u32 = 1;
 const PARAMETER_GRAPH_VERSION: u32 = 0;
 const MAX_PREPARED_TRANSFERS: usize = 8;
+const MAX_SCHEDULED_BEAT_BATCH_EVENTS: usize = 256;
 const PLAN_ACTIVATION_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub fn run_stdio_session<R, W>(reader: R, writer: W) -> Result<(), SessionError>
@@ -325,9 +326,9 @@ impl<W: Write> Session<W> {
             return Ok(());
         }
 
-        let command_id = self.next_command_id;
-        let command = match parse_session_engine_command(request, command_id) {
-            Ok(command) => command,
+        let first_command_id = self.next_command_id;
+        let commands = match parse_session_engine_commands(request, first_command_id) {
+            Ok(commands) => commands,
             Err(error) => {
                 self.write_error(
                     request.request_id,
@@ -339,22 +340,24 @@ impl<W: Write> Session<W> {
             }
         };
 
-        self.next_command_id = self.next_command_id.saturating_add(1);
+        self.next_command_id = self.next_command_id.saturating_add(commands.len() as u64);
 
-        if self
-            .command_sender
-            .as_ref()
-            .expect("command sender checked above")
-            .push(command)
-            .is_err()
-        {
-            self.write_error(
-                request.request_id,
-                "error",
-                "CommandQueueFull",
-                "engine command queue is full",
-            )?;
-            return Ok(());
+        for command in commands {
+            if self
+                .command_sender
+                .as_ref()
+                .expect("command sender checked above")
+                .push(command)
+                .is_err()
+            {
+                self.write_error(
+                    request.request_id,
+                    "error",
+                    "CommandQueueFull",
+                    "engine command queue is full",
+                )?;
+                return Ok(());
+            }
         }
 
         if let Some(driver) = &mut self.driver {
@@ -363,7 +366,7 @@ impl<W: Write> Session<W> {
 
         self.drain_runtime_events()?;
         self.write_ok_prefix(request, "engine:command")?;
-        writeln!(self.writer, ",\"commandId\":{command_id}}}")?;
+        writeln!(self.writer, ",\"commandId\":{first_command_id}}}")?;
         Ok(())
     }
 
@@ -1060,10 +1063,10 @@ fn parse_session_execution_plan(
     }
 }
 
-fn parse_session_engine_command(
+fn parse_session_engine_commands(
     request: &SessionRequest,
-    command_id: u64,
-) -> Result<EngineCommand, SessionError> {
+    first_command_id: u64,
+) -> Result<Vec<EngineCommand>, SessionError> {
     let command_json = extract_json_value(&request.raw_line, "command")
         .ok_or_else(|| SessionError::new("engine:command requires a command object"))?;
     let fields = parse_flat_json_object(&command_json);
@@ -1075,19 +1078,19 @@ fn parse_session_engine_command(
     };
     let at_sample = parse_optional_u64(field("atSample"), "command.atSample")?.unwrap_or(0);
 
-    match field("type") {
-        Some("transport:start") => Ok(EngineCommand::TransportStart {
-            id: command_id,
+    let command = match field("type") {
+        Some("transport:start") => EngineCommand::TransportStart {
+            id: first_command_id,
             at_sample,
-        }),
-        Some("transport:stop") => Ok(EngineCommand::TransportStop {
-            id: command_id,
+        },
+        Some("transport:stop") => EngineCommand::TransportStop {
+            id: first_command_id,
             at_sample,
-        }),
-        Some("panic") => Ok(EngineCommand::Panic {
-            id: command_id,
+        },
+        Some("panic") => EngineCommand::Panic {
+            id: first_command_id,
             at_sample,
-        }),
+        },
         Some("tempo-map:set") => {
             let tempo = TempoMapSnapshot {
                 origin_sample: parse_optional_u64(field("originSample"), "command.originSample")?
@@ -1098,11 +1101,11 @@ fn parse_session_engine_command(
                 sample_rate: parse_required_f64(field("sampleRate"), "command.sampleRate")?,
             };
 
-            Ok(EngineCommand::SetTempoMap {
-                id: command_id,
+            EngineCommand::SetTempoMap {
+                id: first_command_id,
                 tempo,
                 at_sample,
-            })
+            }
         }
         Some("transport-loop:set") => {
             let transport_loop = TransportLoop {
@@ -1111,32 +1114,128 @@ fn parse_session_engine_command(
                 end_sample: parse_required_u64(field("endSample"), "command.endSample")?,
             };
 
-            Ok(EngineCommand::SetTransportLoop {
-                id: command_id,
+            EngineCommand::SetTransportLoop {
+                id: first_command_id,
                 transport_loop,
                 at_sample,
-            })
+            }
         }
         Some("event:schedule-beat") => {
             let event = parse_scheduled_beat_event(&command_json)?;
 
-            Ok(EngineCommand::ScheduleBeatEvent {
-                id: command_id,
+            EngineCommand::ScheduleBeatEvent {
+                id: first_command_id,
                 event,
+                owner: None,
                 at_sample,
-            })
+            }
+        }
+        Some("event:schedule-beat-batch") => {
+            return parse_scheduled_beat_event_batch(&command_json, first_command_id, at_sample);
         }
         Some(kind) => Err(SessionError::new(format!(
             "unsupported engine command type: {kind}"
-        ))),
-        None => Err(SessionError::new("command.type is required")),
-    }
+        )))?,
+        None => Err(SessionError::new("command.type is required"))?,
+    };
+
+    Ok(vec![command])
 }
 
 fn parse_scheduled_beat_event(command_json: &str) -> Result<ScheduledBeatEvent, SessionError> {
     let event_json = extract_json_value(command_json, "event")
         .ok_or_else(|| SessionError::new("command.event is required"))?;
     let fields = parse_flat_json_object(&event_json);
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+
+    let target_node = parse_required_u32(field("targetNode"), "command.event.targetNode")?;
+    let note = parse_required_u8(field("note"), "command.event.note")?;
+    let at_beat = parse_required_f64(field("atBeat"), "command.event.atBeat")?;
+
+    match field("kind") {
+        Some("note-on") => Ok(ScheduledBeatEvent::NoteOn {
+            target_node,
+            note,
+            velocity: parse_required_f32(field("velocity"), "command.event.velocity")?,
+            at_beat,
+        }),
+        Some("note-off") => Ok(ScheduledBeatEvent::NoteOff {
+            target_node,
+            note,
+            at_beat,
+        }),
+        Some(kind) => Err(SessionError::new(format!(
+            "unsupported scheduled beat event kind: {kind}"
+        ))),
+        None => Err(SessionError::new("command.event.kind is required")),
+    }
+}
+
+fn parse_scheduled_beat_event_batch(
+    command_json: &str,
+    first_command_id: u64,
+    at_sample: u64,
+) -> Result<Vec<EngineCommand>, SessionError> {
+    let fields = parse_flat_json_object(command_json);
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+    let clip_id = field("clipId").ok_or_else(|| SessionError::new("command.clipId is required"))?;
+    let generation = parse_required_u64(field("generation"), "command.generation")?;
+    let owner_id = stable_owner_id(clip_id);
+    let event_json = extract_json_value(command_json, "events")
+        .ok_or_else(|| SessionError::new("command.events is required"))?;
+    let event_objects = parse_json_object_array(&event_json);
+
+    if event_objects.is_empty() {
+        return Err(SessionError::new("command.events must not be empty"));
+    }
+    if event_objects.len() > MAX_SCHEDULED_BEAT_BATCH_EVENTS {
+        return Err(SessionError::new(format!(
+            "command.events exceeds maximum batch size {MAX_SCHEDULED_BEAT_BATCH_EVENTS}"
+        )));
+    }
+
+    let mut commands = Vec::with_capacity(event_objects.len() + 1);
+    commands.push(EngineCommand::SetScheduledEventOwnerGeneration {
+        id: first_command_id,
+        owner_id,
+        generation,
+        at_sample,
+    });
+
+    for (index, event_json) in event_objects.iter().enumerate() {
+        let event = parse_scheduled_beat_event_object(event_json)?;
+        let owner = match event {
+            ScheduledBeatEvent::NoteOn { .. } => {
+                ScheduledEventOwner::generation_bound(owner_id, generation)
+            }
+            ScheduledBeatEvent::NoteOff { .. } => {
+                ScheduledEventOwner::completion_required(owner_id, generation)
+            }
+        };
+
+        commands.push(EngineCommand::ScheduleBeatEvent {
+            id: first_command_id.saturating_add(index as u64 + 1),
+            event,
+            owner: Some(owner),
+            at_sample,
+        });
+    }
+
+    Ok(commands)
+}
+
+fn parse_scheduled_beat_event_object(event_json: &str) -> Result<ScheduledBeatEvent, SessionError> {
+    let fields = parse_flat_json_object(event_json);
     let field = |name: &str| {
         fields
             .iter()
@@ -1302,6 +1401,37 @@ fn extract_json_value(line: &str, key: &str) -> Option<String> {
 
             None
         }
+        b'[' => {
+            let mut depth = 0usize;
+            let mut in_string = false;
+            let mut escaped = false;
+
+            while let Some(byte) = bytes.get(index).copied() {
+                if in_string {
+                    if escaped {
+                        escaped = false;
+                    } else if byte == b'\\' {
+                        escaped = true;
+                    } else if byte == b'"' {
+                        in_string = false;
+                    }
+                } else if byte == b'"' {
+                    in_string = true;
+                } else if byte == b'[' {
+                    depth += 1;
+                } else if byte == b']' {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        index += 1;
+                        return Some(line[start..index].to_string());
+                    }
+                }
+
+                index += 1;
+            }
+
+            None
+        }
         b'"' => parse_json_string(bytes, &mut index),
         _ => {
             while let Some(byte) = bytes.get(index) {
@@ -1326,6 +1456,68 @@ fn session_capabilities_json() -> String {
     format!(
         "{{\"executionPlanVersion\":{EXECUTION_PLAN_VERSION},\"eventGraphVersion\":{EVENT_GRAPH_VERSION},\"parameterGraphVersion\":{PARAMETER_GRAPH_VERSION},\"assets\":false,\"telemetry\":true}}"
     )
+}
+
+fn parse_json_object_array(line: &str) -> Vec<String> {
+    let mut objects = Vec::new();
+    let mut index = 0;
+    let bytes = line.as_bytes();
+
+    skip_ws(bytes, &mut index);
+    if bytes.get(index) != Some(&b'[') {
+        return objects;
+    }
+    index += 1;
+
+    loop {
+        skip_ws(bytes, &mut index);
+
+        if bytes.get(index) == Some(&b']') || index >= bytes.len() {
+            break;
+        }
+        if bytes.get(index) != Some(&b'{') {
+            break;
+        }
+
+        let start = index;
+        let mut depth = 0usize;
+        let mut in_string = false;
+        let mut escaped = false;
+
+        while let Some(byte) = bytes.get(index).copied() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == b'"' {
+                    in_string = false;
+                }
+            } else if byte == b'"' {
+                in_string = true;
+            } else if byte == b'{' {
+                depth += 1;
+            } else if byte == b'}' {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    index += 1;
+                    objects.push(line[start..index].to_string());
+                    break;
+                }
+            }
+
+            index += 1;
+        }
+
+        skip_ws(bytes, &mut index);
+        match bytes.get(index) {
+            Some(b',') => index += 1,
+            Some(b']') | None => break,
+            _ => break,
+        }
+    }
+
+    objects
 }
 
 fn parse_flat_json_object(line: &str) -> Vec<(String, String)> {
@@ -1428,6 +1620,17 @@ fn skip_ws(bytes: &[u8], index: &mut usize) {
     }
 }
 
+fn stable_owner_id(value: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+
+    for byte in value.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+
+    hash
+}
+
 fn escape_json(value: &str) -> String {
     let mut escaped = String::new();
 
@@ -1516,13 +1719,15 @@ mod tests {
              {\"requestId\":3,\"type\":\"engine:command\",\"command\":{\"type\":\"transport-loop:set\",\"enabled\":true,\"startSample\":0,\"endSample\":96000,\"atSample\":0}}\n\
              {\"requestId\":4,\"type\":\"engine:command\",\"command\":{\"type\":\"event:schedule-beat\",\"atSample\":0,\"event\":{\"kind\":\"note-on\",\"targetNode\":5,\"note\":60,\"velocity\":0.75,\"atBeat\":1}}}\n\
              {\"requestId\":5,\"type\":\"engine:command\",\"command\":{\"type\":\"event:schedule-beat\",\"atSample\":0,\"event\":{\"kind\":\"note-off\",\"targetNode\":5,\"note\":60,\"atBeat\":1.5}}}\n\
-             {\"requestId\":6,\"type\":\"session:shutdown\"}\n",
+             {\"requestId\":6,\"type\":\"engine:command\",\"command\":{\"type\":\"event:schedule-beat-batch\",\"clipId\":\"clip-1\",\"generation\":2,\"atSample\":0,\"events\":[{\"kind\":\"note-on\",\"targetNode\":5,\"note\":62,\"velocity\":0.8,\"atBeat\":2},{\"kind\":\"note-off\",\"targetNode\":5,\"note\":62,\"atBeat\":2.5}]}}\n\
+             {\"requestId\":7,\"type\":\"session:shutdown\"}\n",
         );
 
         assert!(output.contains("\"requestId\":2,\"type\":\"engine:command\""));
         assert!(output.contains("\"requestId\":3,\"type\":\"engine:command\""));
         assert!(output.contains("\"requestId\":4,\"type\":\"engine:command\""));
         assert!(output.contains("\"requestId\":5,\"type\":\"engine:command\""));
+        assert!(output.contains("\"requestId\":6,\"type\":\"engine:command\""));
         assert!(!output.contains("\"ok\":false"));
     }
 }

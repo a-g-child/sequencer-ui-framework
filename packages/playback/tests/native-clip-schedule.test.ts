@@ -5,7 +5,9 @@ import {
   compileNativeClipSchedule,
   createNativeTempoMapCommand,
   createNativeTransportLoopCommand,
+  nativeClipScheduleBatchCommand,
   nativeClipScheduleCommands,
+  NativeClipScheduleSubmissionState,
   NATIVE_EVENT_INPUT_NODE_ID
 } from '../src/native/NativeClipSchedule.ts'
 import { freezePlaybackModel, type PlaybackModel } from '../src/model.ts'
@@ -102,6 +104,30 @@ describe('NativeClipSchedule', () => {
     assert.ok(commands.every((command) => command.generation === 4))
   })
 
+  it('turns a clip schedule into one bounded batch command', () => {
+    const model = createFourQuarterNoteFixture()
+    const schedule = compileNativeClipSchedule(model, {
+      clipId: 'clip-1',
+      generation: 5
+    })
+
+    assert.deepEqual(
+      nativeClipScheduleBatchCommand(schedule, {
+        timeMs: 250,
+        atSample: 512
+      }),
+      {
+        id: 'clip-1:5:schedule-batch',
+        type: 'event:schedule-beat-batch',
+        clipId: 'clip-1',
+        generation: 5,
+        events: schedule.events,
+        atSample: 512,
+        timeMs: 250
+      }
+    )
+  })
+
   it('creates native tempo and loop commands for the fixture', () => {
     const model = createFourQuarterNoteFixture()
     const clip = model.clips[0]
@@ -168,6 +194,19 @@ describe('NativeClipSchedule', () => {
 
   it('keeps the first clip timing transform as an explicit identity seam', () => {
     assert.equal(applyClipTiming(1.25, { swing: 0 }), 1.25)
+  })
+
+  it('prevents duplicate active submissions until transport stop opens the next generation', () => {
+    const submissions = new NativeClipScheduleSubmissionState()
+
+    assert.equal(submissions.begin('clip-1'), 1)
+    assert.equal(submissions.begin('clip-1'), undefined)
+    assert.equal(submissions.replace('clip-1'), 2)
+    assert.equal(submissions.begin('clip-1'), undefined)
+
+    submissions.stop()
+
+    assert.equal(submissions.begin('clip-1'), 3)
   })
 })
 

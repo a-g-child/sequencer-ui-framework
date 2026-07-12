@@ -102,6 +102,37 @@ pub enum ScheduledBeatEvent {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScheduledEventOwner {
+    pub owner_id: u64,
+    pub generation: u64,
+    pub lifetime: ScheduledEventLifetime,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScheduledEventLifetime {
+    GenerationBound,
+    CompletionRequired,
+}
+
+impl ScheduledEventOwner {
+    pub const fn generation_bound(owner_id: u64, generation: u64) -> Self {
+        Self {
+            owner_id,
+            generation,
+            lifetime: ScheduledEventLifetime::GenerationBound,
+        }
+    }
+
+    pub const fn completion_required(owner_id: u64, generation: u64) -> Self {
+        Self {
+            owner_id,
+            generation,
+            lifetime: ScheduledEventLifetime::CompletionRequired,
+        }
+    }
+}
+
 impl ScheduledBeatEvent {
     pub fn at_beat(&self) -> f64 {
         match *self {
@@ -166,6 +197,12 @@ pub enum EngineCommand {
         transport_loop: TransportLoop,
         at_sample: u64,
     },
+    SetScheduledEventOwnerGeneration {
+        id: u64,
+        owner_id: u64,
+        generation: u64,
+        at_sample: u64,
+    },
     ScheduleEvent {
         id: u64,
         event: ScheduledEngineEvent,
@@ -173,6 +210,7 @@ pub enum EngineCommand {
     ScheduleBeatEvent {
         id: u64,
         event: ScheduledBeatEvent,
+        owner: Option<ScheduledEventOwner>,
         at_sample: u64,
     },
     SwapExecutionPlan {
@@ -191,6 +229,7 @@ impl EngineCommand {
             | Self::SetParameter { id, .. }
             | Self::SetTempoMap { id, .. }
             | Self::SetTransportLoop { id, .. }
+            | Self::SetScheduledEventOwnerGeneration { id, .. }
             | Self::ScheduleEvent { id, .. }
             | Self::ScheduleBeatEvent { id, .. }
             | Self::SwapExecutionPlan { id, .. } => id,
@@ -205,6 +244,7 @@ impl EngineCommand {
             | Self::SetParameter { at_sample, .. }
             | Self::SetTempoMap { at_sample, .. }
             | Self::SetTransportLoop { at_sample, .. }
+            | Self::SetScheduledEventOwnerGeneration { at_sample, .. }
             | Self::ScheduleBeatEvent { at_sample, .. } => at_sample,
             Self::ScheduleEvent { event, .. } => event.at_sample(),
             Self::SwapExecutionPlan {

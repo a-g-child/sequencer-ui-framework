@@ -552,6 +552,14 @@ function nativeEngineCommandPayload(command: EngineCommand): Record<string, unkn
         atSample: command.atSample,
         event: command.event
       }
+    case 'event:schedule-beat-batch':
+      return {
+        type: command.type,
+        clipId: command.clipId,
+        generation: command.generation,
+        events: command.events,
+        atSample: command.atSample
+      }
     default:
       return {
         type: command.type
