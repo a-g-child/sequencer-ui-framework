@@ -1,6 +1,7 @@
 import type { NativeExecutionPlan } from '@sequencer/audio-graph'
 import type { PlaybackOutput } from '../output/PlaybackOutput.ts'
 import type { EngineCommand } from './schemas.ts'
+import type { RuntimeSnapshot } from './RuntimeTypes.ts'
 import {
   NativeSessionClient,
   type NativeAudioStartRequest,
@@ -38,33 +39,6 @@ export interface NativeDiagnosticExecutionPlan {
 }
 
 export type RuntimeCompilePlan = NativeExecutionPlan | NativeDiagnosticExecutionPlan
-
-export interface RuntimeSnapshot {
-  readonly backend: 'web-audio' | 'native'
-  readonly transport: {
-    readonly playing: boolean
-    readonly samplePosition: number
-    readonly beatPosition: number
-    readonly loopIteration: number
-  }
-  readonly stream: {
-    readonly sampleRate: number
-    readonly callbackCount: number
-  }
-  readonly plan: {
-    readonly activePlanId: number | null
-    readonly activeRevision: number | null
-    readonly pendingTransfers: number
-  }
-  readonly diagnostics: {
-    readonly xruns: number
-    readonly queueOverflows: number
-  }
-  readonly samplePosition: number
-  readonly sampleRate: number
-  readonly running: boolean
-  readonly native?: NativeEngineSnapshot
-}
 
 export interface RuntimeBackend {
   start(): Promise<void>

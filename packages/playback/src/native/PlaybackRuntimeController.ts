@@ -1,28 +1,22 @@
 import type { EngineCommand } from './schemas.ts'
-import type { RuntimeBackend, RuntimeSnapshot } from './RuntimeBackend.ts'
+import type {
+  PlaybackRuntimeControllerListener,
+  PlaybackRuntimeControllerState,
+  PlaybackRuntimeControllerStatus,
+  RuntimeSnapshot
+} from './RuntimeTypes.ts'
 
-export type PlaybackRuntimeControllerState =
-  | 'stopped'
-  | 'starting'
-  | 'ready'
-  | 'failed'
-
-export interface PlaybackRuntimeControllerStatus {
-  readonly state: PlaybackRuntimeControllerState
-  readonly requestedTransportPlaying: boolean
-  readonly commandPending: boolean
-  readonly failure?: string
-  readonly snapshot?: RuntimeSnapshot
+export interface PlaybackRuntimeBackend {
+  start(): Promise<void>
+  sendCommands(commands: readonly EngineCommand[]): void
+  getSnapshot(): Promise<RuntimeSnapshot>
+  dispose(): Promise<void>
 }
 
 export interface PlaybackRuntimeControllerOptions {
   readonly pollIntervalMs?: number
   readonly autoPoll?: boolean
 }
-
-export type PlaybackRuntimeControllerListener = (
-  status: PlaybackRuntimeControllerStatus
-) => void
 
 export class PlaybackRuntimeController {
   private readonly pollIntervalMs: number
@@ -37,7 +31,7 @@ export class PlaybackRuntimeController {
   private latestSnapshot: RuntimeSnapshot | undefined
 
   constructor(
-    private readonly backend: RuntimeBackend,
+    private readonly backend: PlaybackRuntimeBackend,
     options: PlaybackRuntimeControllerOptions = {}
   ) {
     this.pollIntervalMs = options.pollIntervalMs ?? 40

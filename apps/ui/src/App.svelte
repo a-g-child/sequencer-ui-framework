@@ -91,6 +91,23 @@
   type SelectableDeviceKind = 'basic-synth' | 'sampler'
   type SelectableMidiDeviceKind = 'arpeggiator' | 'lfo'
   type SelectableAudioEffectKind = 'delay'
+  type RuntimeSnapshot = NonNullable<
+    NonNullable<PlaybackServiceStatus['runtime']>['snapshot']
+  >
+  type RuntimePlayheadAnchor = {
+    beatPosition: number
+    samplePosition: number
+    sampleRate: number
+    observedAtMs: number
+    playing: boolean
+  }
+
+  type RuntimeTransportStatus =
+    | { state: 'stopped' }
+    | { state: 'starting' }
+    | { state: 'playing'; snapshot: RuntimeSnapshot }
+    | { state: 'stopping'; snapshot?: RuntimeSnapshot }
+    | { state: 'failed'; message: string }
 
   type DeviceParameterView = {
     device: DeviceInstance
@@ -140,7 +157,8 @@
   const controller = new AppController(app)
   const store = app.documentStore
   const localProjectStore = new LocalProjectStore()
-  const browserAssetStore = new BrowserAssetStore()
+	  const browserAssetStore = new BrowserAssetStore()
+	  const runtimeVisualFrameMs = 1000 / 30
   const launchQuantizeOptions: Array<{
     id: ClipLaunchQuantize
     label: string
@@ -152,8 +170,8 @@
     { id: '4-bars', label: '4 Bars' }
   ]
   controller.selectInitialTrack()
-  onMount(() => {
-    const unsubscribeServices = app.serviceEvents.subscribe(handleServiceEvent)
+	  onMount(() => {
+	    const unsubscribeServices = app.serviceEvents.subscribe(handleServiceEvent)
     const unsubscribeDocument = store.events.subscribe((event) => {
       if (
         event.type === 'operation:executed' ||
@@ -162,15 +180,19 @@
       ) {
         projectPersistenceStatus = 'Unsaved changes'
       }
-    })
-    void app.initialise()
+	    })
+	    const runtimeVisualTimer = setInterval(() => {
+	      runtimeVisualNowMs = nowMs()
+	    }, runtimeVisualFrameMs)
+	    void app.initialise()
 
-    return () => {
-      unsubscribeServices()
-      unsubscribeDocument()
-      void app.shutdown()
-    }
-  })
+	    return () => {
+	      unsubscribeServices()
+	      unsubscribeDocument()
+	      clearInterval(runtimeVisualTimer)
+	      void app.shutdown()
+	    }
+	  })
 
   let tracks = store.document.tracks.values()
   let selected: SelectionItem | undefined = store.selection.current()
@@ -202,9 +224,12 @@
     : controller.patternClipLoopRegion(activePattern?.id)
   let draftName = inspector.type === 'track' ? inspector.title : ''
   let numberDrafts: Record<string, number> = {}
-  let transportPlaying = app.editorTransport.playing
-  let transportBpm = app.editorTransport.bpm
-  let transportBeat = app.editorTransport.currentBeat
+	  let transportPlaying = app.editorTransport.playing
+	  let transportBpm = app.editorTransport.bpm
+	  let transportBeat = app.editorTransport.currentBeat
+	  let runtimeVisualNowMs = nowMs()
+	  let runtimePlayheadAnchor: RuntimePlayheadAnchor | undefined
+	  let runtimeTransportStatus: RuntimeTransportStatus = { state: 'stopped' }
   let groove: GrooveSettings = store.document.groove
   let audioEngineStatus = 'idle'
   let midiStatus = 'idle'
@@ -241,12 +266,26 @@
   let showProbabilityLane = false
   let showAutomationLane = false
   let editorScale: PatternScaleState = { ...defaultScaleState }
-  $: activePatternPlayheadBeat = localPlayheadBeat(
-    transportPlaying,
-    transportBeat,
-    activePatternClipLoop,
-    activePatternClipLoopRegion
-  )
+	  $: syncRuntimeSnapshot(playbackStatus.runtime?.snapshot)
+	  $: runtimeTransportStatus = buildRuntimeTransportStatus(playbackStatus)
+	  $: effectiveTransportPlaying = runtimeTransportPlaying(
+	    runtimeTransportStatus,
+	    transportPlaying
+	  )
+	  $: effectiveTransportBeat =
+	    runtimePlayheadAnchor === undefined
+	      ? transportBeat
+	      : interpolatedRuntimeBeat(
+	          runtimePlayheadAnchor,
+	          runtimeVisualNowMs,
+	          transportBpm
+	        )
+	  $: activePatternPlayheadBeat = localPlayheadBeat(
+	    effectiveTransportPlaying,
+	    effectiveTransportBeat,
+	    activePatternClipLoop,
+	    activePatternClipLoopRegion
+	  )
   $: selectedTrack = tracks.find((track) => track.id === selectedTrackId)
   $: selectedTrackDeviceName = buildSelectedTrackDeviceName(selectedTrack)
   $: selectedTrackGraphDiagnostics =
@@ -383,17 +422,22 @@
       preferencesStatus = 'loaded'
     }
 
-    if (event.type === 'clock:status-changed') {
-      clockStatus =
-        (event.payload as ClockServiceStatus | undefined) ?? clockStatus
-    }
+	    if (event.type === 'clock:status-changed') {
+	      clockStatus =
+	        (event.payload as ClockServiceStatus | undefined) ?? clockStatus
+	    }
 
-    if (event.type === 'playback:status-changed') {
-      playbackStatus =
-        (event.payload as PlaybackServiceStatus | undefined) ?? playbackStatus
-      refreshSelectedTrackClips()
-      refreshMatrixTracks()
-    }
+	    if (event.type === 'playback:status-changed') {
+	      playbackStatus =
+	        (event.payload as PlaybackServiceStatus | undefined) ?? playbackStatus
+	      syncRuntimeSnapshot(playbackStatus.runtime?.snapshot)
+	      refreshSelectedTrackClips()
+	      refreshMatrixTracks()
+	    }
+
+	    if (event.type === 'playback:runtime-snapshot') {
+	      syncRuntimeSnapshot(event.payload as RuntimeSnapshot | undefined)
+	    }
 
     if (event.type === 'playback:runtime-parameters') {
       reflectRuntimeParameterValues(
@@ -402,7 +446,7 @@
     }
   }
 
-  function reflectRuntimeParameterValues(
+	  function reflectRuntimeParameterValues(
     values: readonly PlaybackRuntimeParameterValue[]
   ) {
     const nextValues = { ...runtimeParameterValues }
@@ -423,8 +467,75 @@
     }
 
     automatedRuntimeParameterIds = nextAutomationIds
-    runtimeParameterValues = nextValues
-  }
+	    runtimeParameterValues = nextValues
+	  }
+
+	  function syncRuntimeSnapshot(snapshot: RuntimeSnapshot | undefined): void {
+	    if (!snapshot) return
+
+	    runtimePlayheadAnchor = {
+	      beatPosition: snapshot.transport.beatPosition,
+	      samplePosition: snapshot.transport.samplePosition,
+	      sampleRate: snapshot.stream.sampleRate,
+	      observedAtMs: nowMs(),
+	      playing: snapshot.transport.playing
+	    }
+	  }
+
+	  function buildRuntimeTransportStatus(
+	    status: PlaybackServiceStatus
+	  ): RuntimeTransportStatus {
+	    const runtime = status.runtime
+
+	    if (!runtime) return { state: 'stopped' }
+	    if (runtime.state === 'failed') {
+	      return {
+	        state: 'failed',
+	        message: runtime.failure ?? 'Native runtime failed'
+	      }
+	    }
+	    if (runtime.commandPending && runtime.requestedTransportPlaying) {
+	      return { state: 'starting' }
+	    }
+	    if (runtime.commandPending && !runtime.requestedTransportPlaying) {
+	      return { state: 'stopping', snapshot: runtime.snapshot }
+	    }
+	    if (runtime.snapshot?.transport.playing) {
+	      return { state: 'playing', snapshot: runtime.snapshot }
+	    }
+
+	    return { state: 'stopped' }
+	  }
+
+	  function runtimeTransportPlaying(
+	    status: RuntimeTransportStatus,
+	    fallback: boolean
+	  ): boolean {
+	    switch (status.state) {
+	      case 'playing':
+	      case 'starting':
+	        return true
+	      case 'stopping':
+	      case 'stopped':
+	      case 'failed':
+	        return false
+	      default:
+	        return fallback
+	    }
+	  }
+
+	  function interpolatedRuntimeBeat(
+	    anchor: RuntimePlayheadAnchor,
+	    now: number,
+	    bpm: number
+	  ): number {
+	    if (!anchor.playing) return anchor.beatPosition
+
+	    const elapsedSeconds = Math.max(0, now - anchor.observedAtMs) / 1000
+	    const beatsPerSecond = Math.max(1, bpm) / 60
+
+	    return anchor.beatPosition + elapsedSeconds * beatsPerSecond
+	  }
 
   function refreshSelectedTrackClips() {
     selectedTrackClips = controller.trackClips(
@@ -2136,10 +2247,10 @@
     const activeLaunch = playbackStatus.liveClips.activeClipByTrackId[trackId]
     const clip = store.document.midiClips.find(clipId)
 
-    if (!transportPlaying || !activeLaunch || !clip) return undefined
+	    if (!effectiveTransportPlaying || !activeLaunch || !clip) return undefined
 
-    const clipLength = Math.max(0.25, clip.length)
-    const localBeat = transportBeat - activeLaunch.launchedAtBeat
+	    const clipLength = Math.max(0.25, clip.length)
+	    const localBeat = effectiveTransportBeat - activeLaunch.launchedAtBeat
 
     if (localBeat < 0) return 0
 
@@ -2166,7 +2277,7 @@
 
     if (duration <= 0) return 1
 
-    return clampUnit((transportBeat - pendingLaunch.requestedAtBeat) / duration)
+	    return clampUnit((effectiveTransportBeat - pendingLaunch.requestedAtBeat) / duration)
   }
 
   function displayedTrackParameterValue(
@@ -2192,11 +2303,15 @@
     syncView()
   }
 
-  function clampUnit(value: number): number {
-    if (!Number.isFinite(value)) return 0
+	  function clampUnit(value: number): number {
+	    if (!Number.isFinite(value)) return 0
 
-    return Math.min(1, Math.max(0, value))
-  }
+	    return Math.min(1, Math.max(0, value))
+	  }
+
+	  function nowMs(): number {
+	    return globalThis.performance?.now() ?? Date.now()
+	  }
 </script>
 
 <Workbench workspaceMode={viewMode === 'matrix' ? 'full' : 'split'}>
@@ -2206,9 +2321,9 @@
     </div>
 
     <TransportPanel
-      playing={transportPlaying}
-      bpm={transportBpm}
-      beat={transportBeat}
+	      playing={effectiveTransportPlaying}
+	      bpm={transportBpm}
+	      beat={effectiveTransportBeat}
       swingAmount={groove.amount}
       onPlay={playTransport}
       onStop={stopTransport}
@@ -2456,9 +2571,22 @@
 
 {#if diagnosticsOpen}
   <RuntimePanel
-    {transportPlaying}
-    {transportBpm}
-    {transportBeat}
+	    transportPlaying={effectiveTransportPlaying}
+	    {transportBpm}
+	    transportBeat={effectiveTransportBeat}
+	    runtimeTransportState={runtimeTransportStatus.state}
+	    runtimeTransportFailure={runtimeTransportStatus.state === 'failed'
+	      ? runtimeTransportStatus.message
+	      : undefined}
+	    runtimeCommandPending={playbackStatus.runtime?.commandPending ?? false}
+	    runtimeSamplePosition={playbackStatus.runtime?.snapshot?.transport.samplePosition}
+	    runtimeSampleRate={playbackStatus.runtime?.snapshot?.stream.sampleRate}
+	    runtimeCallbackCount={playbackStatus.runtime?.snapshot?.stream.callbackCount}
+	    runtimeActivePlanId={playbackStatus.runtime?.snapshot?.plan.activePlanId}
+	    runtimeActiveRevision={playbackStatus.runtime?.snapshot?.plan.activeRevision}
+	    runtimePendingTransfers={playbackStatus.runtime?.snapshot?.plan.pendingTransfers}
+	    runtimeXruns={playbackStatus.runtime?.snapshot?.diagnostics.xruns}
+	    runtimeQueueOverflows={playbackStatus.runtime?.snapshot?.diagnostics.queueOverflows}
     {audioEngineStatus}
     {midiStatus}
     {preferencesStatus}

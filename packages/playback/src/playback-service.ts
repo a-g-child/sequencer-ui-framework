@@ -35,8 +35,8 @@ import type { PlaybackModel } from './model'
 import { NativeAudioAdapter } from './native/NativeAudioAdapter.ts'
 import {
   PlaybackRuntimeController,
-  type PlaybackRuntimeControllerStatus
 } from './native/PlaybackRuntimeController.ts'
+import type { PlaybackRuntimeControllerStatus } from './native/RuntimeTypes.ts'
 import { createPanicDeviceCommand } from './native/voice-action-commands.ts'
 import {
   ConsoleOutput,

@@ -10,6 +10,17 @@
   export let clockBeat = 0;
   export let clockBpm = 120;
   export let clockDrift: number | undefined = undefined;
+  export let runtimeTransportState = 'stopped';
+  export let runtimeTransportFailure: string | undefined = undefined;
+  export let runtimeCommandPending = false;
+  export let runtimeSamplePosition: number | undefined = undefined;
+  export let runtimeSampleRate: number | undefined = undefined;
+  export let runtimeCallbackCount: number | undefined = undefined;
+  export let runtimeActivePlanId: number | null | undefined = undefined;
+  export let runtimeActiveRevision: number | null | undefined = undefined;
+  export let runtimePendingTransfers: number | undefined = undefined;
+  export let runtimeXruns: number | undefined = undefined;
+  export let runtimeQueueOverflows: number | undefined = undefined;
   export let playbackRunning = false;
   export let playbackQueuedEvents = 0;
   export let playbackBeat = 0;
@@ -78,6 +89,48 @@
     <span>Clock Drift</span>
     <strong>{clockDrift === undefined ? 'n/a' : clockDrift.toFixed(2)}</strong>
   </div>
+  <div>
+    <span>Runtime Transport</span>
+    <strong>{runtimeTransportState}</strong>
+  </div>
+  <div>
+    <span>Runtime Request</span>
+    <strong>{runtimeCommandPending ? 'pending' : 'settled'}</strong>
+  </div>
+  <div>
+    <span>Runtime Sample</span>
+    <strong>{runtimeSamplePosition === undefined ? 'n/a' : runtimeSamplePosition}</strong>
+  </div>
+  <div>
+    <span>Runtime Rate</span>
+    <strong>{runtimeSampleRate === undefined ? 'n/a' : runtimeSampleRate}</strong>
+  </div>
+  <div>
+    <span>Runtime Callbacks</span>
+    <strong>{runtimeCallbackCount === undefined ? 'n/a' : runtimeCallbackCount}</strong>
+  </div>
+  <div>
+    <span>Runtime Plan</span>
+    <strong>{runtimeActivePlanId ?? 'none'} / {runtimeActiveRevision ?? 'none'}</strong>
+  </div>
+  <div>
+    <span>Runtime Pending</span>
+    <strong>{runtimePendingTransfers ?? 0}</strong>
+  </div>
+  <div>
+    <span>Runtime XRuns</span>
+    <strong>{runtimeXruns ?? 0}</strong>
+  </div>
+  <div>
+    <span>Runtime Queues</span>
+    <strong>{runtimeQueueOverflows ?? 0}</strong>
+  </div>
+  {#if runtimeTransportFailure}
+    <div class="runtime-failure">
+      <span>Runtime Failure</span>
+      <strong>{runtimeTransportFailure}</strong>
+    </div>
+  {/if}
   <div>
     <span>Scheduler</span>
     <strong>{playbackRunning ? 'running' : 'stopped'}</strong>
@@ -176,6 +229,11 @@
     background: color-mix(in srgb, var(--surface-2) 58%, transparent);
     display: grid;
     gap: var(--spacing-2xs);
+  }
+
+  .runtime-status .runtime-failure {
+    grid-column: 1 / -1;
+    border-color: var(--danger, var(--accent));
   }
 
   .runtime-status span {

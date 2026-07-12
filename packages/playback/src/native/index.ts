@@ -1,5 +1,6 @@
 export * from './NativeAudioAdapter.ts'
 export * from './PlaybackRuntimeController.ts'
+export * from './RuntimeTypes.ts'
 export * from './NativeSessionClient.ts'
 export * from './NativeSchedulerAdapter.ts'
 export * from './RuntimeBackend.ts'
