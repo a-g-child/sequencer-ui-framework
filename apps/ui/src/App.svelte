@@ -15,12 +15,15 @@
     type GrooveSettings
   } from '@sequencer/core'
   import {
+    BrowserSocketNativeRuntimeTransport,
     ClockService,
+    RendererNativeRuntimeTransport,
     PlaybackService,
     PlaybackRuntimeController,
     type ClockServiceStatus,
     type ClipLaunchQuantize,
     createRuntimeBackend,
+    type NativeRuntimeTransport,
     type PlaybackDeviceDiagnostics,
     type PlaybackEvent,
     type PlaybackRuntimeParameterValue,
@@ -155,7 +158,7 @@
     DEVICE_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor])
   )
 
-  const nativeBackendAvailable = hasNativeRuntimeBridge()
+  const nativeBackendAvailable = canCreateNativeRuntimeTransport()
   const playbackBackendKind = resolvePlaybackBackendKind()
   const runtimeController =
     playbackBackendKind === 'native'
@@ -163,6 +166,7 @@
           createRuntimeBackend({
             kind: 'native',
             native: {
+              transport: createNativeRuntimeTransport(),
               audio: {
                 driver: resolveNativeAudioDriver(),
                 sampleRate: 48_000,
@@ -577,11 +581,6 @@
         import.meta.env.VITE_PLAYBACK_BACKEND
     )
 
-    if (requested === 'native' && !nativeBackendAvailable) {
-      writeDevelopmentSetting('sequencer.playbackBackend', 'web-audio')
-      return 'web-audio'
-    }
-
     return requested
   }
 
@@ -623,6 +622,78 @@
 
   function hasNativeRuntimeBridge(): boolean {
     return Boolean((globalThis as { nativeRuntime?: unknown }).nativeRuntime)
+  }
+
+  function canCreateNativeRuntimeTransport(): boolean {
+    return (
+      hasNativeRuntimeBridge() ||
+      Boolean(configuredNativeRuntimeSocketUrl()) ||
+      Boolean(defaultSameOriginNativeRuntimeSocketUrl())
+    )
+  }
+
+  function createNativeRuntimeTransport(): NativeRuntimeTransport {
+    if (hasNativeRuntimeBridge()) {
+      return new RendererNativeRuntimeTransport()
+    }
+
+    const socketUrl =
+      configuredNativeRuntimeSocketUrl() ??
+      defaultSameOriginNativeRuntimeSocketUrl()
+
+    if (socketUrl) {
+      return new BrowserSocketNativeRuntimeTransport({
+        url: socketUrl,
+        token: nativeRuntimeTokenFromUrl()
+      })
+    }
+
+    throw new NativeRuntimeUnavailableError(
+      'Native playback requires the desktop bridge or local runtime server.'
+    )
+  }
+
+  function configuredNativeRuntimeSocketUrl(): string | undefined {
+    const value = import.meta.env.VITE_NATIVE_RUNTIME_WS
+
+    return typeof value === 'string' && value.trim().length > 0
+      ? value.trim()
+      : undefined
+  }
+
+  function defaultSameOriginNativeRuntimeSocketUrl(): string | undefined {
+    const location = globalThis.location
+
+    if (!location?.host) {
+      return undefined
+    }
+
+    if (location.protocol !== 'http:' && location.protocol !== 'https:') {
+      return undefined
+    }
+
+    const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
+
+    return `${protocol}://${location.host}/native-runtime`
+  }
+
+  function nativeRuntimeTokenFromUrl(): string | undefined {
+    const search = globalThis.location?.search
+
+    if (!search) {
+      return undefined
+    }
+
+    const token = new URLSearchParams(search).get('nativeToken')
+
+    return token && token.length > 0 ? token : undefined
+  }
+
+  class NativeRuntimeUnavailableError extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = 'NativeRuntimeUnavailableError'
+    }
   }
 
   function refreshMatrixTracks() {
