@@ -19,24 +19,104 @@ export interface NativeCompilationDiagnostic {
 export interface NativeProjectCompilation {
   readonly plan: NativeExecutionPlan
   readonly diagnostics: readonly NativeCompilationDiagnostic[]
+  readonly support: NativeProjectSupport
+}
+
+export interface NativeProjectSupport {
+  readonly supported: boolean
+  readonly diagnostics: readonly NativeCompilationDiagnostic[]
 }
 
 const graphBuilder = new AudioGraphBuilder(DEFAULT_AUDIO_NODE_DESCRIPTORS)
+const supportedNativeDescriptors = new Set([
+  'sequencer.source.midi-input',
+  'sequencer.source.oscillator',
+  'sequencer.processor.gain',
+  'sequencer.output.audio-out'
+])
+const requiredNativeDescriptors = [...supportedNativeDescriptors]
+const supportedNativeParameters = new Map<string, ReadonlySet<string>>([
+  ['sequencer.source.oscillator', new Set(['waveform'])],
+  ['sequencer.processor.gain', new Set(['gain'])]
+])
 
 export function compilePlaybackModelToNativePlan(
   playbackModel: PlaybackModel
 ): NativeProjectCompilation {
   const diagnostics: NativeCompilationDiagnostic[] = []
   const graph = buildRuntimeGraph(playbackModel, diagnostics)
-  const plan = createNativeExecutionPlan(graph)
+  const nativePlan = createNativeExecutionPlan(graph)
+  const plan = {
+    ...nativePlan,
+    id: `native-plan:${playbackModel.id}`,
+    graphId: playbackModel.id,
+    revision: computeRevision(playbackModel, graph, diagnostics)
+  }
+  const support = assessNativeProjectSupport(plan, diagnostics)
 
   return {
-    plan: {
-      ...plan,
-      id: `native-plan:${playbackModel.id}`,
-      graphId: playbackModel.id,
-      revision: computeRevision(playbackModel, graph, diagnostics)
-    },
+    plan,
+    diagnostics,
+    support
+  }
+}
+
+export function assessNativeProjectSupport(
+  plan: NativeExecutionPlan,
+  existingDiagnostics: readonly NativeCompilationDiagnostic[] = []
+): NativeProjectSupport {
+  const diagnostics: NativeCompilationDiagnostic[] = []
+  const errorDiagnostics = existingDiagnostics.filter(
+    (diagnostic) => diagnostic.severity === 'error'
+  )
+
+  diagnostics.push(...errorDiagnostics)
+
+  for (const node of plan.nodes) {
+    if (!supportedNativeDescriptors.has(node.descriptorId)) {
+      diagnostics.push({
+        severity: 'error',
+        code: nativeUnsupportedNodeCode(node.descriptorId),
+        message: `Native playback does not support node "${node.descriptorId}" yet.`,
+        nodeId: node.nodeId
+      })
+    }
+  }
+
+  const descriptorCounts = new Map<string, number>()
+  for (const node of plan.nodes) {
+    descriptorCounts.set(
+      node.descriptorId,
+      (descriptorCounts.get(node.descriptorId) ?? 0) + 1
+    )
+  }
+
+  for (const descriptorId of requiredNativeDescriptors) {
+    const count = descriptorCounts.get(descriptorId) ?? 0
+
+    if (count === 0) {
+      diagnostics.push({
+        severity: 'error',
+        code: 'missing-native-node',
+        message: `Native playback requires one "${descriptorId}" node.`
+      })
+      continue
+    }
+
+    if (count > 1) {
+      diagnostics.push({
+        severity: 'error',
+        code: 'unsupported-native-node-count',
+        message: `Native playback currently supports one "${descriptorId}" node, but found ${count}.`
+      })
+    }
+  }
+
+  diagnostics.push(...assessNativeRouting(plan))
+  diagnostics.push(...assessNativeParameters(plan))
+
+  return {
+    supported: diagnostics.every((diagnostic) => diagnostic.severity !== 'error'),
     diagnostics
   }
 }
@@ -171,4 +251,111 @@ function computeRevision(
   }
 
   return (hash >>> 0) % 10_000 + 1
+}
+
+function assessNativeRouting(
+  plan: NativeExecutionPlan
+): NativeCompilationDiagnostic[] {
+  const diagnostics: NativeCompilationDiagnostic[] = []
+  const nodesById = new Map(plan.nodes.map((node) => [node.nodeId, node]))
+
+  for (const route of plan.eventRoutes) {
+    const source = nodesById.get(route.sourceNodeId)
+    const target = nodesById.get(route.targetNodeId)
+    const supported =
+      source?.descriptorId === 'sequencer.source.midi-input' &&
+      route.sourcePortId === 'midi-out' &&
+      target?.descriptorId === 'sequencer.source.oscillator' &&
+      route.targetPortId === 'midi-in'
+
+    if (!supported) {
+      diagnostics.push({
+        severity: 'error',
+        code: 'unsupported-native-event-route',
+        message: 'Native playback currently supports only MIDI input routed to the native instrument.',
+        connectionId: route.id
+      })
+    }
+  }
+
+  const hasRequiredEventRoute = plan.eventRoutes.some((route) => {
+    const source = nodesById.get(route.sourceNodeId)
+    const target = nodesById.get(route.targetNodeId)
+
+    return (
+      source?.descriptorId === 'sequencer.source.midi-input' &&
+      route.sourcePortId === 'midi-out' &&
+      target?.descriptorId === 'sequencer.source.oscillator' &&
+      route.targetPortId === 'midi-in'
+    )
+  })
+
+  if (!hasRequiredEventRoute) {
+    diagnostics.push({
+      severity: 'error',
+      code: 'missing-native-event-route',
+      message: 'Native playback requires MIDI input to be routed to the native instrument.'
+    })
+  }
+
+  return diagnostics
+}
+
+function assessNativeParameters(
+  plan: NativeExecutionPlan
+): NativeCompilationDiagnostic[] {
+  const diagnostics: NativeCompilationDiagnostic[] = []
+  const nodesById = new Map(plan.nodes.map((node) => [node.nodeId, node]))
+
+  for (const parameter of plan.parameters) {
+    const node = nodesById.get(parameter.nodeId)
+
+    if (!node) {
+      diagnostics.push({
+        severity: 'error',
+        code: 'invalid-native-parameter-mapping',
+        message: `Native parameter "${parameter.id}" references an unknown node.`,
+        nodeId: parameter.nodeId
+      })
+      continue
+    }
+
+    const supportedParameters = supportedNativeParameters.get(node.descriptorId)
+    const hasSupportedParameter = supportedParameters?.has(parameter.parameterId) ?? false
+
+    if (hasSupportedParameter && isSupportedNativeParameterValue(parameter.defaultValue)) {
+      continue
+    }
+
+    diagnostics.push({
+      severity: 'error',
+      code: 'unsupported-native-parameter',
+      message: `Native playback cannot map parameter "${parameter.parameterId}" on "${node.descriptorId}" yet.`,
+      nodeId: parameter.nodeId
+    })
+  }
+
+  return diagnostics
+}
+
+function isSupportedNativeParameterValue(value: unknown): boolean {
+  if (typeof value === 'number') return Number.isFinite(value)
+
+  return typeof value === 'boolean' || typeof value === 'string'
+}
+
+function nativeUnsupportedNodeCode(descriptorId: string): string {
+  if (descriptorId.includes('sampler') || descriptorId.includes('sample')) {
+    return 'unsupported-asset-dependency'
+  }
+
+  if (descriptorId.includes('.midi.') || descriptorId.includes('event')) {
+    return 'unsupported-event-processor'
+  }
+
+  if (descriptorId.includes('processor') || descriptorId.includes('output')) {
+    return 'unsupported-audio-node'
+  }
+
+  return 'unsupported-device-type'
 }

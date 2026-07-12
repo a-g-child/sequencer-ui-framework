@@ -186,7 +186,7 @@ function createPlaybackModelFixture(): PlaybackModel {
         id: 'track-1',
         name: 'Lead',
         channel: 1,
-        mixer: { volume: 0.8, pan: 0 },
+        mixer: { volume: 0.8, pan: 0, mute: false, solo: false },
         deviceInstanceIds: ['device-1']
       }
     ],

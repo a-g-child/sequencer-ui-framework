@@ -9,7 +9,10 @@ import {
   WebAudioBackend,
   type RuntimeBackend
 } from '../src/native/RuntimeBackend.ts'
-import { compilePlaybackModelToNativePlan } from '../src/native/PlaybackModelCompiler.ts'
+import {
+  assessNativeProjectSupport,
+  compilePlaybackModelToNativePlan
+} from '../src/native/PlaybackModelCompiler.ts'
 import { freezePlaybackModel, type PlaybackModel } from '../src/model.ts'
 import { NodeNativeRuntimeTransport } from '@sequencer/native-runtime-node'
 import type {
@@ -109,11 +112,54 @@ describe('RuntimeBackend', () => {
     const compilation = compilePlaybackModelToNativePlan(model)
 
     assert.equal(compilation.diagnostics.length, 0)
+    assert.equal(compilation.support.supported, true)
+    assert.equal(compilation.support.diagnostics.length, 0)
     assert.equal(compilation.plan.id.startsWith('native-plan:'), true)
     assert.equal(compilation.plan.graphId, model.id)
     assert.equal(compilation.plan.revision > 0, true)
     assert.equal(compilation.plan.nodes.length, 4)
     assert.equal(compilation.plan.nodes[0]?.descriptorId, 'sequencer.source.midi-input')
+  })
+
+  it('reports unsupported native project plans before runtime activation', () => {
+    const support = assessNativeProjectSupport({
+      ...createPlan('unsupported-plan'),
+      nodes: [
+        {
+          nodeId: 'event-input',
+          descriptorId: 'sequencer.source.midi-input',
+          executionIndex: 0,
+          inputBufferIds: [],
+          outputBufferIds: [],
+          parameterSlotIds: [],
+          rate: 'event-rate'
+        },
+        {
+          nodeId: 'delay',
+          descriptorId: 'sequencer.processor.delay',
+          executionIndex: 1,
+          inputBufferIds: [],
+          outputBufferIds: [],
+          parameterSlotIds: [],
+          rate: 'audio-rate'
+        }
+      ],
+      eventRoutes: []
+    })
+
+    assert.equal(support.supported, false)
+    assert.deepEqual(
+      support.diagnostics
+        .filter((diagnostic) => diagnostic.severity === 'error')
+        .map((diagnostic) => diagnostic.code),
+      [
+        'unsupported-audio-node',
+        'missing-native-node',
+        'missing-native-node',
+        'missing-native-node',
+        'missing-native-event-route'
+      ]
+    )
   })
 
   it('lets WebAudio compile and activate a backend-neutral handle', async () => {

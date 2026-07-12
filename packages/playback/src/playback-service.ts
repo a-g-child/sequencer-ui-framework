@@ -651,8 +651,8 @@ export class PlaybackService implements Service, DocumentObserver {
 
     const compilation = compilePlaybackModelToNativePlan(playbackModel)
 
-    if (compilation.diagnostics.some((diagnostic) => diagnostic.severity === 'error')) {
-      const message = compilation.diagnostics
+    if (!compilation.support.supported) {
+      const message = compilation.support.diagnostics
         .filter((diagnostic) => diagnostic.severity === 'error')
         .map((diagnostic) => diagnostic.message)
         .join('; ')

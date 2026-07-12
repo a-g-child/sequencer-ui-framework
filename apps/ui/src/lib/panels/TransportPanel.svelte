@@ -3,10 +3,12 @@
   export let bpm = 120
   export let beat = 0
   export let swingAmount = 0
+  export let playbackBackendKind: 'web-audio' | 'native' = 'web-audio'
   export let onPlay: () => void
   export let onStop: () => void
   export let onBpmChange: (event: Event) => void
   export let onSwingChange: (value: number) => void
+  export let onBackendChange: (value: 'web-audio' | 'native') => void = () => {}
   export let diagnosticsOpen = false
   export let onToggleDiagnostics: () => void = () => {}
 
@@ -99,6 +101,12 @@
 
     onSwingChange(steppedValue)
   }
+
+  function handleBackendChange(event: Event): void {
+    const value = (event.currentTarget as HTMLSelectElement).value
+
+    onBackendChange(value === 'native' ? 'native' : 'web-audio')
+  }
 </script>
 
 <div class="transport-panel" aria-label="Runtime transport">
@@ -173,6 +181,18 @@
 
     <strong>{swingPercent}%</strong>
   </div>
+
+  <label class="backend-control" for="playback-backend">
+    <span>Backend</span>
+    <select
+      id="playback-backend"
+      value={playbackBackendKind}
+      on:change={handleBackendChange}
+    >
+      <option value="web-audio">WebAudio</option>
+      <option value="native">Native</option>
+    </select>
+  </label>
 
   <button
     type="button"
@@ -251,6 +271,7 @@
   }
 
   .bpm-control,
+  .backend-control,
   .swing-control,
   .beat-readout {
     min-height: var(--control-height-md);
@@ -260,6 +281,7 @@
   }
 
   .bpm-control span,
+  .backend-control span,
   .swing-control > span,
   .beat-readout span {
     color: var(--muted);
@@ -273,6 +295,24 @@
     width: var(--bpm-control-width);
     min-height: var(--control-height-sm);
     padding: 0 var(--spacing-sm);
+  }
+
+  .backend-control select {
+    min-width: 104px;
+    height: var(--control-height-sm);
+    padding: 0 var(--spacing-xs);
+    border: var(--border-width) solid var(--border);
+    border-radius: var(--radius-control);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--font-size-xs);
+    font-weight: 800;
+  }
+
+  .backend-control select:focus {
+    outline: none;
+    border-color: var(--accent);
   }
 
   .beat-readout strong {

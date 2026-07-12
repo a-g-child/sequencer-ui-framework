@@ -542,7 +542,7 @@
 	      case 'stopping':
 	      case 'stopped':
 	      case 'failed':
-	        return false
+	        return fallback
 	      default:
 	        return fallback
 	    }
@@ -589,11 +589,26 @@
     return value === 'native' ? 'native' : 'web-audio'
   }
 
+  function setPlaybackBackendKind(kind: RuntimeBackendKind): void {
+    if (kind === playbackBackendKind) return
+
+    writeDevelopmentSetting('sequencer.playbackBackend', kind)
+    globalThis.location?.reload()
+  }
+
   function readDevelopmentSetting(key: string): string | undefined {
     try {
       return localStorage.getItem(key) ?? undefined
     } catch {
       return undefined
+    }
+  }
+
+  function writeDevelopmentSetting(key: string, value: string): void {
+    try {
+      localStorage.setItem(key, value)
+    } catch {
+      return
     }
   }
 
@@ -2380,6 +2395,8 @@
       onStop={stopTransport}
       onBpmChange={setRuntimeBpm}
       onSwingChange={setSwingAmount}
+      {playbackBackendKind}
+      onBackendChange={setPlaybackBackendKind}
       {diagnosticsOpen}
       onToggleDiagnostics={toggleDiagnosticsOverlay}
     />

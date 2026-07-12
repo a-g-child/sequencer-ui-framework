@@ -26,6 +26,37 @@ describe('PlaybackService native startup', () => {
     assert.equal(controller.status.snapshot?.plan.activePlanId, 99)
     assert.equal(controller.status.snapshot?.plan.activeRevision, compilation.plan.revision)
   })
+
+  it('fails native startup visibly when the project is unsupported', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    const model = freezePlaybackModel({
+      ...createPlaybackModelFixture(),
+      automations: [
+        {
+          id: 'automation-1',
+          sourceEventId: 'automation-1',
+          trackId: 'track-1',
+          clipId: 'clip-1',
+          patternId: 'pattern-1',
+          parameterId: 'gain',
+          value: 0.5,
+          beat: 0
+        }
+      ]
+    })
+
+    await assert.rejects(
+      () => service['prepareNativeRuntimePlan'](model),
+      /Automation lanes are not supported/
+    )
+
+    assert.equal(backend.compileCalls.length, 0)
+    assert.equal(controller.status.state, 'failed')
+    assert.match(controller.status.failure ?? '', /Automation lanes are not supported/)
+  })
 })
 
 class FakeRuntimeBackend implements RuntimeBackend {

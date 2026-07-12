@@ -1,4 +1,8 @@
 import type {
+  NativeActiveStreamInfo,
+  NativeAudioDeviceInfo,
+  NativeAudioDriver,
+  NativeAudioStartRequest,
   NativeEngineCommandResponse,
   NativeEngineSnapshot,
   NativePlanActivation,
@@ -46,11 +50,11 @@ export class NativeRuntimeManager implements NativeRuntimeTransport {
     return this.transport
   }
 
-  async listAudioDevices(driver: 'null' | 'cpal'): Promise<readonly unknown[]> {
+  async listAudioDevices(driver: NativeAudioDriver): Promise<NativeAudioDeviceInfo[]> {
     return this.requireTransport().listAudioDevices(driver)
   }
 
-  async startAudio(request: Parameters<NodeNativeRuntimeTransport['startAudio']>[0]) {
+  async startAudio(request: NativeAudioStartRequest): Promise<NativeActiveStreamInfo> {
     return this.requireTransport().startAudio(request)
   }
 

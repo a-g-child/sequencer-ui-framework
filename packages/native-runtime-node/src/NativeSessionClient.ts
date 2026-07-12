@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { accessSync, constants, existsSync } from 'node:fs'
+import { accessSync, constants } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type {
   EngineCommand,
