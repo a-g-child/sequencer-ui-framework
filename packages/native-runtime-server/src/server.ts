@@ -18,6 +18,8 @@ export interface NativeRuntimeServerOptions {
   readonly token?: string
   readonly managerFactory?: () => NativeRuntimeManager
   readonly ownerDisconnectGraceMs?: number
+  readonly uiPort?: number
+  readonly allowedOrigins?: readonly string[]
 }
 
 export interface NativeRuntimeServerHandle {
@@ -39,6 +41,8 @@ export class NativeRuntimeServer {
   private readonly token?: string
   private readonly managerFactory: () => NativeRuntimeManager
   private readonly ownerDisconnectGraceMs: number
+  private readonly uiPort?: number
+  private readonly allowedOrigins: Set<string>
 
   private readonly httpServer: Server
   private readonly wsServer: WebSocketServer
@@ -52,6 +56,15 @@ export class NativeRuntimeServer {
     this.token = options.token
     this.managerFactory = options.managerFactory ?? (() => new NativeRuntimeManager())
     this.ownerDisconnectGraceMs = options.ownerDisconnectGraceMs ?? 2_000
+    this.uiPort = options.uiPort
+    this.allowedOrigins = new Set(options.allowedOrigins ?? [])
+
+    assertLoopbackHost(this.host)
+
+    if (this.uiPort !== undefined) {
+      this.allowedOrigins.add(`http://127.0.0.1:${this.uiPort}`)
+      this.allowedOrigins.add(`http://localhost:${this.uiPort}`)
+    }
 
     this.httpServer = createServer((_req, res) => {
       res.statusCode = 404
@@ -62,9 +75,17 @@ export class NativeRuntimeServer {
 
     this.httpServer.on('upgrade', (request, socket, head) => {
       const url = new URL(request.url ?? '/', `http://${request.headers.host ?? this.host}`)
+      const origin = request.headers.origin
+      const hostHeader = request.headers.host
 
       if (url.pathname !== this.wsPath) {
         socket.write('HTTP/1.1 404 Not Found\r\n\r\n')
+        socket.destroy()
+        return
+      }
+
+      if (!isAllowedOrigin(origin, hostHeader, this.allowedOrigins)) {
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
         socket.destroy()
         return
       }
@@ -251,6 +272,41 @@ export class NativeRuntimeServer {
       this.ownerReleaseTimer = undefined
     }, this.ownerDisconnectGraceMs)
   }
+}
+
+function assertLoopbackHost(host: string): void {
+  if (isLoopbackHost(host)) {
+    return
+  }
+
+  throw createRuntimeError(
+    'server:invalid-host',
+    `Native runtime server must bind to loopback only; received ${host}.`
+  )
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1'
+}
+
+function isAllowedOrigin(
+  origin: string | undefined,
+  hostHeader: string | undefined,
+  allowedOrigins: ReadonlySet<string>
+): boolean {
+  if (!origin) {
+    return false
+  }
+
+  if (allowedOrigins.has(origin)) {
+    return true
+  }
+
+  if (!hostHeader) {
+    return false
+  }
+
+  return origin === `http://${hostHeader}` || origin === `https://${hostHeader}`
 }
 
 function toText(data: RawData): string {

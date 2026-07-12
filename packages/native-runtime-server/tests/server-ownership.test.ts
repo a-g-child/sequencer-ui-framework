@@ -17,8 +17,9 @@ describe('NativeRuntimeServer ownership', () => {
 
     const handle = await server.listen()
     const url = `ws://${handle.host}:${handle.port}${handle.wsPath}`
+    const origin = `http://${handle.host}:${handle.port}`
 
-    const owner = await connectClient(url)
+    const owner = await connectClient(url, origin)
     await performHandshake(owner, 'test-token')
     const ownerStart = await sendRequest(owner, {
       requestId: 1,
@@ -28,7 +29,7 @@ describe('NativeRuntimeServer ownership', () => {
 
     assert.equal(ownerStart.ok, true)
 
-    const second = await connectClient(url)
+    const second = await connectClient(url, origin)
     await performHandshake(second, 'test-token')
     const secondStart = await sendRequest(second, {
       requestId: 2,
@@ -57,8 +58,9 @@ describe('NativeRuntimeServer ownership', () => {
 
     const handle = await server.listen()
     const url = `ws://${handle.host}:${handle.port}${handle.wsPath}`
+    const origin = `http://${handle.host}:${handle.port}`
 
-    const owner = await connectClient(url)
+    const owner = await connectClient(url, origin)
     await performHandshake(owner, 'test-token')
     const ownerStart = await sendRequest(owner, {
       requestId: 1,
@@ -125,9 +127,9 @@ class FakeManager {
   }
 }
 
-function connectClient(url: string): Promise<WebSocket> {
+function connectClient(url: string, origin: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url)
+    const socket = new WebSocket(url, { origin })
 
     socket.once('open', () => {
       resolve(socket)
