@@ -32,6 +32,11 @@ import {
   type LiveClipState
 } from './live-clips.ts'
 import type { PlaybackModel } from './model.ts'
+
+export type PlaybackModelChange =
+  | { readonly kind: 'graph' }
+  | { readonly kind: 'schedule'; readonly clipIds: readonly string[] }
+  | { readonly kind: 'transport' }
 import { NativeAudioAdapter } from './native/NativeAudioAdapter.ts'
 import { compilePlaybackModelToNativePlan } from './native/PlaybackModelCompiler.ts'
 import {
@@ -482,23 +487,76 @@ export class PlaybackService implements Service, DocumentObserver {
     if (!this.context) return
 
     const startedAt = nowMs()
-    this.model = this.builder.build(
+    const updatedModel = this.builder.build(
       this.context.documentStore.document,
       this.runtimeBpm,
       { activeClipsByTrackId: this.liveClips.state.activeClipByTrackId }
     )
-    this.scheduler.setModel(this.model)
-    this.deviceManager.configureTrackDeviceChains(this.model.tracks)
-    this.syncTrackMixersToWebAudio()
-    this.syncRuntimeParametersToWebAudio()
     this.statisticsOutput.recordPlaybackModelRebuild(nowMs() - startedAt)
+
     if (this.runtimeController) {
-      void this.prepareNativeRuntimePlan(this.model).catch((error) => {
-        this.runtimeController?.fail(error)
-      })
+      void this.prepareNativeRuntimePlan(updatedModel)
+        .then(() => {
+          this.publishPlaybackModel(updatedModel)
+          this.submitNativeClipScheduleReplacement()
+          this.emitStatus()
+        })
+        .catch((error) => {
+          this.runtimeController?.fail(error)
+        })
+      return
     }
+
+    this.publishPlaybackModel(updatedModel)
     this.submitNativeClipScheduleReplacement()
     this.emitStatus()
+  }
+
+  async updatePlaybackModel(
+    model: PlaybackModel,
+    change: PlaybackModelChange
+  ): Promise<void> {
+    if (!this.runtimeController) {
+      this.publishPlaybackModel(model)
+      return
+    }
+
+    const modelKey = this.nativePlanInputKey(model)
+    const currentCompilation = this.activeNativeCompilation
+
+    if (
+      currentCompilation &&
+      currentCompilation.modelKey === modelKey &&
+      (this.runtimeController.status.snapshot?.plan.activePlanId ?? null) !== null
+    ) {
+      return
+    }
+
+    if (change.kind === 'graph') {
+      await this.prepareNativeRuntimePlan(model)
+      this.publishPlaybackModel(model)
+      this.submitNativeClipScheduleReplacement()
+      return
+    }
+
+    this.publishPlaybackModel(model)
+
+    if (change.kind === 'schedule') {
+      this.submitNativeClipSchedule(this.latestClockState ?? this.createStoppedClockState(), 'replace')
+      return
+    }
+
+    if (change.kind === 'transport') {
+      this.submitNativeClipScheduleReplacement()
+    }
+  }
+
+  private publishPlaybackModel(model: PlaybackModel): void {
+    this.model = model
+    this.scheduler.setModel(model)
+    this.deviceManager.configureTrackDeviceChains(model.tracks)
+    this.syncTrackMixersToWebAudio()
+    this.syncRuntimeParametersToWebAudio()
   }
 
   private clearTrackVoicesAfterClipSwitch(
