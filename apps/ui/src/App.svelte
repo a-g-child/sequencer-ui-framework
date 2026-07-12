@@ -155,6 +155,7 @@
     DEVICE_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor])
   )
 
+  const nativeBackendAvailable = hasNativeRuntimeBridge()
   const playbackBackendKind = resolvePlaybackBackendKind()
   const runtimeController =
     playbackBackendKind === 'native'
@@ -571,10 +572,17 @@
   }
 
   function resolvePlaybackBackendKind(): RuntimeBackendKind {
-    return normalizePlaybackBackendKind(
+    const requested = normalizePlaybackBackendKind(
       readDevelopmentSetting('sequencer.playbackBackend') ??
         import.meta.env.VITE_PLAYBACK_BACKEND
     )
+
+    if (requested === 'native' && !nativeBackendAvailable) {
+      writeDevelopmentSetting('sequencer.playbackBackend', 'web-audio')
+      return 'web-audio'
+    }
+
+    return requested
   }
 
   function resolveNativeAudioDriver(): NativeAudioDriver {
@@ -591,6 +599,7 @@
 
   function setPlaybackBackendKind(kind: RuntimeBackendKind): void {
     if (kind === playbackBackendKind) return
+    if (kind === 'native' && !nativeBackendAvailable) return
 
     writeDevelopmentSetting('sequencer.playbackBackend', kind)
     globalThis.location?.reload()
@@ -610,6 +619,10 @@
     } catch {
       return
     }
+  }
+
+  function hasNativeRuntimeBridge(): boolean {
+    return Boolean((globalThis as { nativeRuntime?: unknown }).nativeRuntime)
   }
 
   function refreshMatrixTracks() {
@@ -2396,6 +2409,7 @@
       onBpmChange={setRuntimeBpm}
       onSwingChange={setSwingAmount}
       {playbackBackendKind}
+      {nativeBackendAvailable}
       onBackendChange={setPlaybackBackendKind}
       {diagnosticsOpen}
       onToggleDiagnostics={toggleDiagnosticsOverlay}

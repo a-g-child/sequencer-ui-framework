@@ -33,6 +33,7 @@ export class PlaybackRuntimeController {
   private commandPending = false
   private failure: string | undefined
   private latestSnapshot: RuntimeSnapshot | undefined
+  private startPromise: Promise<void> | undefined
 
   constructor(
     private readonly backend: PlaybackRuntimeBackend,
@@ -62,20 +63,29 @@ export class PlaybackRuntimeController {
 
   async start(): Promise<void> {
     if (this.currentState === 'ready') return
-    if (this.currentState === 'starting') return
+    if (this.currentState === 'starting') {
+      await this.startPromise
+      return
+    }
 
     this.currentState = 'starting'
     this.failure = undefined
     this.emit()
 
-    try {
+    this.startPromise = (async () => {
       await this.backend.start()
       this.currentState = 'ready'
       await this.refreshSnapshot()
       this.startPolling()
+    })()
+
+    try {
+      await this.startPromise
     } catch (error) {
       this.fail(error)
       throw error
+    } finally {
+      this.startPromise = undefined
     }
   }
 

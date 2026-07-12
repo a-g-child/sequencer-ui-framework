@@ -18,6 +18,7 @@ import { NodeNativeRuntimeTransport } from '@sequencer/native-runtime-node'
 import type {
   NativeAudioDriver,
   NativeAudioStartRequest,
+  NativeRuntimeStartOptions,
   NativeRuntimeTransport
 } from '../src/native/NativeRuntimeTransport.ts'
 
@@ -104,6 +105,27 @@ describe('RuntimeBackend', () => {
       () => backend.start(),
       /Native playback requires the desktop host/
     )
+  })
+
+  it('passes configured native audio settings to the transport start request', async () => {
+    const transport = new FakeNativeRuntimeTransport()
+    const backend = new NativeBackend({
+      transport,
+      audio: {
+        driver: 'cpal',
+        sampleRate: 44_100,
+        bufferFrames: 256,
+        channels: 2
+      }
+    })
+
+    await backend.start()
+
+    assert.equal(transport.startedWith?.driver, 'cpal')
+    assert.equal(transport.startedWith?.sampleRate, 44_100)
+    assert.equal(transport.startedAudioWith?.bufferFrames, 256)
+
+    await backend.dispose()
   })
 
   it('compiles a PlaybackModel into a native plan with deterministic identity', () => {
@@ -332,7 +354,12 @@ class FakeWebAudioOutput {
 }
 
 class FakeNativeRuntimeTransport implements NativeRuntimeTransport {
-  async start() {
+  startedWith: NativeRuntimeStartOptions | undefined
+  startedAudioWith: NativeAudioStartRequest | undefined
+
+  async start(options?: NativeRuntimeStartOptions) {
+    this.startedWith = options
+
     return {
       protocolVersion: 1,
       capabilities: {
@@ -351,13 +378,15 @@ class FakeNativeRuntimeTransport implements NativeRuntimeTransport {
     return []
   }
 
-  async startAudio(_request: NativeAudioStartRequest) {
+  async startAudio(request: NativeAudioStartRequest) {
+    this.startedAudioWith = request
+
     return {
-      driver: 'null' as const,
+      driver: request.driver,
       deviceId: 'null',
       deviceName: 'Null',
-      sampleRate: 48_000,
-      channels: 2,
+      sampleRate: request.sampleRate ?? 48_000,
+      channels: request.channels ?? 2,
       sampleFormat: 'f32'
     }
   }

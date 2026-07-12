@@ -4,6 +4,7 @@
   export let beat = 0
   export let swingAmount = 0
   export let playbackBackendKind: 'web-audio' | 'native' = 'web-audio'
+  export let nativeBackendAvailable = false
   export let onPlay: () => void
   export let onStop: () => void
   export let onBpmChange: (event: Event) => void
@@ -190,7 +191,7 @@
       on:change={handleBackendChange}
     >
       <option value="web-audio">WebAudio</option>
-      <option value="native">Native</option>
+      <option value="native" disabled={!nativeBackendAvailable}>Native</option>
     </select>
   </label>
 
