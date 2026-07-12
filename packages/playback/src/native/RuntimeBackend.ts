@@ -170,6 +170,8 @@ export class NativeBackend implements RuntimeBackend {
   private readonly consumedHandles = new Set<number>()
   private capabilities?: NativeRuntimeCapabilities
   private running = false
+  private pendingCommands: Promise<void> = Promise.resolve()
+  private commandFailure: unknown
 
   constructor(options: NativeBackendOptions = {}) {
     this.transport = options.transport ?? new RendererNativeRuntimeTransport()
@@ -190,6 +192,7 @@ export class NativeBackend implements RuntimeBackend {
   }
 
   async stop(): Promise<void> {
+    await this.flushCommands()
     await this.transport.stopAudio()
     this.running = false
   }
@@ -233,7 +236,12 @@ export class NativeBackend implements RuntimeBackend {
       throw new Error('prepared handle is unknown')
     }
 
-    await this.transport.activatePlan(handle.transferId, 0)
+    await this.flushCommands()
+    const snapshot = await this.transport.getSnapshot()
+    const requestedSample =
+      snapshot.transport?.samplePosition ?? snapshot.telemetry?.samplePosition ?? 0
+
+    await this.transport.activatePlan(handle.transferId, requestedSample)
     this.preparedHandles.delete(handle.transferId)
     this.consumedHandles.add(handle.transferId)
   }
@@ -242,11 +250,20 @@ export class NativeBackend implements RuntimeBackend {
     const nativeCommands = commands.filter(isNativeRuntimeCommand)
 
     if (nativeCommands.length > 0) {
-      void this.transport.sendCommands(nativeCommands)
+      const nextCommands = this.pendingCommands
+        .catch(() => undefined)
+        .then(() => this.transport.sendCommands(nativeCommands))
+        .then(() => undefined)
+
+      this.pendingCommands = nextCommands
+      void nextCommands.catch((error) => {
+        this.commandFailure = error
+      })
     }
   }
 
   async getSnapshot(): Promise<RuntimeSnapshot> {
+    await this.flushCommands()
     const snapshot = await this.transport.getSnapshot()
 
     return {
@@ -289,10 +306,21 @@ export class NativeBackend implements RuntimeBackend {
   }
 
   async dispose(): Promise<void> {
+    await this.pendingCommands.catch(() => undefined)
     await this.transport.dispose()
     this.running = false
     this.preparedHandles.clear()
     this.consumedHandles.clear()
+  }
+
+  private async flushCommands(): Promise<void> {
+    await this.pendingCommands.catch(() => undefined)
+
+    if (this.commandFailure) {
+      const error = this.commandFailure
+      this.commandFailure = undefined
+      throw error
+    }
   }
 
   get negotiatedCapabilities(): NativeRuntimeCapabilities | undefined {

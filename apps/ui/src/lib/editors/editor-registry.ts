@@ -1,4 +1,4 @@
-import type { EditorDefinition } from './editor-types';
+import type { EditorDefinition } from './editor-types.ts';
 
 export const EDITORS: EditorDefinition[] = [
   {

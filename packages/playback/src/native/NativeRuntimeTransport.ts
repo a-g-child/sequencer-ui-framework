@@ -125,7 +125,6 @@ export interface NativeRuntimeTransport {
 
 export type {
   NativeRuntimeApi,
-  NativeRuntimeBridgeError,
   NativeRuntimeBridgeInvoker,
   NativeRuntimeBridgeRequest
 } from './NativeRuntimeApi.ts'

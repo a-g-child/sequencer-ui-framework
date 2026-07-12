@@ -1,7 +1,7 @@
 import {
   createPatternViewport,
   type PatternViewport
-} from './pattern-viewport';
+} from './pattern-viewport.ts';
 
 const DEFAULT_PIXELS_PER_BEAT = 96;
 const DEFAULT_PIXELS_PER_SEMITONE = 20;

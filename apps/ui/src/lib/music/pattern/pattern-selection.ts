@@ -1,4 +1,4 @@
-import type { PatternNoteView } from './pattern-tool';
+import type { PatternNoteView } from './pattern-tool.ts';
 
 export type PatternSelectionBounds = {
   startBeat: number;

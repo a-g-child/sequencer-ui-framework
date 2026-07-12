@@ -1,5 +1,5 @@
-import type { PlaybackEvent } from '../events'
-import type { OutputCapabilities } from './OutputEvent'
+import type { PlaybackEvent } from '../events.ts'
+import type { OutputCapabilities } from './OutputEvent.ts'
 
 export interface PlaybackOutput {
   readonly id: string

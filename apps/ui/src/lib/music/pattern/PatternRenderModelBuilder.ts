@@ -1,13 +1,13 @@
-import type { PianoRollView } from '../../editors/piano-roll/piano-roll-model';
-import type { RenderModelBuilder } from '../../framework/editor';
+import type { PianoRollView } from '../../editors/piano-roll/piano-roll-model.ts';
+import type { RenderModelBuilder } from '../../framework/editor/index.ts';
 import {
   buildPatternGridLines
-} from './pattern-grid';
-import type { PatternEditorSession } from './PatternEditorSession';
+} from './pattern-grid.ts';
+import type { PatternEditorSession } from './PatternEditorSession.ts';
 import type {
   PatternRenderer,
   PatternRenderModel
-} from './pattern-renderer';
+} from './pattern-renderer.ts';
 
 export type PatternRenderModelBuilderInput = {
   document: PianoRollView;

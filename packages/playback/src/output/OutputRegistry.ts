@@ -1,4 +1,4 @@
-import type { PlaybackOutput } from './PlaybackOutput'
+import type { PlaybackOutput } from './PlaybackOutput.ts'
 
 export class OutputRegistry {
   private readonly registeredOutputs = new Map<string, PlaybackOutput>()

@@ -44,10 +44,10 @@ import {
   type NoteClipboard,
   type NoteClipboardItem
 } from '@sequencer/music'
-import type { PlacementInspectorView } from './inspector/inspector-model'
-import type { NoteInspectorView } from './inspector/inspector-model'
-import type { PianoRollNoteView } from './editors/piano-roll/piano-roll-model'
-import type { TimelinePlacementView } from './timeline/timeline-model'
+import type { PlacementInspectorView } from './inspector/inspector-model.ts'
+import type { NoteInspectorView } from './inspector/inspector-model.ts'
+import type { PianoRollNoteView } from './editors/piano-roll/piano-roll-model.ts'
+import type { TimelinePlacementView } from './timeline/timeline-model.ts'
 
 export type ClipLoopRegion = {
   clipStart: BeatTime

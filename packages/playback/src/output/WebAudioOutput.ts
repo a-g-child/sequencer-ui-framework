@@ -8,14 +8,14 @@ import {
   SAMPLER_AUDIO_GRAPH
 } from '@sequencer/audio-graph'
 import type { TrackMixerState } from '@sequencer/core'
-import type { PlaybackEvent } from '../events'
-import { noteOnlyCapabilities } from './OutputEvent'
-import type { PlaybackOutput } from './PlaybackOutput'
-import { WebAudioAssetLoader } from './WebAudioAssetLoader'
+import type { PlaybackEvent } from '../events.ts'
+import { noteOnlyCapabilities } from './OutputEvent.ts'
+import type { PlaybackOutput } from './PlaybackOutput.ts'
+import { WebAudioAssetLoader } from './WebAudioAssetLoader.ts'
 import {
   WebAudioExecutor,
   type WebAudioDelayNodeChain
-} from './WebAudioExecutor'
+} from './WebAudioExecutor.ts'
 
 export type WebAudioWaveform = OscillatorType
 

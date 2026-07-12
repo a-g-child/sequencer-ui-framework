@@ -1,9 +1,9 @@
 import type { BeatTime } from '@sequencer/core';
-import type { AppController } from '../../app-controller';
-import type { PianoRollNoteView } from '../../editors/piano-roll/piano-roll-model';
-import type { RenderInteractionItem } from '../../framework/editor';
-import type { PatternModifierState } from './pattern-input-state';
-import type { PatternViewport } from './pattern-viewport';
+import type { AppController } from '../../app-controller.ts';
+import type { PianoRollNoteView } from '../../editors/piano-roll/piano-roll-model.ts';
+import type { RenderInteractionItem } from '../../framework/editor/index.ts';
+import type { PatternModifierState } from './pattern-input-state.ts';
+import type { PatternViewport } from './pattern-viewport.ts';
 
 export type PatternNoteView = PianoRollNoteView;
 

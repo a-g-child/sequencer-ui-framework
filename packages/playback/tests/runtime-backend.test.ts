@@ -191,7 +191,7 @@ describe('RuntimeBackend', () => {
           id: 'start-native-transport',
           type: 'transport:start',
           timeMs: 0,
-          atSample: 0
+          atSample: snapshot.transport.samplePosition
         }
       ])
 
@@ -201,7 +201,10 @@ describe('RuntimeBackend', () => {
 
       assert.equal(playingSnapshot.transport.playing, true)
 
-      await assert.rejects(() => backend.compile(createPlan('native-plan')), /wire plans/)
+      await assert.rejects(
+        () => backend.compile(createPlan('native-plan')),
+        /unsupported native project plan/
+      )
 
       await backend.stop()
     } finally {

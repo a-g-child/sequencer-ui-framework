@@ -5,7 +5,7 @@ import {
   type ClockEvent,
   type ClockSource,
   type ClockState
-} from './clock'
+} from './clock.ts'
 
 export interface ClockServiceStatus {
   readonly activeSourceId: string

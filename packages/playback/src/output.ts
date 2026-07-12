@@ -1,1 +1,1 @@
-export * from './output/index'
+export * from './output/index.ts'

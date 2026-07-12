@@ -5,7 +5,8 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "scripts": {
-    "test": "node --experimental-transform-types --experimental-specifier-resolution=node --test tests/*.test.ts"
+    "test": "node --experimental-transform-types --experimental-specifier-resolution=node --test tests/*.test.ts",
+    "smoke:desktop": "NATIVE_DESKTOP_SMOKE=1 node --experimental-transform-types --experimental-specifier-resolution=node --test tests/desktop-smoke.test.ts"
   },
   "dependencies": {
     "@sequencer/playback": "file:../playback"

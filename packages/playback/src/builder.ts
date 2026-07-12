@@ -6,8 +6,8 @@ import {
   grooveBeat
 } from '@sequencer/core'
 import { getEffectiveBeat, getEffectiveVelocity, isNoteEvent } from '@sequencer/music'
-import { freezePlaybackModel, type PlaybackAutomation, type PlaybackClip, type PlaybackModel, type PlaybackNote, type PlaybackTrack } from './model'
-import type { ActiveClipLaunch } from './live-clips'
+import { freezePlaybackModel, type PlaybackAutomation, type PlaybackClip, type PlaybackModel, type PlaybackNote, type PlaybackTrack } from './model.ts'
+import type { ActiveClipLaunch } from './live-clips.ts'
 
 export interface PlaybackModelBuilderOptions {
   readonly activeClipByTrackId?: Readonly<Record<string, string | undefined>>

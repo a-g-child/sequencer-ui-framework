@@ -15,8 +15,11 @@ use engine_core::{
     PreparedPlanSender, PreparedPlanTransfer,
 };
 use engine_protocol::{
-    diagnostic_tone_plan, AudioTelemetry, EngineCommand, EngineEvent, ScheduledBeatEvent,
+    diagnostic_tone_plan, event_endpoint, AudioBufferSlot, AudioTelemetry, EngineCommand,
+    EngineEvent, EventInputNodePlan, EventRoute, EventRouteMask, GainNodePlan, InstrumentNodePlan,
+    NativeExecutionPlan, OutputNodePlan, ParameterSlot, PlanNode, PlanNodeKind, ScheduledBeatEvent,
     ScheduledEventOwner, TempoMapSnapshot, TransportLoop, NATIVE_EXECUTION_PLAN_VERSION,
+    NODE_EVENT_INPUT, NODE_GAIN, NODE_INSTRUMENT, NODE_OUTPUT, PARAM_GAIN_GAIN,
 };
 
 use crate::DriverKind;
@@ -1058,8 +1061,89 @@ fn parse_session_execution_plan(
 
             Ok(plan)
         }
+        Some("instrument-gain-output") => {
+            let plan_id = parse_required_u64(field("planId"), "plan.planId")?;
+            let plan_revision = parse_required_u64(field("planRevision"), "plan.planRevision")?;
+            let gain = parse_optional_f32(field("gain"), "plan.gain")?.unwrap_or(0.25);
+            let voice_count =
+                parse_optional_u16(field("voiceCount"), "plan.voiceCount")?.unwrap_or(8);
+            let output_channels =
+                parse_optional_u16(field("outputChannels"), "plan.outputChannels")?.unwrap_or(2);
+
+            Ok(instrument_gain_output_plan(
+                plan_id,
+                plan_revision,
+                gain,
+                voice_count,
+                output_channels,
+            ))
+        }
         Some(kind) => Err(SessionError::new(format!("unsupported plan kind: {kind}"))),
         None => Err(SessionError::new("plan.kind is required")),
+    }
+}
+
+fn instrument_gain_output_plan(
+    plan_id: u64,
+    plan_revision: u64,
+    gain: f32,
+    voice_count: u16,
+    output_channels: u16,
+) -> NativeExecutionPlan {
+    NativeExecutionPlan {
+        version: NATIVE_EXECUTION_PLAN_VERSION,
+        plan_id,
+        plan_revision,
+        nodes: vec![
+            PlanNode {
+                id: NODE_EVENT_INPUT,
+                kind: PlanNodeKind::EventInput(EventInputNodePlan),
+            },
+            PlanNode {
+                id: NODE_INSTRUMENT,
+                kind: PlanNodeKind::Instrument(InstrumentNodePlan {
+                    output_buffer: 1,
+                    voice_count,
+                    attack_seconds: 0.0,
+                    decay_seconds: 0.0,
+                    sustain_level: 1.0,
+                    release_seconds: 0.0,
+                }),
+            },
+            PlanNode {
+                id: NODE_GAIN,
+                kind: PlanNodeKind::Gain(GainNodePlan {
+                    gain_parameter: PARAM_GAIN_GAIN,
+                    input_buffer: 1,
+                    output_buffer: 2,
+                }),
+            },
+            PlanNode {
+                id: NODE_OUTPUT,
+                kind: PlanNodeKind::Output(OutputNodePlan {
+                    input_buffer: 2,
+                    output_channels,
+                }),
+            },
+        ],
+        buffers: vec![
+            AudioBufferSlot { id: 1, channels: 1 },
+            AudioBufferSlot { id: 2, channels: 1 },
+        ],
+        parameters: vec![ParameterSlot {
+            id: PARAM_GAIN_GAIN,
+            node: NODE_GAIN,
+            parameter: PARAM_GAIN_GAIN,
+            default_value: gain,
+        }],
+        event_routes: vec![EventRoute {
+            source: event_endpoint(NODE_EVENT_INPUT),
+            destination: event_endpoint(NODE_INSTRUMENT),
+            event_mask: EventRouteMask::NOTE,
+            priority: 0,
+            enabled: true,
+        }],
+        audio_execution_order: vec![NODE_INSTRUMENT, NODE_GAIN, NODE_OUTPUT],
     }
 }
 
@@ -1273,6 +1357,16 @@ fn parse_required_u16(value: Option<&str>, name: &str) -> Result<u16, SessionErr
         .map_err(|_| SessionError::new(format!("{name} must be a u16")))
 }
 
+fn parse_optional_u16(value: Option<&str>, name: &str) -> Result<Option<u16>, SessionError> {
+    value
+        .map(|value| {
+            value
+                .parse::<u16>()
+                .map_err(|_| SessionError::new(format!("{name} must be a u16")))
+        })
+        .transpose()
+}
+
 fn parse_required_u32(value: Option<&str>, name: &str) -> Result<u32, SessionError> {
     value
         .ok_or_else(|| SessionError::new(format!("{name} is required")))?
@@ -1353,6 +1447,22 @@ fn parse_required_f32(value: Option<&str>, name: &str) -> Result<f32, SessionErr
     } else {
         Err(SessionError::new(format!("{name} must be finite")))
     }
+}
+
+fn parse_optional_f32(value: Option<&str>, name: &str) -> Result<Option<f32>, SessionError> {
+    value
+        .map(|value| {
+            let parsed = value
+                .parse::<f32>()
+                .map_err(|_| SessionError::new(format!("{name} must be a finite f32")))?;
+
+            if parsed.is_finite() {
+                Ok(parsed)
+            } else {
+                Err(SessionError::new(format!("{name} must be finite")))
+            }
+        })
+        .transpose()
 }
 
 fn extract_json_value(line: &str, key: &str) -> Option<String> {

@@ -70,7 +70,7 @@ export class NativeRuntimeManager implements NativeRuntimeTransport {
   }
 
   async sendCommands(
-    commands: readonly Parameters<NodeNativeRuntimeTransport['sendCommands']>[0]
+    commands: Parameters<NodeNativeRuntimeTransport['sendCommands']>[0]
   ): Promise<readonly NativeEngineCommandResponse[]> {
     return this.requireTransport().sendCommands(commands)
   }

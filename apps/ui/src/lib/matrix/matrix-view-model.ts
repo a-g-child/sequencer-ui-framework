@@ -1,5 +1,5 @@
 import type { Track } from '@sequencer/core'
-import type { TrackClipView } from '../app-controller'
+import type { TrackClipView } from '../app-controller.ts'
 
 export type MatrixClipView = TrackClipView & {
   readonly playbackProgress: number | undefined

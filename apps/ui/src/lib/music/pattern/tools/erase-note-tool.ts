@@ -1,5 +1,5 @@
 import { DeleteNoteOperation } from '@sequencer/music';
-import type { PatternInteractionContext, PatternTool } from '../pattern-tool';
+import type { PatternInteractionContext, PatternTool } from '../pattern-tool.ts';
 
 export class EraseNoteTool implements PatternTool {
   readonly id = 'erase-note';

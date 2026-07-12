@@ -1,5 +1,5 @@
-import type { EditorSession } from './EditorSession';
-import type { RenderModel } from './RenderModel';
+import type { EditorSession } from './EditorSession.ts';
+import type { RenderModel } from './RenderModel.ts';
 
 export type RenderModelBuilderInput<
   TDocument = unknown,

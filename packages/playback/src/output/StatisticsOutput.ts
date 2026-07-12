@@ -1,7 +1,7 @@
-import type { PlaybackEvent } from '../events'
-import type { SchedulerStatus } from '../scheduler'
-import { observationCapabilities } from './OutputEvent'
-import type { PlaybackOutput } from './PlaybackOutput'
+import type { PlaybackEvent } from '../events.ts'
+import type { SchedulerStatus } from '../scheduler.ts'
+import { observationCapabilities } from './OutputEvent.ts'
+import type { PlaybackOutput } from './PlaybackOutput.ts'
 
 export interface PlaybackOutputStatistics {
   readonly eventCount: number

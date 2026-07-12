@@ -1,9 +1,9 @@
-export type { EditorSession } from './EditorSession';
-export type { RenderModel } from './RenderModel';
+export type { EditorSession } from './EditorSession.ts';
+export type { RenderModel } from './RenderModel.ts';
 export type {
   RenderModelBuilder,
   RenderModelBuilderInput
-} from './RenderModelBuilder';
-export type { RenderInteractionItem } from './RenderInteractionItem';
-export type { Renderer } from './Renderer';
-export { RendererRegistry } from './RendererRegistry';
+} from './RenderModelBuilder.ts';
+export type { RenderInteractionItem } from './RenderInteractionItem.ts';
+export type { Renderer } from './Renderer.ts';
+export { RendererRegistry } from './RendererRegistry.ts';

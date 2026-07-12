@@ -3,7 +3,7 @@ import type {
   PatternInteractionContext,
   PatternOverlay,
   PatternTool
-} from '../pattern-tool';
+} from '../pattern-tool.ts';
 
 type CapturedResizingNote = {
   id: string;

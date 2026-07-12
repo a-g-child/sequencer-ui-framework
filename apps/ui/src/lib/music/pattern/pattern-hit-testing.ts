@@ -1,4 +1,4 @@
-import type { RenderItem } from './pattern-render-items';
+import type { RenderItem } from './pattern-render-items.ts';
 
 export function hitTestRenderItem<TSource>(
   items: RenderItem<TSource>[],

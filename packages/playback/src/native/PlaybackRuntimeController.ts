@@ -87,7 +87,7 @@ export class PlaybackRuntimeController {
       await this.backend.activate(handle)
       const snapshot = await this.refreshSnapshot()
       const expectedPlanId = Number(handle.planId)
-      const expectedRevision = handle.revision ?? null
+      const expectedRevision = handle.backend === 'native' ? handle.revision : null
 
       if (!Number.isNaN(expectedPlanId) && snapshot.plan.activePlanId !== expectedPlanId) {
         throw new Error(

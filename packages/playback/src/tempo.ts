@@ -1,5 +1,5 @@
 import type { BeatTime } from '@sequencer/core'
-import type { TempoMap } from './model'
+import type { TempoMap } from './model.ts'
 
 export function beatToMs(beat: BeatTime, tempoMap: TempoMap): number {
   const bpm = getTempoAtBeat(beat, tempoMap)

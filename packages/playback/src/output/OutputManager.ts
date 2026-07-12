@@ -1,7 +1,7 @@
-import type { PlaybackEvent } from '../events'
-import type { OutputEvent, OutputEventListener } from './OutputEvent'
-import type { PlaybackOutput } from './PlaybackOutput'
-import { OutputRegistry } from './OutputRegistry'
+import type { PlaybackEvent } from '../events.ts'
+import type { OutputEvent, OutputEventListener } from './OutputEvent.ts'
+import type { PlaybackOutput } from './PlaybackOutput.ts'
+import { OutputRegistry } from './OutputRegistry.ts'
 
 export interface OutputManagerStatus {
   readonly registeredOutputCount: number

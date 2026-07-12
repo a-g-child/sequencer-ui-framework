@@ -1,20 +1,20 @@
-import type { AppController } from '../../app-controller';
-import type { PatternInputState } from './pattern-input-state';
+import type { AppController } from '../../app-controller.ts';
+import type { PatternInputState } from './pattern-input-state.ts';
 import type {
   PatternInteractionContext
-} from './pattern-tool';
-import type { RenderInteractionItem } from '../../framework/editor';
-import { hitTestRenderItem } from './pattern-hit-testing';
-import type { PatternViewport } from './pattern-viewport';
-import type { GridDefinition } from './pattern-grid';
+} from './pattern-tool.ts';
+import type { RenderInteractionItem } from '../../framework/editor/index.ts';
+import { hitTestRenderItem } from './pattern-hit-testing.ts';
+import type { PatternViewport } from './pattern-viewport.ts';
+import type { GridDefinition } from './pattern-grid.ts';
 import type {
   PatternRenderer,
   PatternRenderModel
-} from './pattern-renderer';
+} from './pattern-renderer.ts';
 import type {
   PianoRollNoteView,
   PianoRollView
-} from '../../editors/piano-roll/piano-roll-model';
+} from '../../editors/piano-roll/piano-roll-model.ts';
 
 export type BuildPatternInteractionContextOptions = {
   event: PointerEvent;

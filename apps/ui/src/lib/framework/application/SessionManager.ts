@@ -1,4 +1,4 @@
-import type { EditorSession } from '../editor';
+import type { EditorSession } from '../editor/index.ts';
 
 export class SessionManager {
   private readonly sessions = new Map<string, EditorSession>();

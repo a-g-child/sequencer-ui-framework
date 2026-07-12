@@ -1,18 +1,18 @@
 import type { BeatTime } from '@sequencer/core';
-import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model';
-import type { RenderModel } from '../../framework/editor';
+import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model.ts';
+import type { RenderModel } from '../../framework/editor/index.ts';
 import {
   getGeneralMidiDrumLaneLabel,
   getGeneralMidiDrumLanes
-} from './sample-grid-lane-provider';
-import type { GridDefinition, PatternGridLine } from './pattern-grid';
-import type { RenderItem, RenderLane } from './pattern-render-items';
+} from './sample-grid-lane-provider.ts';
+import type { GridDefinition, PatternGridLine } from './pattern-grid.ts';
+import type { RenderItem, RenderLane } from './pattern-render-items.ts';
 import {
   defaultScaleState,
   isPitchInScale,
   type PatternScaleState
-} from './pattern-scale';
-import type { PatternNoteOverlay, PatternRectangleOverlay } from './pattern-tool';
+} from './pattern-scale.ts';
+import type { PatternNoteOverlay, PatternRectangleOverlay } from './pattern-tool.ts';
 import {
   beatToScreenX,
   durationToScreenWidth,
@@ -21,7 +21,7 @@ import {
   screenYToPitch,
   snapBeat,
   type PatternViewport
-} from './pattern-viewport';
+} from './pattern-viewport.ts';
 
 export type PatternGhostView = {
   beat: number;

@@ -1,6 +1,6 @@
-import type { PlaybackEvent } from '../events'
-import { observationCapabilities } from './OutputEvent'
-import type { PlaybackOutput } from './PlaybackOutput'
+import type { PlaybackEvent } from '../events.ts'
+import { observationCapabilities } from './OutputEvent.ts'
+import type { PlaybackOutput } from './PlaybackOutput.ts'
 
 export class MockOutput implements PlaybackOutput {
   readonly id = 'mock'

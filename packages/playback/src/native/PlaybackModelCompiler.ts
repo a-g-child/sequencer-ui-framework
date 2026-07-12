@@ -147,18 +147,18 @@ function computeRevision(
 ): number {
   const seed = [
     playbackModel.id,
-    playbackModel.tempoMap.defaultBpm,
+    playbackModel.tracks.length,
+    playbackModel.clips.length,
+    playbackModel.notes.length,
     playbackModel.tracks
-      .map((track) => {
-        const chain = track.deviceInstanceIds ?? [track.deviceInstanceId].filter(Boolean)
-        return `${track.id}:${track.name}:${track.channel}:${chain.join(',')}`
-      })
-      .join('|'),
-    playbackModel.clips
-      .map((clip) => `${clip.id}:${clip.trackId}:${clip.length}:${clip.loop}:${clip.loopStart}:${clip.loopLength}`)
-      .join('|'),
-    playbackModel.notes
-      .map((note) => `${note.id}:${note.trackId}:${note.clipId}:${note.pitch}:${note.velocity}:${note.beat}:${note.duration}`)
+      .map((track) =>
+        [
+          track.id,
+          track.mixer.volume,
+          track.mixer.pan,
+          track.deviceInstanceIds?.join(',') ?? track.deviceInstanceId ?? ''
+        ].join(':')
+      )
       .join('|'),
     graph.nodes.map((node) => `${node.descriptorId}:${node.id}`).join('|'),
     diagnostics.map((diagnostic) => `${diagnostic.code}:${diagnostic.severity}`).join('|')

@@ -1,4 +1,4 @@
-import type { PlaybackEvent } from '../events'
+import type { PlaybackEvent } from '../events.ts'
 
 export interface OutputCapabilities {
   readonly noteEvents: boolean

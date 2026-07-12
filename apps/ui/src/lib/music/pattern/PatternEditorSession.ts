@@ -1,17 +1,17 @@
 import type { EntityId, GrooveSettings } from '@sequencer/core';
-import type { AppController } from '../../app-controller';
-import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model';
+import type { AppController } from '../../app-controller.ts';
+import type { PianoRollNoteView, PianoRollView } from '../../editors/piano-roll/piano-roll-model.ts';
 import {
   RendererRegistry,
   type EditorSession,
   type RenderInteractionItem
-} from '../../framework/editor';
+} from '../../framework/editor/index.ts';
 import {
   createGridDefinition,
   type GridDefinition
-} from './pattern-grid';
-import { buildPatternInteractionContext as createPatternInteractionContext } from './pattern-interaction-builder';
-import { PatternInputState } from './pattern-input-state';
+} from './pattern-grid.ts';
+import { buildPatternInteractionContext as createPatternInteractionContext } from './pattern-interaction-builder.ts';
+import { PatternInputState } from './pattern-input-state.ts';
 import {
   clampViewport,
   panViewportX,
@@ -19,7 +19,7 @@ import {
   resetViewport,
   zoomViewportX,
   type PatternNavigationBounds
-} from './pattern-navigation';
+} from './pattern-navigation.ts';
 import {
   PianoRollRenderer,
   SAMPLE_GRID_LANE_COUNT,
@@ -27,32 +27,32 @@ import {
   type PatternRenderModel,
   type PatternRenderer,
   type SampleGridLane
-} from './pattern-renderer';
+} from './pattern-renderer.ts';
 import {
   defaultScaleState,
   isPitchInScale,
   type PatternScaleMode,
   type PatternScaleState
-} from './pattern-scale';
-import { PatternRenderModelBuilder } from './PatternRenderModelBuilder';
-import { handlePatternShortcut } from './pattern-shortcuts';
+} from './pattern-scale.ts';
+import { PatternRenderModelBuilder } from './PatternRenderModelBuilder.ts';
+import { handlePatternShortcut } from './pattern-shortcuts.ts';
 import type {
   PatternInteractionContext,
   PatternNoteOverlay,
   PatternOverlay,
   PatternRectangleOverlay,
   PatternTool
-} from './pattern-tool';
+} from './pattern-tool.ts';
 import {
   createPatternViewport,
   type PatternViewport
-} from './pattern-viewport';
-import { DrawNoteTool } from './tools/draw-note-tool';
-import { EraseNoteTool } from './tools/erase-note-tool';
-import { HumanizeNoteTool } from './tools/humanize-note-tool';
-import { MoveNoteTool } from './tools/move-note-tool';
-import { ResizeNoteTool } from './tools/resize-note-tool';
-import { SelectTool } from './tools/select-tool';
+} from './pattern-viewport.ts';
+import { DrawNoteTool } from './tools/draw-note-tool.ts';
+import { EraseNoteTool } from './tools/erase-note-tool.ts';
+import { HumanizeNoteTool } from './tools/humanize-note-tool.ts';
+import { MoveNoteTool } from './tools/move-note-tool.ts';
+import { ResizeNoteTool } from './tools/resize-note-tool.ts';
+import { SelectTool } from './tools/select-tool.ts';
 
 export type PatternEditorSessionOptions = {
   controller: AppController;

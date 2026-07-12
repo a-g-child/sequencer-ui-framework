@@ -1,5 +1,5 @@
 import type { BeatTime, EntityId } from '@sequencer/core'
-import type { ClockState } from './clock'
+import type { ClockState } from './clock.ts'
 
 export type ClipLaunchQuantize = 'none' | 'beat' | 'bar' | '2-bars' | '4-bars'
 

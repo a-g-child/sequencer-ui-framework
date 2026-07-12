@@ -1,7 +1,7 @@
-import type { PlaybackEvent } from '../events'
+import type { PlaybackEvent } from '../events.ts'
 import { midiMessagesForPlaybackEvent } from './MidiMessages.ts'
 import { noteOnlyCapabilities } from './OutputEvent.ts'
-import type { PlaybackOutput } from './PlaybackOutput'
+import type { PlaybackOutput } from './PlaybackOutput.ts'
 
 export interface MidiOutputPort {
   send(message: readonly number[], timeMs?: number): void

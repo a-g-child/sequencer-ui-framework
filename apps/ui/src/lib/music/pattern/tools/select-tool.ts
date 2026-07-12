@@ -2,7 +2,7 @@ import type {
   PatternInteractionContext,
   PatternOverlay,
   PatternTool
-} from '../pattern-tool';
+} from '../pattern-tool.ts';
 
 export class SelectTool implements PatternTool {
   readonly id = 'select';

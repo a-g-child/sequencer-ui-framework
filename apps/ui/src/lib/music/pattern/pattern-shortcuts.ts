@@ -1,12 +1,12 @@
-import type { AppController } from '../../app-controller';
-import type { PianoRollNoteView } from '../../editors/piano-roll/piano-roll-model';
+import type { AppController } from '../../app-controller.ts';
+import type { PianoRollNoteView } from '../../editors/piano-roll/piano-roll-model.ts';
 import {
   panViewportX,
   panViewportY,
   type PatternNavigationBounds,
   zoomViewportX
-} from './pattern-navigation';
-import type { PatternViewport } from './pattern-viewport';
+} from './pattern-navigation.ts';
+import type { PatternViewport } from './pattern-viewport.ts';
 
 export type PatternShortcutContext = {
   controller: AppController;

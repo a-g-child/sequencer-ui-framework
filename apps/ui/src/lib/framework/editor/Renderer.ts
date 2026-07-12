@@ -1,4 +1,4 @@
-import type { RenderModel } from './RenderModel';
+import type { RenderModel } from './RenderModel.ts';
 
 export interface Renderer<TModel extends RenderModel = RenderModel> {
   readonly id: string;

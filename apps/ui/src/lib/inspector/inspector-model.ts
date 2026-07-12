@@ -6,7 +6,7 @@ import {
   type ParameterValue
 } from '@sequencer/core'
 import { getNote, getTimingOffset } from '@sequencer/music'
-import type { PatternScaleState } from '../music/pattern/pattern-scale'
+import type { PatternScaleState } from '../music/pattern/pattern-scale.ts'
 
 export type InspectorTargetType = 'none' | 'track' | 'placement' | 'note' | 'clip'
 

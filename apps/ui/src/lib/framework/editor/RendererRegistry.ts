@@ -1,5 +1,5 @@
-import type { RenderModel } from './RenderModel';
-import type { Renderer } from './Renderer';
+import type { RenderModel } from './RenderModel.ts';
+import type { Renderer } from './Renderer.ts';
 
 export type RegisteredRenderer = {
   readonly id: string;

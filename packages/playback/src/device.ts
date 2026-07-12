@@ -11,8 +11,8 @@ import {
   type RuntimeDevice
 } from '@sequencer/device'
 import type { SampleVoiceAction, VoiceAction } from '@sequencer/audio'
-import type { PlaybackEvent } from './events'
-import type { PlaybackTrack } from './model'
+import type { PlaybackEvent } from './events.ts'
+import type { PlaybackTrack } from './model.ts'
 import type { DeviceCommand } from './native/schemas.ts'
 import { voiceActionsToDeviceCommands } from './native/voice-action-commands.ts'
 
