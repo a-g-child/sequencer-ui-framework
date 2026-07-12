@@ -87,6 +87,11 @@ export class PlaybackRuntimeController {
     await this.sendTransportCommand('panic', false)
   }
 
+  sendCommands(commands: readonly EngineCommand[]): void {
+    this.ensureReady()
+    this.backend.sendCommands(commands)
+  }
+
   async refreshSnapshot(): Promise<RuntimeSnapshot> {
     this.ensureReady()
 

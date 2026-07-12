@@ -15,7 +15,8 @@ use engine_core::{
     PreparedPlanSender, PreparedPlanTransfer,
 };
 use engine_protocol::{
-    diagnostic_tone_plan, AudioTelemetry, EngineCommand, EngineEvent, NATIVE_EXECUTION_PLAN_VERSION,
+    diagnostic_tone_plan, AudioTelemetry, EngineCommand, EngineEvent, ScheduledBeatEvent,
+    TempoMapSnapshot, TransportLoop, NATIVE_EXECUTION_PLAN_VERSION,
 };
 
 use crate::DriverKind;
@@ -1087,10 +1088,82 @@ fn parse_session_engine_command(
             id: command_id,
             at_sample,
         }),
+        Some("tempo-map:set") => {
+            let tempo = TempoMapSnapshot {
+                origin_sample: parse_optional_u64(field("originSample"), "command.originSample")?
+                    .unwrap_or(0),
+                origin_beat: parse_optional_f64(field("originBeat"), "command.originBeat")?
+                    .unwrap_or(0.0),
+                bpm: parse_required_f64(field("bpm"), "command.bpm")?,
+                sample_rate: parse_required_f64(field("sampleRate"), "command.sampleRate")?,
+            };
+
+            Ok(EngineCommand::SetTempoMap {
+                id: command_id,
+                tempo,
+                at_sample,
+            })
+        }
+        Some("transport-loop:set") => {
+            let transport_loop = TransportLoop {
+                enabled: parse_required_bool(field("enabled"), "command.enabled")?,
+                start_sample: parse_required_u64(field("startSample"), "command.startSample")?,
+                end_sample: parse_required_u64(field("endSample"), "command.endSample")?,
+            };
+
+            Ok(EngineCommand::SetTransportLoop {
+                id: command_id,
+                transport_loop,
+                at_sample,
+            })
+        }
+        Some("event:schedule-beat") => {
+            let event = parse_scheduled_beat_event(&command_json)?;
+
+            Ok(EngineCommand::ScheduleBeatEvent {
+                id: command_id,
+                event,
+                at_sample,
+            })
+        }
         Some(kind) => Err(SessionError::new(format!(
             "unsupported engine command type: {kind}"
         ))),
         None => Err(SessionError::new("command.type is required")),
+    }
+}
+
+fn parse_scheduled_beat_event(command_json: &str) -> Result<ScheduledBeatEvent, SessionError> {
+    let event_json = extract_json_value(command_json, "event")
+        .ok_or_else(|| SessionError::new("command.event is required"))?;
+    let fields = parse_flat_json_object(&event_json);
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+
+    let target_node = parse_required_u32(field("targetNode"), "command.event.targetNode")?;
+    let note = parse_required_u8(field("note"), "command.event.note")?;
+    let at_beat = parse_required_f64(field("atBeat"), "command.event.atBeat")?;
+
+    match field("kind") {
+        Some("note-on") => Ok(ScheduledBeatEvent::NoteOn {
+            target_node,
+            note,
+            velocity: parse_required_f32(field("velocity"), "command.event.velocity")?,
+            at_beat,
+        }),
+        Some("note-off") => Ok(ScheduledBeatEvent::NoteOff {
+            target_node,
+            note,
+            at_beat,
+        }),
+        Some(kind) => Err(SessionError::new(format!(
+            "unsupported scheduled beat event kind: {kind}"
+        ))),
+        None => Err(SessionError::new("command.event.kind is required")),
     }
 }
 
@@ -1108,6 +1181,13 @@ fn parse_required_u32(value: Option<&str>, name: &str) -> Result<u32, SessionErr
         .map_err(|_| SessionError::new(format!("{name} must be a u32")))
 }
 
+fn parse_required_u8(value: Option<&str>, name: &str) -> Result<u8, SessionError> {
+    value
+        .ok_or_else(|| SessionError::new(format!("{name} is required")))?
+        .parse::<u8>()
+        .map_err(|_| SessionError::new(format!("{name} must be a u8")))
+}
+
 fn parse_required_u64(value: Option<&str>, name: &str) -> Result<u64, SessionError> {
     value
         .ok_or_else(|| SessionError::new(format!("{name} is required")))?
@@ -1121,6 +1201,44 @@ fn parse_optional_u64(value: Option<&str>, name: &str) -> Result<Option<u64>, Se
             value
                 .parse::<u64>()
                 .map_err(|_| SessionError::new(format!("{name} must be a u64")))
+        })
+        .transpose()
+}
+
+fn parse_required_bool(value: Option<&str>, name: &str) -> Result<bool, SessionError> {
+    match value {
+        Some("true") => Ok(true),
+        Some("false") => Ok(false),
+        Some(_) => Err(SessionError::new(format!("{name} must be a boolean"))),
+        None => Err(SessionError::new(format!("{name} is required"))),
+    }
+}
+
+fn parse_required_f64(value: Option<&str>, name: &str) -> Result<f64, SessionError> {
+    let parsed = value
+        .ok_or_else(|| SessionError::new(format!("{name} is required")))?
+        .parse::<f64>()
+        .map_err(|_| SessionError::new(format!("{name} must be a finite f64")))?;
+
+    if parsed.is_finite() {
+        Ok(parsed)
+    } else {
+        Err(SessionError::new(format!("{name} must be finite")))
+    }
+}
+
+fn parse_optional_f64(value: Option<&str>, name: &str) -> Result<Option<f64>, SessionError> {
+    value
+        .map(|value| {
+            let parsed = value
+                .parse::<f64>()
+                .map_err(|_| SessionError::new(format!("{name} must be a finite f64")))?;
+
+            if parsed.is_finite() {
+                Ok(parsed)
+            } else {
+                Err(SessionError::new(format!("{name} must be finite")))
+            }
         })
         .transpose()
 }
@@ -1388,5 +1506,23 @@ mod tests {
         assert!(output.contains("\"requestId\":1,\"type\":\"session:hello\""));
         assert!(output.contains("\"requestId\":2,\"type\":\"audio:devices\""));
         assert!(output.contains("\"requestId\":3,\"type\":\"session:shutdown\""));
+    }
+
+    #[test]
+    fn json_engine_commands_accept_scheduler_messages() {
+        let output = run_session(
+            "{\"requestId\":1,\"type\":\"audio:start\",\"driver\":\"null\",\"sample_rate\":48000,\"buffer_frames\":128,\"channels\":2}\n\
+             {\"requestId\":2,\"type\":\"engine:command\",\"command\":{\"type\":\"tempo-map:set\",\"originSample\":0,\"originBeat\":0,\"bpm\":120,\"sampleRate\":48000,\"atSample\":0}}\n\
+             {\"requestId\":3,\"type\":\"engine:command\",\"command\":{\"type\":\"transport-loop:set\",\"enabled\":true,\"startSample\":0,\"endSample\":96000,\"atSample\":0}}\n\
+             {\"requestId\":4,\"type\":\"engine:command\",\"command\":{\"type\":\"event:schedule-beat\",\"atSample\":0,\"event\":{\"kind\":\"note-on\",\"targetNode\":5,\"note\":60,\"velocity\":0.75,\"atBeat\":1}}}\n\
+             {\"requestId\":5,\"type\":\"engine:command\",\"command\":{\"type\":\"event:schedule-beat\",\"atSample\":0,\"event\":{\"kind\":\"note-off\",\"targetNode\":5,\"note\":60,\"atBeat\":1.5}}}\n\
+             {\"requestId\":6,\"type\":\"session:shutdown\"}\n",
+        );
+
+        assert!(output.contains("\"requestId\":2,\"type\":\"engine:command\""));
+        assert!(output.contains("\"requestId\":3,\"type\":\"engine:command\""));
+        assert!(output.contains("\"requestId\":4,\"type\":\"engine:command\""));
+        assert!(output.contains("\"requestId\":5,\"type\":\"engine:command\""));
+        assert!(!output.contains("\"ok\":false"));
     }
 }

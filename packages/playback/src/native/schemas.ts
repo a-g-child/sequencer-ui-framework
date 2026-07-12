@@ -22,6 +22,8 @@ export type EngineCommand =
   | TransportStopCommand
   | SeekCommand
   | SetTempoMapCommand
+  | SetTransportLoopCommand
+  | ScheduleBeatEventCommand
   | LaunchClipCommand
   | ParameterModulateCommand
   | SwapExecutionPlanCommand
@@ -105,7 +107,47 @@ export interface SeekCommand extends DeviceCommandBase {
 
 export interface SetTempoMapCommand extends DeviceCommandBase {
   readonly type: 'tempo-map:set'
-  readonly snapshotId: number
+  readonly originSample: number
+  readonly originBeat: number
+  readonly bpm: number
+  readonly sampleRate: number
+  readonly atSample: number
+  readonly snapshotId?: number
+}
+
+export interface SetTransportLoopCommand extends DeviceCommandBase {
+  readonly type: 'transport-loop:set'
+  readonly enabled: boolean
+  readonly startSample: number
+  readonly endSample: number
+  readonly atSample: number
+}
+
+export type NativeScheduledBeatEvent =
+  | NativeScheduledBeatNoteOnEvent
+  | NativeScheduledBeatNoteOffEvent
+
+export interface NativeScheduledBeatNoteOnEvent {
+  readonly kind: 'note-on'
+  readonly targetNode: number
+  readonly note: number
+  readonly velocity: number
+  readonly atBeat: number
+}
+
+export interface NativeScheduledBeatNoteOffEvent {
+  readonly kind: 'note-off'
+  readonly targetNode: number
+  readonly note: number
+  readonly atBeat: number
+}
+
+export interface ScheduleBeatEventCommand extends DeviceCommandBase {
+  readonly type: 'event:schedule-beat'
+  readonly event: NativeScheduledBeatEvent
+  readonly atSample: number
+  readonly clipId?: string
+  readonly generation?: number
 }
 
 export interface LaunchClipCommand extends DeviceCommandBase {

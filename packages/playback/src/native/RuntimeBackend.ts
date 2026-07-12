@@ -221,7 +221,7 @@ export class NativeBackend implements RuntimeBackend {
 
   sendCommands(commands: readonly EngineCommand[]): void {
     for (const command of commands) {
-      if (isNativeTransportCommand(command)) {
+      if (isNativeRuntimeCommand(command)) {
         void this.client.sendEngineCommand(command)
       }
     }
@@ -304,10 +304,13 @@ function isNativeDiagnosticExecutionPlan(
   )
 }
 
-function isNativeTransportCommand(command: EngineCommand): boolean {
+function isNativeRuntimeCommand(command: EngineCommand): boolean {
   return (
     command.type === 'transport:start' ||
     command.type === 'transport:stop' ||
-    command.type === 'panic'
+    command.type === 'panic' ||
+    command.type === 'tempo-map:set' ||
+    command.type === 'transport-loop:set' ||
+    command.type === 'event:schedule-beat'
   )
 }

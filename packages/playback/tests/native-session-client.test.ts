@@ -69,6 +69,58 @@ describe('NativeSessionClient', () => {
 
       assert.equal(stoppedSnapshot.transport?.playing, false)
 
+      await client.sendEngineCommand({
+        id: 'tempo-map',
+        type: 'tempo-map:set',
+        originSample: 0,
+        originBeat: 0,
+        bpm: 120,
+        sampleRate: 48_000,
+        timeMs: 0,
+        atSample: 0
+      })
+
+      await client.sendEngineCommand({
+        id: 'transport-loop',
+        type: 'transport-loop:set',
+        enabled: true,
+        startSample: 0,
+        endSample: 96_000,
+        timeMs: 0,
+        atSample: 0
+      })
+
+      await client.sendEngineCommand({
+        id: 'schedule-note-on',
+        type: 'event:schedule-beat',
+        clipId: 'clip-1',
+        generation: 1,
+        timeMs: 0,
+        atSample: 0,
+        event: {
+          kind: 'note-on',
+          targetNode: 5,
+          note: 60,
+          velocity: 0.75,
+          atBeat: 1
+        }
+      })
+
+      await client.sendEngineCommand({
+        id: 'schedule-note-off',
+        type: 'event:schedule-beat',
+        clipId: 'clip-1',
+        generation: 1,
+        timeMs: 0,
+        atSample: 0,
+        event: {
+          kind: 'note-off',
+          targetNode: 5,
+          note: 60,
+          atBeat: 1.5
+        }
+      })
+
       await client.stopAudio()
       assert.equal(client.state, 'ready')
     } finally {

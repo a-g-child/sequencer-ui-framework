@@ -529,6 +529,29 @@ function nativeEngineCommandPayload(command: EngineCommand): Record<string, unkn
         type: command.type,
         atSample: 0
       }
+    case 'tempo-map:set':
+      return {
+        type: command.type,
+        originSample: command.originSample,
+        originBeat: command.originBeat,
+        bpm: command.bpm,
+        sampleRate: command.sampleRate,
+        atSample: command.atSample
+      }
+    case 'transport-loop:set':
+      return {
+        type: command.type,
+        enabled: command.enabled,
+        startSample: command.startSample,
+        endSample: command.endSample,
+        atSample: command.atSample
+      }
+    case 'event:schedule-beat':
+      return {
+        type: command.type,
+        atSample: command.atSample,
+        event: command.event
+      }
     default:
       return {
         type: command.type

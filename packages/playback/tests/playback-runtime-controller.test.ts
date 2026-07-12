@@ -19,6 +19,25 @@ describe('PlaybackRuntimeController', () => {
     await controller.start()
     assert.equal(controller.status.snapshot?.transport.playing, false)
 
+    controller.sendCommands([
+      {
+        id: 'schedule-note',
+        type: 'event:schedule-beat',
+        timeMs: 0,
+        atSample: 0,
+        clipId: 'clip-1',
+        generation: 1,
+        event: {
+          kind: 'note-on',
+          targetNode: 5,
+          note: 60,
+          velocity: 0.5,
+          atBeat: 0
+        }
+      }
+    ])
+    assert.equal(backend.commands.at(-1)?.type, 'event:schedule-beat')
+
     await controller.play()
     assert.equal(backend.commands.at(-1)?.type, 'transport:start')
     assert.equal(controller.status.requestedTransportPlaying, true)

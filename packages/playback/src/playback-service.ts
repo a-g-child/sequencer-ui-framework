@@ -34,6 +34,12 @@ import {
 import type { PlaybackModel } from './model'
 import { NativeAudioAdapter } from './native/NativeAudioAdapter.ts'
 import {
+  compileNativeClipSchedule,
+  createNativeTempoMapCommand,
+  createNativeTransportLoopCommand,
+  nativeClipScheduleCommands
+} from './native/NativeClipSchedule.ts'
+import {
   PlaybackRuntimeController,
 } from './native/PlaybackRuntimeController.ts'
 import type { PlaybackRuntimeControllerStatus } from './native/RuntimeTypes.ts'
@@ -124,6 +130,7 @@ export class PlaybackService implements Service, DocumentObserver {
   private readonly statisticsOutput = new StatisticsOutput()
   private readonly webAudioOutput = new WebAudioOutput()
   private readonly webMidiOutput = new WebMidiOutput()
+  private readonly nativeClipScheduleGenerations = new Map<string, number>()
   private unsubscribeServiceEvents?: () => void
   private unsubscribeRuntimeController?: () => void
 
@@ -524,6 +531,7 @@ export class PlaybackService implements Service, DocumentObserver {
       this.clearTrackVoicesForAppliedLaunches(this.liveClips.applyDueLaunches(state))
       this.rebuildModel()
       if (this.runtimeController) {
+        this.submitNativeClipSchedule(state)
         void this.runtimeController.play().catch(() => {})
       } else {
         this.scheduler.start(state.beat)
@@ -599,6 +607,46 @@ export class PlaybackService implements Service, DocumentObserver {
       this.emitRuntimeParameterValues(state)
       this.emitStatus()
     }
+  }
+
+  private submitNativeClipSchedule(state: ClockState): void {
+    if (!this.runtimeController || !this.model) return
+
+    const clip = this.model.clips[0]
+    if (!clip) return
+
+    const generation = (this.nativeClipScheduleGenerations.get(clip.id) ?? 0) + 1
+    this.nativeClipScheduleGenerations.set(clip.id, generation)
+
+    const snapshot = this.runtimeController.status.snapshot
+    const sampleRate = snapshot?.stream.sampleRate || snapshot?.sampleRate || 48_000
+    const atSample = snapshot?.transport.samplePosition ?? 0
+    const timeMs = nowMs()
+    const schedule = compileNativeClipSchedule(this.model, {
+      clipId: clip.id,
+      generation
+    })
+
+    this.runtimeController.sendCommands([
+      createNativeTempoMapCommand(this.model, {
+        sampleRate,
+        originSample: atSample,
+        originBeat: state.beat,
+        atSample,
+        timeMs
+      }),
+      createNativeTransportLoopCommand({
+        clip,
+        bpm: state.bpm,
+        sampleRate,
+        atSample,
+        timeMs
+      }),
+      ...nativeClipScheduleCommands(schedule, {
+        atSample,
+        timeMs
+      })
+    ])
   }
 
   private async initialiseOutputs(): Promise<void> {
