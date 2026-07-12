@@ -44,6 +44,30 @@ describe('NativeSessionClient', () => {
 
       assert.equal(snapshot.stream?.deviceId, 'null')
       assert.ok((snapshot.telemetry?.samplePosition ?? 0) > 0)
+      assert.equal(snapshot.transport?.playing, false)
+
+      await client.sendEngineCommand({
+        id: 'transport-start',
+        type: 'transport:start',
+        timeMs: 0,
+        atSample: 0
+      })
+
+      const playingSnapshot = await client.getSnapshot()
+
+      assert.equal(playingSnapshot.transport?.playing, true)
+      assert.ok((playingSnapshot.transport?.samplePosition ?? 0) > 0)
+
+      await client.sendEngineCommand({
+        id: 'transport-stop',
+        type: 'transport:stop',
+        timeMs: 0,
+        atSample: 0
+      })
+
+      const stoppedSnapshot = await client.getSnapshot()
+
+      assert.equal(stoppedSnapshot.transport?.playing, false)
 
       await client.stopAudio()
       assert.equal(client.state, 'ready')

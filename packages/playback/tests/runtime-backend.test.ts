@@ -90,10 +90,26 @@ describe('RuntimeBackend', () => {
 
       assert.equal(snapshot.backend, 'native')
       assert.equal(snapshot.running, true)
+      assert.equal(snapshot.transport.playing, false)
       assert.ok(snapshot.samplePosition > 0)
       assert.equal(backend.negotiatedCapabilities?.executionPlanVersion, 1)
       assert.equal(snapshot.native?.telemetry?.plan?.activePlanId, 42)
       assert.equal(snapshot.native?.telemetry?.plan?.activeRevision, 7)
+
+      backend.sendCommands([
+        {
+          id: 'start-native-transport',
+          type: 'transport:start',
+          timeMs: 0,
+          atSample: 0
+        }
+      ])
+
+      await new Promise((resolve) => setTimeout(resolve, 25))
+
+      const playingSnapshot = await backend.getSnapshot()
+
+      assert.equal(playingSnapshot.transport.playing, true)
 
       await assert.rejects(() => backend.compile(createPlan('native-plan')), /wire plans/)
 

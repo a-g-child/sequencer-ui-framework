@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import type { EngineCommand } from './schemas.ts'
 
 export type NativeAudioDriver = 'null' | 'cpal'
 export type NativeSessionState =
@@ -56,6 +57,24 @@ export interface NativeEngineSnapshot {
     readonly sampleRate: number
     readonly channels: number
   } | null
+  readonly transport?: {
+    readonly playing: boolean
+    readonly samplePosition: number
+    readonly beatPosition: number
+    readonly loopIteration: number
+  }
+  readonly plan?: {
+    readonly activePlanId: number | null
+    readonly activeRevision: number | null
+    readonly pendingTransfers: number
+    readonly successfulSwaps: number
+    readonly rejectedSwaps: number
+  }
+  readonly diagnostics?: {
+    readonly xruns: number
+    readonly queueOverflows: number
+    readonly streamErrors: number
+  }
   readonly telemetry: {
     readonly samplePosition: number
     readonly callbackCount: number
@@ -83,6 +102,10 @@ export interface NativePlanActivation {
   readonly revision: number
   readonly requestedSample: number
   readonly appliedSample: number
+}
+
+export interface NativeEngineCommandResponse {
+  readonly commandId: number
 }
 
 export interface NativeSessionClientOptions {
@@ -268,6 +291,16 @@ export class NativeSessionClient {
     })
 
     return response
+  }
+
+  async sendEngineCommand(
+    command: EngineCommand
+  ): Promise<NativeEngineCommandResponse> {
+    this.ensureReady()
+
+    return this.request<NativeEngineCommandResponse>('engine:command', {
+      command: nativeEngineCommandPayload(command)
+    })
   }
 
   async shutdown(): Promise<void> {
@@ -480,5 +513,25 @@ function parseRuntimeCapabilities(value: unknown): NativeRuntimeCapabilities {
     parameterGraphVersion: Number(candidate.parameterGraphVersion ?? 0),
     assets: Boolean(candidate.assets),
     telemetry: Boolean(candidate.telemetry)
+  }
+}
+
+function nativeEngineCommandPayload(command: EngineCommand): Record<string, unknown> {
+  switch (command.type) {
+    case 'transport:start':
+    case 'transport:stop':
+      return {
+        type: command.type,
+        atSample: command.atSample
+      }
+    case 'panic':
+      return {
+        type: command.type,
+        atSample: 0
+      }
+    default:
+      return {
+        type: command.type
+      }
   }
 }

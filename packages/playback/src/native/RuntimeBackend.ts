@@ -41,6 +41,25 @@ export type RuntimeCompilePlan = NativeExecutionPlan | NativeDiagnosticExecution
 
 export interface RuntimeSnapshot {
   readonly backend: 'web-audio' | 'native'
+  readonly transport: {
+    readonly playing: boolean
+    readonly samplePosition: number
+    readonly beatPosition: number
+    readonly loopIteration: number
+  }
+  readonly stream: {
+    readonly sampleRate: number
+    readonly callbackCount: number
+  }
+  readonly plan: {
+    readonly activePlanId: number | null
+    readonly activeRevision: number | null
+    readonly pendingTransfers: number
+  }
+  readonly diagnostics: {
+    readonly xruns: number
+    readonly queueOverflows: number
+  }
   readonly samplePosition: number
   readonly sampleRate: number
   readonly running: boolean
@@ -98,14 +117,38 @@ export class WebAudioBackend implements RuntimeBackend {
     this.activePlan = { id: handle.planId } as NativeExecutionPlan
   }
 
-  sendCommands(_commands: readonly EngineCommand[]): void {
-    // WebAudioOutput is still driven by PlaybackEvent emission. Command routing
-    // becomes useful once playback output is lifted fully behind RuntimeBackend.
+  sendCommands(commands: readonly EngineCommand[]): void {
+    for (const command of commands) {
+      if (command.type === 'transport:start') {
+        this.running = true
+      } else if (command.type === 'transport:stop' || command.type === 'panic') {
+        this.running = false
+      }
+    }
   }
 
   async getSnapshot(): Promise<RuntimeSnapshot> {
     return {
       backend: 'web-audio',
+      transport: {
+        playing: this.running,
+        samplePosition: 0,
+        beatPosition: 0,
+        loopIteration: 0
+      },
+      stream: {
+        sampleRate: 0,
+        callbackCount: 0
+      },
+      plan: {
+        activePlanId: null,
+        activeRevision: null,
+        pendingTransfers: 0
+      },
+      diagnostics: {
+        xruns: 0,
+        queueOverflows: 0
+      },
       samplePosition: 0,
       sampleRate: 0,
       running: this.running && Boolean(this.activePlan)
@@ -202,9 +245,12 @@ export class NativeBackend implements RuntimeBackend {
     this.consumedHandles.add(handle.transferId)
   }
 
-  sendCommands(_commands: readonly EngineCommand[]): void {
-    // Intentionally pending engine:command support. The backend owns the seam
-    // now; command transport lands with plan activation.
+  sendCommands(commands: readonly EngineCommand[]): void {
+    for (const command of commands) {
+      if (isNativeTransportCommand(command)) {
+        void this.client.sendEngineCommand(command)
+      }
+    }
   }
 
   async getSnapshot(): Promise<RuntimeSnapshot> {
@@ -212,7 +258,37 @@ export class NativeBackend implements RuntimeBackend {
 
     return {
       backend: 'native',
-      samplePosition: snapshot.telemetry?.samplePosition ?? 0,
+      transport: {
+        playing: snapshot.transport?.playing ?? false,
+        samplePosition:
+          snapshot.transport?.samplePosition ?? snapshot.telemetry?.samplePosition ?? 0,
+        beatPosition: snapshot.transport?.beatPosition ?? 0,
+        loopIteration: snapshot.transport?.loopIteration ?? 0
+      },
+      stream: {
+        sampleRate: snapshot.telemetry?.sampleRate ?? snapshot.stream?.sampleRate ?? 0,
+        callbackCount: snapshot.telemetry?.callbackCount ?? 0
+      },
+      plan: {
+        activePlanId:
+          snapshot.plan?.activePlanId ??
+          snapshot.telemetry?.plan?.activePlanId ??
+          null,
+        activeRevision:
+          snapshot.plan?.activeRevision ??
+          snapshot.telemetry?.plan?.activeRevision ??
+          null,
+        pendingTransfers:
+          snapshot.plan?.pendingTransfers ??
+          snapshot.telemetry?.plan?.pendingPlanCount ??
+          0
+      },
+      diagnostics: {
+        xruns: snapshot.diagnostics?.xruns ?? 0,
+        queueOverflows: snapshot.diagnostics?.queueOverflows ?? 0
+      },
+      samplePosition:
+        snapshot.transport?.samplePosition ?? snapshot.telemetry?.samplePosition ?? 0,
       sampleRate: snapshot.telemetry?.sampleRate ?? snapshot.stream?.sampleRate ?? 0,
       running: this.running,
       native: snapshot
@@ -251,5 +327,13 @@ function isNativeDiagnosticExecutionPlan(
   return (
     typeof (plan as NativeDiagnosticExecutionPlan).kind === 'string' &&
     (plan as NativeDiagnosticExecutionPlan).kind === 'diagnostic-tone'
+  )
+}
+
+function isNativeTransportCommand(command: EngineCommand): boolean {
+  return (
+    command.type === 'transport:start' ||
+    command.type === 'transport:stop' ||
+    command.type === 'panic'
   )
 }
