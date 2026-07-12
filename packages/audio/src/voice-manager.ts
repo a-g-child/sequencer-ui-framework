@@ -1,4 +1,4 @@
-import type { Voice, VoiceId } from './voice';
+import type { Voice, VoiceId } from './voice.ts';
 
 export type VoiceManagerStats = {
   maxVoices: number;

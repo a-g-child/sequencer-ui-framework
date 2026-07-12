@@ -3,12 +3,12 @@ import type {
   Operation,
   SequencerDocument
 } from '@sequencer/core'
-import { isNoteEvent } from '../note-event'
+import { isNoteEvent } from '../note-event.ts'
 import {
   clampTimingOffset,
   getTimingOffset,
   setTimingOffset
-} from '../performance'
+} from '../performance.ts'
 
 export type NoteHumanizeOffsetInput = {
   id: EntityId

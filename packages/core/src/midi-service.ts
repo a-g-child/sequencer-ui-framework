@@ -1,4 +1,4 @@
-import type { Service, ServiceContext } from "./service";
+import type { Service, ServiceContext } from "./service.ts";
 
 export class MidiService implements Service {
   readonly id = "midi";

@@ -1,4 +1,4 @@
-import type { AssetReference } from './asset';
+import type { AssetReference } from './asset.ts';
 
 export interface AssetLoader<TAsset = unknown> {
   canLoad(asset: AssetReference): boolean;

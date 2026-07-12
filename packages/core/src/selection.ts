@@ -1,4 +1,4 @@
-import type { EntityId } from "./entity";
+import type { EntityId } from "./entity.ts";
 
 export interface SelectionItem {
   type: string;

@@ -1,7 +1,7 @@
-import type { Command } from "../command";
-import type { SequencerDocument } from "../document";
-import type { Entity } from "../entity";
-import type { Registry } from "../registry";
+import type { Command } from "../command.ts";
+import type { SequencerDocument } from "../document.ts";
+import type { Entity } from "../entity.ts";
+import type { Registry } from "../registry.ts";
 
 export class RenameEntityCommand<T extends Entity> implements Command {
   readonly name = "Rename Entity";

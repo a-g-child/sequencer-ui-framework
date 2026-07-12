@@ -1,4 +1,4 @@
-import type { AssetId, AssetReference } from './asset';
+import type { AssetId, AssetReference } from './asset.ts';
 
 export class AssetRegistry {
   private readonly assets = new Map<AssetId, AssetReference>();

@@ -1,8 +1,8 @@
-import type { Command } from "../command";
-import type { SequencerDocument } from "../document";
-import type { EntityId } from "../entity";
-import type { BeatTime } from "../events";
-import { getPlacement } from "../timeline-lookup";
+import type { Command } from "../command.ts";
+import type { SequencerDocument } from "../document.ts";
+import type { EntityId } from "../entity.ts";
+import type { BeatTime } from "../events.ts";
+import { getPlacement } from "../timeline-lookup.ts";
 
 export class SetPatternPlacementLoopRegionCommand implements Command {
   readonly name = "Set Pattern Placement Loop Region";

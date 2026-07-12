@@ -1,4 +1,4 @@
-import type { Service, ServiceContext } from "./service";
+import type { Service, ServiceContext } from "./service.ts";
 
 export class AudioEngineService implements Service {
   readonly id = "audio-engine";

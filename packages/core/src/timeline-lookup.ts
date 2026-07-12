@@ -1,6 +1,6 @@
-import type { SequencerDocument } from "./document";
-import type { EntityId } from "./entity";
-import type { PatternPlacement } from "./project";
+import type { SequencerDocument } from "./document.ts";
+import type { EntityId } from "./entity.ts";
+import type { PatternPlacement } from "./project.ts";
 
 export function getPlacement(
   document: SequencerDocument,

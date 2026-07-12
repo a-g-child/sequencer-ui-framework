@@ -1,5 +1,5 @@
-import type { DocumentStore } from "./document-store";
-import type { Service } from "./service";
+import type { DocumentStore } from "./document-store.ts";
+import type { Service } from "./service.ts";
 
 export class RuntimePreviewService implements Service {
   readonly id = "runtime-preview";

@@ -1,7 +1,7 @@
-import type { Command } from "../command";
-import type { SequencerDocument } from "../document";
-import type { EntityId } from "../entity";
-import type { BeatTime } from "../events";
+import type { Command } from "../command.ts";
+import type { SequencerDocument } from "../document.ts";
+import type { EntityId } from "../entity.ts";
+import type { BeatTime } from "../events.ts";
 
 export class ResizeMidiClipCommand implements Command {
   readonly name = "Resize MIDI Clip";

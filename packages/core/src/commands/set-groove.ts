@@ -1,5 +1,5 @@
-import type { Command } from "../command";
-import type { SequencerDocument } from "../document";
+import type { Command } from "../command.ts";
+import type { SequencerDocument } from "../document.ts";
 import {
   normalizeGrooveSettings,
   type GrooveSettings

@@ -1,5 +1,5 @@
-import type { SequencerApplication } from "./application";
-import type { DocumentStore } from "./document-store";
+import type { SequencerApplication } from "./application.ts";
+import type { DocumentStore } from "./document-store.ts";
 
 export interface ServiceEvent<T = unknown> {
   readonly type: string;

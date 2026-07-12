@@ -1,16 +1,16 @@
-import { AudioEngineService } from "./audio-engine-service";
-import type { SequencerDocument } from "./document";
-import { DocumentStore } from "./document-store";
-import { EditorTransportService } from "./editor-transport-service";
-import { createDocument } from "./factory";
-import { MidiService } from "./midi-service";
-import { PreferencesService } from "./preferences-service";
-import { RuntimePreviewService } from "./runtime-preview-service";
+import { AudioEngineService } from "./audio-engine-service.ts";
+import type { SequencerDocument } from "./document.ts";
+import { DocumentStore } from "./document-store.ts";
+import { EditorTransportService } from "./editor-transport-service.ts";
+import { createDocument } from "./factory.ts";
+import { MidiService } from "./midi-service.ts";
+import { PreferencesService } from "./preferences-service.ts";
+import { RuntimePreviewService } from "./runtime-preview-service.ts";
 import {
   ServiceEventBus,
   ServiceRegistry,
   type ServiceContext
-} from "./service";
+} from "./service.ts";
 
 export class SequencerApplication {
   readonly documentStore: DocumentStore;

@@ -4,7 +4,7 @@ import type {
   SequencerDocument,
   TimelineEvent
 } from '@sequencer/core'
-import { isNoteEvent } from '../note-event'
+import { isNoteEvent } from '../note-event.ts'
 
 type DeletedNoteState = {
   event: TimelineEvent

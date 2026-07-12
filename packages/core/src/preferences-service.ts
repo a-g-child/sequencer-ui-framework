@@ -1,4 +1,4 @@
-import type { Service, ServiceContext } from "./service";
+import type { Service, ServiceContext } from "./service.ts";
 
 export class PreferencesService implements Service {
   readonly id = "preferences";

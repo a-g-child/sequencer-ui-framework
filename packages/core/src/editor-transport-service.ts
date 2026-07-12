@@ -1,5 +1,5 @@
-import type { Service, ServiceContext } from "./service";
-import type { TransportState } from "./transport";
+import type { Service, ServiceContext } from "./service.ts";
+import type { TransportState } from "./transport.ts";
 
 export class EditorTransportService implements Service {
   readonly id = "editor-transport";

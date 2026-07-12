@@ -4,13 +4,13 @@ import type {
   SequencerDocument,
   TimelineEvent
 } from '@sequencer/core'
-import { isNoteEvent } from '../note-event'
-import { getEffectiveBeat, setTimingOffset } from '../performance'
+import { isNoteEvent } from '../note-event.ts'
+import { getEffectiveBeat, setTimingOffset } from '../performance.ts'
 import {
   resolveNoteCollisions,
   restoreEvents,
   snapshotEvents
-} from './note-collisions'
+} from './note-collisions.ts'
 
 export class QuantizeNotesOperation implements Operation {
   readonly name = 'Quantise Notes'

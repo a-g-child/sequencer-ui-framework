@@ -1,6 +1,6 @@
-import type { Entity, EntityId } from "./entity";
-import type { Operation } from "./operation";
-import type { SelectionItem } from "./selection";
+import type { Entity, EntityId } from "./entity.ts";
+import type { Operation } from "./operation.ts";
+import type { SelectionItem } from "./selection.ts";
 
 export type DocumentEventType =
   | "operation:executed"

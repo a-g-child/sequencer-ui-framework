@@ -1,7 +1,7 @@
-import type { Command } from "../command";
-import type { SequencerDocument } from "../document";
-import type { EntityId } from "../entity";
-import type { MidiClip, TrackClipSlot } from "../project";
+import type { Command } from "../command.ts";
+import type { SequencerDocument } from "../document.ts";
+import type { EntityId } from "../entity.ts";
+import type { MidiClip, TrackClipSlot } from "../project.ts";
 
 type RemovedSlot = {
   trackId: EntityId;

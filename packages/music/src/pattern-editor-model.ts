@@ -1,6 +1,6 @@
 import type { Pattern } from '@sequencer/core'
-import { isNoteEvent } from './note-event'
-import { getTimingOffset } from './performance'
+import { isNoteEvent } from './note-event.ts'
+import { getTimingOffset } from './performance.ts'
 
 export type PatternNoteView = {
   id: string

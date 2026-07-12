@@ -1,7 +1,7 @@
-import type { Command } from "../command";
-import type { SequencerDocument } from "../document";
-import type { EntityId } from "../entity";
-import type { ParameterValue } from "../parameter";
+import type { Command } from "../command.ts";
+import type { SequencerDocument } from "../document.ts";
+import type { EntityId } from "../entity.ts";
+import type { ParameterValue } from "../parameter.ts";
 
 export class SetParameterValueCommand implements Command {
   readonly name = "Set Parameter Value";

@@ -1,2 +1,2 @@
-export * from './music-clipboard'
-export * from './note-clipboard'
+export * from './music-clipboard.ts'
+export * from './note-clipboard.ts'

@@ -1,3 +1,3 @@
-import type { NoteClipboard } from './note-clipboard'
+import type { NoteClipboard } from './note-clipboard.ts'
 
 export type MusicClipboard = NoteClipboard

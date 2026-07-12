@@ -1,1 +1,1 @@
-export type { Operation as Command } from "./operation";
+export type { Operation as Command } from "./operation.ts";

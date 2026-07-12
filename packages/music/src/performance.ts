@@ -1,4 +1,4 @@
-import type { NoteEvent, NoteValue } from './note-event'
+import type { NoteEvent, NoteValue } from './note-event.ts'
 
 export function getEffectiveBeat(note: NoteEvent): number {
   return Math.max(0, note.time + getTimingOffset(note.value))

@@ -1,5 +1,5 @@
-import type { SequencerDocument } from "./document";
-import type { Operation } from "./operation";
+import type { SequencerDocument } from "./document.ts";
+import type { Operation } from "./operation.ts";
 
 export class OperationHistory {
   private undoStack: Operation[] = [];

@@ -3,7 +3,7 @@ import type {
   Operation,
   SequencerDocument
 } from '@sequencer/core'
-import { getNote } from '../note-lookup'
+import { getNote } from '../note-lookup.ts'
 
 export class SetNoteVelocityOperation implements Operation {
   readonly name = 'Set Note Velocity'

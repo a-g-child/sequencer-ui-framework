@@ -1,10 +1,10 @@
-import { ClipboardModel } from "./clipboard";
-import type { SequencerDocument } from "./document";
-import { DocumentEventBus } from "./document-event-bus";
-import type { Entity } from "./entity";
-import { OperationHistory } from "./history";
-import type { Operation } from "./operation";
-import { SelectionModel, type SelectionItem } from "./selection";
+import { ClipboardModel } from "./clipboard.ts";
+import type { SequencerDocument } from "./document.ts";
+import { DocumentEventBus } from "./document-event-bus.ts";
+import type { Entity } from "./entity.ts";
+import { OperationHistory } from "./history.ts";
+import type { Operation } from "./operation.ts";
+import { SelectionModel, type SelectionItem } from "./selection.ts";
 
 export interface DocumentObserver {
   onCommandExecuted(operation: Operation): void;

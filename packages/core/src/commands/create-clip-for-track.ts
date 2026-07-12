@@ -1,13 +1,13 @@
-import type { Command } from "../command";
-import type { SequencerDocument } from "../document";
-import type { EntityId } from "../entity";
-import type { BeatTime } from "../events";
+import type { Command } from "../command.ts";
+import type { SequencerDocument } from "../document.ts";
+import type { EntityId } from "../entity.ts";
+import type { BeatTime } from "../events.ts";
 import {
   createMidiClip,
   createPattern,
   createTrackClipSlot
-} from "../factory";
-import type { MidiClip, Pattern, TrackClipSlot } from "../project";
+} from "../factory.ts";
+import type { MidiClip, Pattern, TrackClipSlot } from "../project.ts";
 
 export class CreateClipForTrackCommand implements Command {
   readonly name = "Create Clip For Track";

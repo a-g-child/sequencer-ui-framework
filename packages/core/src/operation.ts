@@ -1,4 +1,4 @@
-import type { SequencerDocument } from "./document";
+import type { SequencerDocument } from "./document.ts";
 
 export interface Operation {
   readonly name: string;

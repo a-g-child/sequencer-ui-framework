@@ -1,6 +1,6 @@
-import type { SequencerDocument } from "./document";
+import type { SequencerDocument } from "./document.ts";
 import type { SampleSlot } from "@sequencer/device";
-import { normalizeGrooveSettings } from "./groove";
+import { normalizeGrooveSettings } from "./groove.ts";
 
 export interface ValidationIssue {
   level: "error" | "warning";

@@ -7,13 +7,13 @@ import type {
 import {
   isNoteEvent,
   type NoteValue
-} from '../note-event'
-import { getTimingOffset, setTimingOffset } from '../performance'
+} from '../note-event.ts'
+import { getTimingOffset, setTimingOffset } from '../performance.ts'
 import {
   resolveNoteCollisions,
   restoreEvents,
   snapshotEvents
-} from './note-collisions'
+} from './note-collisions.ts'
 
 export type MoveNoteTarget = {
   id: EntityId

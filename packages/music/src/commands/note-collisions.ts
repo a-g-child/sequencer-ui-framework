@@ -1,5 +1,5 @@
 import type { EntityId, TimelineEvent } from '@sequencer/core'
-import { isNoteEvent, type NoteEvent } from '../note-event'
+import { isNoteEvent, type NoteEvent } from '../note-event.ts'
 
 const beatEpsilon = 1e-9
 

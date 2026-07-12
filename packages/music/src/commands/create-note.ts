@@ -6,13 +6,13 @@ import {
   type SequencerDocument,
   type TimelineEvent
 } from '@sequencer/core'
-import type { NoteEvent } from '../note-event'
-import { setTimingOffset } from '../performance'
+import type { NoteEvent } from '../note-event.ts'
+import { setTimingOffset } from '../performance.ts'
 import {
   resolveNoteCollisions,
   restoreEvents,
   snapshotEvents
-} from './note-collisions'
+} from './note-collisions.ts'
 
 export class CreateNoteOperation implements Operation {
   readonly name = 'Create Note'

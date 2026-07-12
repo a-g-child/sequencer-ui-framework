@@ -3,7 +3,7 @@ import type {
   SequencerDocument,
   TimelineEvent
 } from '@sequencer/core'
-import { isNoteEvent, type NoteEvent } from './note-event'
+import { isNoteEvent, type NoteEvent } from './note-event.ts'
 
 export function getNote(
   document: SequencerDocument,

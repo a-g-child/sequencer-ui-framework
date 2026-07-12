@@ -4,12 +4,12 @@ import type {
   SequencerDocument,
   TimelineEvent
 } from '@sequencer/core';
-import { isNoteEvent } from '../note-event';
+import { isNoteEvent } from '../note-event.ts';
 import {
   resolveNoteCollisions,
   restoreEvents,
   snapshotEvents
-} from './note-collisions';
+} from './note-collisions.ts';
 
 export class ResizeNotesOperation implements Operation {
   readonly name = 'Resize Notes';

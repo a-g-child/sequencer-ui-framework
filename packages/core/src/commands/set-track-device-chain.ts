@@ -1,6 +1,6 @@
-import type { Command } from "../command";
-import type { SequencerDocument } from "../document";
-import type { EntityId } from "../entity";
+import type { Command } from "../command.ts";
+import type { SequencerDocument } from "../document.ts";
+import type { EntityId } from "../entity.ts";
 
 export class SetTrackDeviceChainCommand implements Command {
   readonly name = "Set Track Device Chain";

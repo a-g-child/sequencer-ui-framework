@@ -1,20 +1,20 @@
-import type { Command } from "../command";
-import { addDefaultTrackParameters } from "../default-parameters";
-import type { SequencerDocument } from "../document";
-import type { BeatTime } from "../events";
+import type { Command } from "../command.ts";
+import { addDefaultTrackParameters } from "../default-parameters.ts";
+import type { SequencerDocument } from "../document.ts";
+import type { BeatTime } from "../events.ts";
 import {
   createMidiClip,
   createPattern,
   createPatternPlacement,
   createTrack,
   createTrackClipSlot
-} from "../factory";
-import type { Parameter, ParameterDefinition } from "../parameter";
+} from "../factory.ts";
+import type { Parameter, ParameterDefinition } from "../parameter.ts";
 import type {
   Pattern,
   Track,
   MidiClip
-} from "../project";
+} from "../project.ts";
 
 export class AddTrackCommand implements Command {
   readonly name = "Add Track";

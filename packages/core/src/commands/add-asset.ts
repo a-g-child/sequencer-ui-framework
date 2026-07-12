@@ -1,6 +1,6 @@
 import type { AssetReference } from "@sequencer/assets";
-import type { Command } from "../command";
-import type { SequencerDocument } from "../document";
+import type { Command } from "../command.ts";
+import type { SequencerDocument } from "../document.ts";
 
 export class AddAssetCommand implements Command {
   readonly name = "Add Asset";

@@ -1,7 +1,7 @@
 import type { DeviceParameterValue } from "@sequencer/device";
-import type { Command } from "../command";
-import type { SequencerDocument } from "../document";
-import type { EntityId } from "../entity";
+import type { Command } from "../command.ts";
+import type { SequencerDocument } from "../document.ts";
+import type { EntityId } from "../entity.ts";
 
 export class SetDeviceParameterValueCommand implements Command {
   readonly name = "Set Device Parameter Value";

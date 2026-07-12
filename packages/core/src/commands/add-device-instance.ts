@@ -1,6 +1,6 @@
 import type { DeviceInstance } from "@sequencer/device";
-import type { Command } from "../command";
-import type { SequencerDocument } from "../document";
+import type { Command } from "../command.ts";
+import type { SequencerDocument } from "../document.ts";
 
 export class AddDeviceInstanceCommand implements Command {
   readonly name = "Add Device Instance";

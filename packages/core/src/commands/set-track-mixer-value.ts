@@ -1,8 +1,8 @@
-import type { Command } from "../command";
-import type { SequencerDocument } from "../document";
-import type { EntityId } from "../entity";
-import type { TrackMixerState } from "../project";
-import { createDefaultTrackMixerState } from "../project";
+import type { Command } from "../command.ts";
+import type { SequencerDocument } from "../document.ts";
+import type { EntityId } from "../entity.ts";
+import type { TrackMixerState } from "../project.ts";
+import { createDefaultTrackMixerState } from "../project.ts";
 
 export type TrackMixerKey = keyof TrackMixerState;
 

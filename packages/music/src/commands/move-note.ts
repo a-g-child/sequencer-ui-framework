@@ -8,14 +8,14 @@ import type {
 import {
   getTimingOffset,
   setTimingOffset
-} from '../performance'
-import type { NoteValue } from '../note-event'
-import { getNote } from '../note-lookup'
+} from '../performance.ts'
+import type { NoteValue } from '../note-event.ts'
+import { getNote } from '../note-lookup.ts'
 import {
   resolveNoteCollisions,
   restoreEvents,
   snapshotEvents
-} from './note-collisions'
+} from './note-collisions.ts'
 
 export class MoveNoteOperation implements Operation {
   readonly name = 'Move Note'
