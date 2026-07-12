@@ -1,5 +1,12 @@
-import { createServer, type Server } from 'node:http'
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse
+} from 'node:http'
 import { randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import { extname, resolve, sep } from 'node:path'
 import { NativeRuntimeManager } from '@sequencer/native-runtime-node'
 import type {
   EngineCommand,
@@ -15,6 +22,7 @@ export interface NativeRuntimeServerOptions {
   readonly host?: string
   readonly port?: number
   readonly wsPath?: string
+  readonly uiDirectory?: string
   readonly token?: string
   readonly managerFactory?: () => NativeRuntimeManager
   readonly ownerDisconnectGraceMs?: number
@@ -38,6 +46,7 @@ export class NativeRuntimeServer {
   private readonly host: string
   private readonly port: number
   private readonly wsPath: string
+  private readonly uiDirectory?: string
   private readonly token?: string
   private readonly managerFactory: () => NativeRuntimeManager
   private readonly ownerDisconnectGraceMs: number
@@ -53,6 +62,7 @@ export class NativeRuntimeServer {
     this.host = options.host ?? '127.0.0.1'
     this.port = options.port ?? 43127
     this.wsPath = options.wsPath ?? '/native-runtime'
+    this.uiDirectory = options.uiDirectory
     this.token = options.token
     this.managerFactory = options.managerFactory ?? (() => new NativeRuntimeManager())
     this.ownerDisconnectGraceMs = options.ownerDisconnectGraceMs ?? 2_000
@@ -66,9 +76,8 @@ export class NativeRuntimeServer {
       this.allowedOrigins.add(`http://localhost:${this.uiPort}`)
     }
 
-    this.httpServer = createServer((_req, res) => {
-      res.statusCode = 404
-      res.end('Not Found')
+    this.httpServer = createServer((req, res) => {
+      void this.handleHttpRequest(req, res)
     })
 
     this.wsServer = new WebSocketServer({ noServer: true })
@@ -271,6 +280,103 @@ export class NativeRuntimeServer {
       this.state.manager = undefined
       this.ownerReleaseTimer = undefined
     }, this.ownerDisconnectGraceMs)
+  }
+
+  private async handleHttpRequest(
+    req: IncomingMessage,
+    res: ServerResponse
+  ): Promise<void> {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.statusCode = 404
+      res.end('Not Found')
+      return
+    }
+
+    if (!this.uiDirectory) {
+      res.statusCode = 404
+      res.end('Not Found')
+      return
+    }
+
+    const requestedPath = new URL(req.url ?? '/', `http://${this.host}`).pathname
+    const normalizedPath = requestedPath === '/' ? '/index.html' : requestedPath
+
+    try {
+      const filePath = resolveUiFilePath(this.uiDirectory, normalizedPath)
+      const fileData = await readFile(filePath)
+      const contentType = contentTypeForPath(filePath)
+
+      res.statusCode = 200
+      res.setHeader('Content-Type', contentType)
+
+      if (req.method === 'HEAD') {
+        res.end()
+        return
+      }
+
+      res.end(fileData)
+      return
+    } catch {
+      if (normalizedPath.startsWith('/assets/')) {
+        res.statusCode = 404
+        res.end('Not Found')
+        return
+      }
+    }
+
+    try {
+      const indexPath = resolveUiFilePath(this.uiDirectory, '/index.html')
+      const indexHtml = await readFile(indexPath)
+
+      res.statusCode = 200
+      res.setHeader('Content-Type', 'text/html; charset=utf-8')
+
+      if (req.method === 'HEAD') {
+        res.end()
+        return
+      }
+
+      res.end(indexHtml)
+    } catch {
+      res.statusCode = 404
+      res.end('Not Found')
+    }
+  }
+}
+
+function resolveUiFilePath(uiDirectory: string, urlPathname: string): string {
+  const root = resolve(uiDirectory)
+  const relative = decodeURIComponent(urlPathname).replace(/^\/+/, '')
+  const resolved = resolve(root, relative)
+
+  if (resolved === root || resolved.startsWith(`${root}${sep}`)) {
+    return resolved
+  }
+
+  throw createRuntimeError('server:invalid-path', 'Invalid static file path.')
+}
+
+function contentTypeForPath(path: string): string {
+  switch (extname(path)) {
+    case '.html':
+      return 'text/html; charset=utf-8'
+    case '.js':
+      return 'application/javascript; charset=utf-8'
+    case '.css':
+      return 'text/css; charset=utf-8'
+    case '.json':
+      return 'application/json; charset=utf-8'
+    case '.svg':
+      return 'image/svg+xml'
+    case '.png':
+      return 'image/png'
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg'
+    case '.webp':
+      return 'image/webp'
+    default:
+      return 'application/octet-stream'
   }
 }
 
