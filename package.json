@@ -7,6 +7,8 @@
   ],
   "scripts": {
     "dev": "npm run dev -w apps/ui",
+    "dev:native-runtime": "npm run dev -w packages/native-runtime-server",
+    "dev:ui-native": "VITE_PLAYBACK_BACKEND=native VITE_NATIVE_RUNTIME_WS=ws://127.0.0.1:43127/native-runtime npm run dev -w apps/ui",
     "build": "npm run build --workspaces --if-present",
     "check": "npm run check --workspaces --if-present",
     "test": "npm run test --workspaces --if-present"
