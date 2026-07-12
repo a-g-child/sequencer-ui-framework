@@ -12,6 +12,7 @@ import type {
   NativeEngineSnapshot,
   NativePlanActivation,
   NativePreparedPlanHandle,
+  NativeRuntimeStartOptions,
   NativeRuntimeTransport,
   NativeSessionCapabilities
 } from '@sequencer/playback'
@@ -28,8 +29,8 @@ export class NodeNativeRuntimeTransport implements NativeRuntimeTransport {
     this.client = options.client ?? new NativeSessionClient(options)
   }
 
-  start(): Promise<NativeSessionCapabilities> {
-    return this.client.start()
+  start(options?: NativeRuntimeStartOptions): Promise<NativeSessionCapabilities> {
+    return this.client.start(options)
   }
 
   listAudioDevices(driver: NativeAudioDriver): Promise<NativeAudioDeviceInfo[]> {

@@ -1,4 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { accessSync, constants, existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import type {
   EngineCommand,
   NativeActiveStreamInfo,
@@ -10,6 +12,7 @@ import type {
   NativePlanActivation,
   NativePreparedPlanHandle,
   NativeRuntimeCapabilities,
+  NativeRuntimeStartOptions,
   NativeSessionCapabilities
 } from '@sequencer/playback'
 
@@ -53,9 +56,11 @@ export class NativeSessionClient {
   private currentState: NativeSessionState = 'stopped'
 
   constructor(options: NativeSessionClientOptions = {}) {
-    this.command = options.command ?? 'cargo'
-    this.args = options.args ?? ['run', '-p', 'engine-host', '--', '--session-stdio']
-    this.cwd = options.cwd
+    const launch = resolveEngineHostLaunch(options)
+
+    this.command = launch.command
+    this.args = launch.args
+    this.cwd = launch.cwd
     this.shutdownTimeoutMs = options.shutdownTimeoutMs ?? 1_000
   }
 
@@ -67,7 +72,7 @@ export class NativeSessionClient {
     return this.stderrBuffer
   }
 
-  async start(): Promise<NativeSessionCapabilities> {
+  async start(_options?: NativeRuntimeStartOptions): Promise<NativeSessionCapabilities> {
     if (this.currentState !== 'stopped') {
       throw new Error(`native session cannot start from ${this.currentState}`)
     }
@@ -75,7 +80,8 @@ export class NativeSessionClient {
     this.currentState = 'starting'
     const child = spawn(this.command, [...this.args], {
       cwd: this.cwd,
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: process.env
     })
 
     this.child = child
@@ -85,14 +91,20 @@ export class NativeSessionClient {
     child.stderr.on('data', (chunk: string) => {
       this.stderrBuffer += chunk
     })
-    child.once('error', (error) => this.fail(error))
+    child.once('error', (error) => {
+      this.fail(
+        new Error(
+          `${error.message}\n${this.describeLaunchAttempt()}`
+        )
+      )
+    })
     child.once('exit', (code, signal) => {
       if (this.currentState !== 'stopped') {
         this.fail(
           new Error(
             `native session exited unexpectedly with code ${code ?? 'null'} signal ${
               signal ?? 'null'
-            }`
+            }\n${this.describeLaunchAttempt()}\nstderr: ${this.stderrBuffer.slice(-2_000)}`
           )
         )
       }
@@ -326,14 +338,25 @@ export class NativeSessionClient {
     if (this.currentState === 'stopped') return
 
     this.currentState = 'failed'
-    this.readyRejecter?.(error)
+    const enriched = new Error(`${error.message}\n${this.describeLaunchAttempt()}`)
+    this.readyRejecter?.(enriched)
     this.readyResolver = undefined
     this.readyRejecter = undefined
 
     for (const pending of this.pending.values()) {
-      pending.reject(error)
+      pending.reject(enriched)
     }
     this.pending.clear()
+  }
+
+  private describeLaunchAttempt(): string {
+    return [
+      `engine-host command: ${this.command}`,
+      `engine-host args: ${JSON.stringify(this.args)}`,
+      `engine-host cwd: ${this.cwd ?? '<none>'}`,
+      `engine-host env path: ${process.env.SEQUENCER_ENGINE_HOST_PATH ?? '<default>'}`,
+      `engine-host env cargo: ${process.env.CARGO ?? '<unset>'}`
+    ].join('\n')
   }
 
   private async finishShutdown(
@@ -377,6 +400,60 @@ export function parseNativeSessionLine(line: string): NativeSessionMessage {
         error instanceof Error ? error.message : String(error)
       }`
     )
+  }
+}
+
+function resolveEngineHostLaunch(
+  options: NativeSessionClientOptions
+): { readonly command: string; readonly args: readonly string[]; readonly cwd?: string } {
+  const explicitPath = options.command?.trim()
+  if (explicitPath) {
+    return {
+      command: explicitPath,
+      args: options.args ?? [],
+      cwd: options.cwd
+    }
+  }
+
+  const configuredPath = process.env.SEQUENCER_ENGINE_HOST_PATH?.trim()
+  if (configuredPath && isExecutable(configuredPath)) {
+    return {
+      command: configuredPath,
+      args: options.args ?? ['--session-stdio'],
+      cwd: options.cwd ?? defaultEngineHostCwd()
+    }
+  }
+
+  const defaultPath = defaultEngineHostPath()
+  if (isExecutable(defaultPath)) {
+    return {
+      command: defaultPath,
+      args: options.args ?? ['--session-stdio'],
+      cwd: options.cwd ?? defaultEngineHostCwd()
+    }
+  }
+
+  return {
+    command: options.command ?? 'cargo',
+    args: options.args ?? ['run', '-p', 'engine-host', '--', '--session-stdio'],
+    cwd: options.cwd
+  }
+}
+
+function defaultEngineHostPath(): string {
+  return fileURLToPath(new URL('../../../native-audio-engine/target/debug/engine-host', import.meta.url))
+}
+
+function defaultEngineHostCwd(): string {
+  return fileURLToPath(new URL('../../../native-audio-engine', import.meta.url))
+}
+
+function isExecutable(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK)
+    return true
+  } catch {
+    return false
   }
 }
 

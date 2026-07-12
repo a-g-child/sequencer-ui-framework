@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { accessSync, constants } from 'node:fs'
 import { describe, it } from 'node:test'
 import type { NativeExecutionPlan } from '@sequencer/audio-graph'
 import {
@@ -17,6 +18,25 @@ import type {
 
 const nativeEngineCwd = new URL('../../../native-audio-engine/', import.meta.url)
   .pathname
+
+const nativeHostPath = process.env.SEQUENCER_ENGINE_HOST_PATH?.trim()
+const defaultNativeHostPath = new URL(
+  '../../../native-audio-engine/target/debug/engine-host',
+  import.meta.url
+).pathname
+
+function isExecutable(path: string | undefined): boolean {
+  if (!path) {
+    return false
+  }
+
+  try {
+    accessSync(path, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
 
 function createPlan(id = 'plan-1'): NativeExecutionPlan {
   return {
@@ -102,6 +122,14 @@ describe('RuntimeBackend', () => {
   })
 
   it('starts native audio and exposes authoritative native snapshots', async () => {
+    const resolvedHostPath = nativeHostPath ?? defaultNativeHostPath
+    const hostExecutable = isExecutable(nativeHostPath) || isExecutable(defaultNativeHostPath)
+
+    if (!hostExecutable) {
+      console.info(`[skip] engine-host binary not available at ${resolvedHostPath}`)
+      return
+    }
+
     const backend = createNativeBackend()
 
     try {
