@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { NativeExecutionPlan } from '@sequencer/audio-graph'
 import {
+  createRuntimeBackend,
   createDiagnosticNativeExecutionPlan,
   NativeBackend,
   WebAudioBackend,
@@ -43,6 +44,30 @@ function createNativeBackend(): NativeBackend {
 }
 
 describe('RuntimeBackend', () => {
+  it('creates the selected runtime backend from factory options', async () => {
+    const output = new FakeWebAudioOutput()
+    const webBackend = createRuntimeBackend({
+      kind: 'web-audio',
+      webAudioOutput: output
+    })
+    const nativeBackend = createRuntimeBackend({
+      kind: 'native',
+      native: {
+        client: new NativeSessionClient({
+          command: 'cargo',
+          args: ['--version']
+        })
+      }
+    })
+
+    assert.ok(webBackend instanceof WebAudioBackend)
+    assert.ok(nativeBackend instanceof NativeBackend)
+
+    await webBackend.start()
+    assert.equal(output.connected, true)
+    await webBackend.dispose()
+  })
+
   it('lets WebAudio compile and activate a backend-neutral handle', async () => {
     const output = new FakeWebAudioOutput()
     const backend: RuntimeBackend = new WebAudioBackend(output)

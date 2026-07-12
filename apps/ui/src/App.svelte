@@ -17,12 +17,16 @@
   import {
     ClockService,
     PlaybackService,
+    PlaybackRuntimeController,
     type ClockServiceStatus,
     type ClipLaunchQuantize,
+    createRuntimeBackend,
     type PlaybackDeviceDiagnostics,
     type PlaybackEvent,
     type PlaybackRuntimeParameterValue,
-    type PlaybackServiceStatus
+    type PlaybackServiceStatus,
+    type RuntimeBackendKind,
+    type NativeAudioDriver
   } from '@sequencer/playback'
   import {
     ARPEGGIATOR_DESCRIPTOR,
@@ -151,9 +155,29 @@
     DEVICE_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor])
   )
 
+  const playbackBackendKind = resolvePlaybackBackendKind()
+  const runtimeController =
+    playbackBackendKind === 'native'
+      ? new PlaybackRuntimeController(
+          createRuntimeBackend({
+            kind: 'native',
+            native: {
+              audio: {
+                driver: resolveNativeAudioDriver(),
+                sampleRate: 48_000,
+                bufferFrames: 128,
+                channels: 2
+              }
+            }
+          })
+        )
+      : undefined
+
   const app = new SequencerApplication()
   const clock = app.services.add(new ClockService())
-  const playback = app.services.add(new PlaybackService())
+  const playback = app.services.add(
+    new PlaybackService(undefined, runtimeController)
+  )
   const controller = new AppController(app)
   const store = app.documentStore
   const localProjectStore = new LocalProjectStore()
@@ -470,7 +494,7 @@
 	    runtimeParameterValues = nextValues
 	  }
 
-	  function syncRuntimeSnapshot(snapshot: RuntimeSnapshot | undefined): void {
+  function syncRuntimeSnapshot(snapshot: RuntimeSnapshot | undefined): void {
 	    if (!snapshot) return
 
 	    runtimePlayheadAnchor = {
@@ -544,6 +568,33 @@
       playbackStatus.liveClips.activeClipByTrackId[selectedTrackId]?.clipId,
       playbackStatus.liveClips.pendingLaunchByTrackId[selectedTrackId]
     )
+  }
+
+  function resolvePlaybackBackendKind(): RuntimeBackendKind {
+    return normalizePlaybackBackendKind(
+      readDevelopmentSetting('sequencer.playbackBackend') ??
+        import.meta.env.VITE_PLAYBACK_BACKEND
+    )
+  }
+
+  function resolveNativeAudioDriver(): NativeAudioDriver {
+    const value =
+      readDevelopmentSetting('sequencer.nativeAudioDriver') ??
+      import.meta.env.VITE_NATIVE_AUDIO_DRIVER
+
+    return value === 'cpal' ? 'cpal' : 'null'
+  }
+
+  function normalizePlaybackBackendKind(value: unknown): RuntimeBackendKind {
+    return value === 'native' ? 'native' : 'web-audio'
+  }
+
+  function readDevelopmentSetting(key: string): string | undefined {
+    try {
+      return localStorage.getItem(key) ?? undefined
+    } catch {
+      return undefined
+    }
   }
 
   function refreshMatrixTracks() {
@@ -2574,6 +2625,7 @@
 	    transportPlaying={effectiveTransportPlaying}
 	    {transportBpm}
 	    transportBeat={effectiveTransportBeat}
+      {playbackBackendKind}
 	    runtimeTransportState={runtimeTransportStatus.state}
 	    runtimeTransportFailure={runtimeTransportStatus.state === 'failed'
 	      ? runtimeTransportStatus.message

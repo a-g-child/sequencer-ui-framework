@@ -50,6 +50,25 @@ export interface RuntimeBackend {
   dispose(): Promise<void>
 }
 
+export type RuntimeBackendKind = 'web-audio' | 'native'
+
+export interface RuntimeBackendFactoryOptions {
+  readonly kind: RuntimeBackendKind
+  readonly webAudioOutput?: PlaybackOutput
+  readonly native?: NativeBackendOptions
+}
+
+export function createRuntimeBackend(
+  options: RuntimeBackendFactoryOptions
+): RuntimeBackend {
+  switch (options.kind) {
+    case 'native':
+      return new NativeBackend(options.native)
+    case 'web-audio':
+      return new WebAudioBackend(options.webAudioOutput)
+  }
+}
+
 export class WebAudioBackend implements RuntimeBackend {
   private readonly output: PlaybackOutput | undefined
   private activePlan?: NativeExecutionPlan

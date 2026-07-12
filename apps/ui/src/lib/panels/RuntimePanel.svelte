@@ -2,6 +2,7 @@
   export let transportPlaying = false;
   export let transportBpm = 120;
   export let transportBeat = 0;
+  export let playbackBackendKind = 'web-audio';
   export let audioEngineStatus = 'idle';
   export let midiStatus = 'idle';
   export let preferencesStatus = 'not loaded';
@@ -56,6 +57,10 @@
   <div>
     <span>Beat</span>
     <strong>{transportBeat.toFixed(2)}</strong>
+  </div>
+  <div>
+    <span>Playback Backend</span>
+    <strong>{playbackBackendKind}</strong>
   </div>
   <div>
     <span>Audio Engine</span>
