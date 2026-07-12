@@ -1,7 +1,18 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import type { EngineCommand } from './schemas.ts'
+import type {
+  EngineCommand,
+  NativeActiveStreamInfo,
+  NativeAudioDeviceInfo,
+  NativeAudioDriver,
+  NativeAudioStartRequest,
+  NativeEngineCommandResponse,
+  NativeEngineSnapshot,
+  NativePlanActivation,
+  NativePreparedPlanHandle,
+  NativeRuntimeCapabilities,
+  NativeSessionCapabilities
+} from '@sequencer/playback'
 
-export type NativeAudioDriver = 'null' | 'cpal'
 export type NativeSessionState =
   | 'stopped'
   | 'starting'
@@ -11,102 +22,6 @@ export type NativeSessionState =
   | 'failed'
 
 export const NATIVE_SESSION_PROTOCOL_VERSION = 1
-
-export interface NativeRuntimeCapabilities {
-  readonly executionPlanVersion: number
-  readonly eventGraphVersion: number
-  readonly parameterGraphVersion: number
-  readonly assets: boolean
-  readonly telemetry: boolean
-}
-
-export interface NativeSessionCapabilities {
-  readonly protocolVersion: number
-  readonly capabilities: NativeRuntimeCapabilities
-  readonly drivers: readonly NativeAudioDriver[]
-  readonly messages: readonly string[]
-}
-
-export interface NativeAudioDeviceInfo {
-  readonly id: string
-  readonly name: string
-  readonly isDefault: boolean
-}
-
-export interface NativeAudioStartRequest {
-  readonly driver: NativeAudioDriver
-  readonly device?: string
-  readonly sampleRate?: number
-  readonly bufferFrames?: number
-  readonly channels?: number
-}
-
-export interface NativeActiveStreamInfo {
-  readonly driver: NativeAudioDriver
-  readonly deviceId: string
-  readonly deviceName: string
-  readonly sampleRate: number
-  readonly channels: number
-  readonly sampleFormat: string
-  readonly requestedBufferFrames?: number
-}
-
-export interface NativeEngineSnapshot {
-  readonly stream: {
-    readonly deviceId: string
-    readonly sampleRate: number
-    readonly channels: number
-  } | null
-  readonly transport?: {
-    readonly playing: boolean
-    readonly samplePosition: number
-    readonly beatPosition: number
-    readonly loopIteration: number
-  }
-  readonly plan?: {
-    readonly activePlanId: number | null
-    readonly activeRevision: number | null
-    readonly pendingTransfers: number
-    readonly successfulSwaps: number
-    readonly rejectedSwaps: number
-  }
-  readonly diagnostics?: {
-    readonly xruns: number
-    readonly queueOverflows: number
-    readonly streamErrors: number
-  }
-  readonly telemetry: {
-    readonly samplePosition: number
-    readonly callbackCount: number
-    readonly sampleRate: number
-    readonly callbackFrames: number
-    readonly outputChannels: number
-    readonly plan?: {
-      readonly activePlanId: number | null
-      readonly activeRevision: number | null
-      readonly pendingPlanCount: number
-      readonly successfulSwaps: number
-      readonly rejectedSwaps: number
-    }
-  } | null
-}
-
-export interface NativePreparedPlanHandle {
-  readonly transferId: number
-  readonly planId: number
-  readonly revision: number
-}
-
-export interface NativePlanActivation {
-  readonly planId: number
-  readonly revision: number
-  readonly requestedSample: number
-  readonly appliedSample: number
-}
-
-export interface NativeEngineCommandResponse {
-  readonly commandId: number
-}
 
 export interface NativeSessionClientOptions {
   readonly command?: string

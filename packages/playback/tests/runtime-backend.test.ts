@@ -8,7 +8,12 @@ import {
   WebAudioBackend,
   type RuntimeBackend
 } from '../src/native/RuntimeBackend.ts'
-import { NativeSessionClient } from '../src/native/NativeSessionClient.ts'
+import { NodeNativeRuntimeTransport } from '@sequencer/native-runtime-node'
+import type {
+  NativeAudioDriver,
+  NativeAudioStartRequest,
+  NativeRuntimeTransport
+} from '../src/native/NativeRuntimeTransport.ts'
 
 const nativeEngineCwd = new URL('../../../native-audio-engine/', import.meta.url)
   .pathname
@@ -28,7 +33,7 @@ function createPlan(id = 'plan-1'): NativeExecutionPlan {
 
 function createNativeBackend(): NativeBackend {
   return new NativeBackend({
-    client: new NativeSessionClient({
+    transport: new NodeNativeRuntimeTransport({
       command: process.env.CARGO ?? '/Users/andrew/.cargo/bin/cargo',
       args: ['run', '-p', 'engine-host', '--', '--session-stdio'],
       cwd: nativeEngineCwd,
@@ -53,10 +58,7 @@ describe('RuntimeBackend', () => {
     const nativeBackend = createRuntimeBackend({
       kind: 'native',
       native: {
-        client: new NativeSessionClient({
-          command: 'cargo',
-          args: ['--version']
-        })
+        transport: new FakeNativeRuntimeTransport()
       }
     })
 
@@ -66,6 +68,17 @@ describe('RuntimeBackend', () => {
     await webBackend.start()
     assert.equal(output.connected, true)
     await webBackend.dispose()
+  })
+
+  it('reports a clear failure when native is selected without a desktop transport', async () => {
+    const backend = createRuntimeBackend({
+      kind: 'native'
+    })
+
+    await assert.rejects(
+      () => backend.start(),
+      /Native playback requires the desktop host/
+    )
   })
 
   it('lets WebAudio compile and activate a backend-neutral handle', async () => {
@@ -164,4 +177,72 @@ class FakeWebAudioOutput {
   panic(): void {
     this.panicked = true
   }
+}
+
+class FakeNativeRuntimeTransport implements NativeRuntimeTransport {
+  async start() {
+    return {
+      protocolVersion: 1,
+      capabilities: {
+        executionPlanVersion: 1,
+        eventGraphVersion: 1,
+        parameterGraphVersion: 0,
+        assets: false,
+        telemetry: true
+      },
+      drivers: ['null'] as const,
+      messages: []
+    }
+  }
+
+  async listAudioDevices(_driver: NativeAudioDriver) {
+    return []
+  }
+
+  async startAudio(_request: NativeAudioStartRequest) {
+    return {
+      driver: 'null' as const,
+      deviceId: 'null',
+      deviceName: 'Null',
+      sampleRate: 48_000,
+      channels: 2,
+      sampleFormat: 'f32'
+    }
+  }
+
+  async stopAudio() {}
+
+  async preparePlan(_plan: unknown) {
+    return {
+      transferId: 1,
+      planId: 1,
+      revision: 1
+    }
+  }
+
+  async activatePlan(_transferId: number, _requestedSample = 0) {
+    return {
+      planId: 1,
+      revision: 1,
+      requestedSample: 0,
+      appliedSample: 0
+    }
+  }
+
+  async sendCommands() {
+    return [
+      {
+        commandId: 1
+      }
+    ]
+  }
+
+  async getSnapshot() {
+    return {
+      stream: null,
+      telemetry: null
+    }
+  }
+
+  async dispose() {}
 }

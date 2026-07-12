@@ -1,0 +1,16 @@
+{
+  "name": "@sequencer/native-runtime-node",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "node --experimental-transform-types --experimental-specifier-resolution=node --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@sequencer/playback": "file:../playback"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.2"
+  }
+}

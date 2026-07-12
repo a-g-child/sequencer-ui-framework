@@ -3,11 +3,11 @@ import type { PlaybackOutput } from '../output/PlaybackOutput.ts'
 import type { EngineCommand } from './schemas.ts'
 import type { RuntimeSnapshot } from './RuntimeTypes.ts'
 import {
-  NativeSessionClient,
   type NativeAudioStartRequest,
-  type NativeEngineSnapshot,
-  type NativeRuntimeCapabilities
-} from './NativeSessionClient.ts'
+  type NativeRuntimeCapabilities,
+  type NativeRuntimeTransport,
+  RendererNativeRuntimeTransport
+} from './NativeRuntimeTransport.ts'
 
 export interface WebAudioPreparedRuntimeHandle {
   readonly id: string
@@ -156,7 +156,7 @@ export class WebAudioBackend implements RuntimeBackend {
 }
 
 export interface NativeBackendOptions {
-  readonly client?: NativeSessionClient
+  readonly transport?: NativeRuntimeTransport
   readonly audio?: NativeAudioStartRequest
 }
 
@@ -164,7 +164,7 @@ export class NativeBackend implements RuntimeBackend {
   private static nextBackendId = 1
 
   private readonly backendId = `native:${NativeBackend.nextBackendId++}`
-  private readonly client: NativeSessionClient
+  private readonly transport: NativeRuntimeTransport
   private readonly audio: NativeAudioStartRequest
   private readonly preparedHandles = new Set<number>()
   private readonly consumedHandles = new Set<number>()
@@ -172,7 +172,7 @@ export class NativeBackend implements RuntimeBackend {
   private running = false
 
   constructor(options: NativeBackendOptions = {}) {
-    this.client = options.client ?? new NativeSessionClient()
+    this.transport = options.transport ?? new RendererNativeRuntimeTransport()
     this.audio = options.audio ?? {
       driver: 'null',
       sampleRate: 48_000,
@@ -182,15 +182,15 @@ export class NativeBackend implements RuntimeBackend {
   }
 
   async start(): Promise<void> {
-    const session = await this.client.start()
+    const session = await this.transport.start()
 
     this.capabilities = session.capabilities
-    await this.client.startAudio(this.audio)
+    await this.transport.startAudio(this.audio)
     this.running = true
   }
 
   async stop(): Promise<void> {
-    await this.client.stopAudio()
+    await this.transport.stopAudio()
     this.running = false
   }
 
@@ -205,7 +205,7 @@ export class NativeBackend implements RuntimeBackend {
       )
     }
 
-    const handle = await this.client.preparePlan(plan)
+    const handle = await this.transport.preparePlan(plan)
 
     this.preparedHandles.add(handle.transferId)
 
@@ -233,21 +233,21 @@ export class NativeBackend implements RuntimeBackend {
       throw new Error('prepared handle is unknown')
     }
 
-    await this.client.activatePlan(handle.transferId, 0)
+    await this.transport.activatePlan(handle.transferId, 0)
     this.preparedHandles.delete(handle.transferId)
     this.consumedHandles.add(handle.transferId)
   }
 
   sendCommands(commands: readonly EngineCommand[]): void {
-    for (const command of commands) {
-      if (isNativeRuntimeCommand(command)) {
-        void this.client.sendEngineCommand(command)
-      }
+    const nativeCommands = commands.filter(isNativeRuntimeCommand)
+
+    if (nativeCommands.length > 0) {
+      void this.transport.sendCommands(nativeCommands)
     }
   }
 
   async getSnapshot(): Promise<RuntimeSnapshot> {
-    const snapshot = await this.client.getSnapshot()
+    const snapshot = await this.transport.getSnapshot()
 
     return {
       backend: 'native',
@@ -289,7 +289,7 @@ export class NativeBackend implements RuntimeBackend {
   }
 
   async dispose(): Promise<void> {
-    await this.client.shutdown()
+    await this.transport.dispose()
     this.running = false
     this.preparedHandles.clear()
     this.consumedHandles.clear()

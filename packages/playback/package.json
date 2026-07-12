@@ -15,5 +15,8 @@
     "@sequencer/device": "file:../device",
     "@sequencer/music": "file:../music",
     "@sequencer/native-scheduler-wasm": "file:../native-scheduler-wasm"
+  },
+  "devDependencies": {
+    "@sequencer/native-runtime-node": "file:../native-runtime-node"
   }
 }

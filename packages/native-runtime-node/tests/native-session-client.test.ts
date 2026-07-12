@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { NativeSessionClient, parseNativeSessionLine } from '../src/native/NativeSessionClient.ts'
+import { NativeSessionClient, parseNativeSessionLine } from '../src/NativeSessionClient.ts'
 
 const nativeEngineCwd = new URL('../../../native-audio-engine/', import.meta.url)
   .pathname
