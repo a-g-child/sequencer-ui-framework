@@ -4,6 +4,7 @@ pub mod device;
 pub mod driver;
 pub mod error;
 pub mod null_driver;
+pub mod realtime_snapshot;
 
 pub use config::*;
 pub use cpal_driver::*;
@@ -11,3 +12,4 @@ pub use device::*;
 pub use driver::*;
 pub use error::*;
 pub use null_driver::*;
+pub use realtime_snapshot::*;

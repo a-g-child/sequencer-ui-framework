@@ -15,11 +15,12 @@ use engine_core::{
     PreparedPlanSender, PreparedPlanTransfer, RetiredPlanReceiver,
 };
 use engine_protocol::{
-    diagnostic_tone_plan, event_endpoint, AudioBufferSlot, AudioTelemetry, EngineCommand,
-    EngineEvent, EventInputNodePlan, EventRoute, EventRouteMask, GainNodePlan, InstrumentNodePlan,
-    NativeExecutionPlan, OutputNodePlan, ParameterSlot, PlanNode, PlanNodeKind, ScheduledBeatEvent,
-    ScheduledEventOwner, TempoMapSnapshot, TransportLoop, NATIVE_EXECUTION_PLAN_VERSION,
-    NODE_EVENT_INPUT, NODE_GAIN, NODE_INSTRUMENT, NODE_OUTPUT, PARAM_GAIN_GAIN,
+    diagnostic_tone_plan, event_endpoint, AudioBufferSlot, AudioTelemetry, CommandRejection,
+    EngineCommand, EngineEvent, EventInputNodePlan, EventRoute, EventRouteMask, GainNodePlan,
+    InstrumentNodePlan, NativeExecutionPlan, OutputNodePlan, ParameterSlot, PlanNode, PlanNodeKind,
+    ScheduledBeatEvent, ScheduledEventOwner, TempoMapSnapshot, TransportLoop,
+    NATIVE_EXECUTION_PLAN_VERSION, NODE_EVENT_INPUT, NODE_GAIN, NODE_INSTRUMENT, NODE_OUTPUT,
+    PARAM_GAIN_GAIN,
 };
 
 use crate::DriverKind;
@@ -82,6 +83,7 @@ struct Session<W: Write> {
     next_transfer_id: u64,
     next_command_id: u64,
     last_telemetry: Option<AudioTelemetry>,
+    last_command_rejection: Option<(u64, CommandRejection)>,
     null_driver_last_pump_at: Option<Instant>,
     null_driver_frame_accumulator: f64,
 }
@@ -116,6 +118,7 @@ impl<W: Write> Session<W> {
             next_transfer_id: 1,
             next_command_id: 1,
             last_telemetry: None,
+            last_command_rejection: None,
             null_driver_last_pump_at: None,
             null_driver_frame_accumulator: 0.0,
         }
@@ -604,9 +607,10 @@ impl<W: Write> Session<W> {
             } else {
                 0.0
             };
+            let command_diagnostics = telemetry.command_diagnostics;
             write!(
                 self.writer,
-                ",\"transport\":{{\"playing\":{},\"samplePosition\":{},\"beatPosition\":{},\"loopIteration\":0}},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"pendingTransfers\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}},\"diagnostics\":{{\"xruns\":{},\"queueOverflows\":{},\"streamErrors\":{}}},\"telemetry\":{{\"samplePosition\":{},\"callbackCount\":{},\"sampleRate\":{},\"callbackFrames\":{},\"outputChannels\":{},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"pendingPlanCount\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}}}}",
+                ",\"transport\":{{\"playing\":{},\"samplePosition\":{},\"beatPosition\":{},\"loopIteration\":0}},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"pendingTransfers\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}},\"diagnostics\":{{\"xruns\":{},\"queueOverflows\":{},\"streamErrors\":{},\"commandQueueDepth\":{},\"pendingCommandCount\":{},\"nextPendingCommandSample\":{},\"commandReceived\":{},\"commandApplied\":{},\"commandLate\":{},\"commandRejected\":{},\"commandOutOfOrder\":{},\"lastCommandRejection\":{}}},\"telemetry\":{{\"samplePosition\":{},\"callbackCount\":{},\"sampleRate\":{},\"callbackFrames\":{},\"outputChannels\":{},\"commandQueueDepth\":{},\"pendingCommandCount\":{},\"nextPendingCommandSample\":{},\"commandDiagnostics\":{{\"received\":{},\"applied\":{},\"late\":{},\"rejected\":{},\"outOfOrder\":{},\"commandQueueOverflows\":{},\"telemetryQueueOverflows\":{}}},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"pendingPlanCount\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}}}}",
                 self.transport_playing,
                 telemetry.sample_position,
                 beat_position,
@@ -621,11 +625,30 @@ impl<W: Write> Session<W> {
                 telemetry.command_diagnostics.command_queue_overflows
                     .saturating_add(telemetry.command_diagnostics.telemetry_queue_overflows),
                 telemetry.stream_errors,
+                telemetry.command_queue_depth,
+                telemetry.pending_command_count,
+                optional_u64_json(telemetry.next_pending_command_sample),
+                command_diagnostics.received,
+                command_diagnostics.applied,
+                command_diagnostics.late,
+                command_diagnostics.rejected,
+                command_diagnostics.out_of_order,
+                last_command_rejection_json(self.last_command_rejection),
                 telemetry.sample_position,
                 telemetry.callback_count,
                 telemetry.sample_rate,
                 telemetry.callback_frames,
                 telemetry.output_channels,
+                telemetry.command_queue_depth,
+                telemetry.pending_command_count,
+                optional_u64_json(telemetry.next_pending_command_sample),
+                command_diagnostics.received,
+                command_diagnostics.applied,
+                command_diagnostics.late,
+                command_diagnostics.rejected,
+                command_diagnostics.out_of_order,
+                command_diagnostics.command_queue_overflows,
+                command_diagnostics.telemetry_queue_overflows,
                 optional_u64_json(plan_status.active_plan_id),
                 optional_u64_json(plan_status.active_plan_revision),
                 plan_status
@@ -684,7 +707,7 @@ impl<W: Write> Session<W> {
             }
 
             if let Some(telemetry) = telemetry {
-                self.last_telemetry = Some(telemetry);
+                self.last_telemetry = Some(merge_driver_telemetry(self.last_telemetry, telemetry));
             }
         }
 
@@ -733,7 +756,8 @@ impl<W: Write> Session<W> {
                 }
 
                 if let Some(telemetry) = telemetry {
-                    self.last_telemetry = Some(telemetry);
+                    self.last_telemetry =
+                        Some(merge_driver_telemetry(self.last_telemetry, telemetry));
                 }
             }
 
@@ -839,6 +863,36 @@ impl<W: Write> Session<W> {
                 writeln!(
                     self.writer,
                     "{{\"type\":\"engine:event\",\"event\":\"transport-state\",\"playing\":{playing},\"atSample\":{at_sample}}}"
+                )?;
+            }
+            EngineEvent::ExecutionPlanSwapped {
+                plan_id,
+                plan_revision,
+                ..
+            } => {
+                let mut telemetry = self.last_telemetry.unwrap_or_default();
+
+                telemetry.runtime_plan_status.active_plan_id = Some(plan_id);
+                telemetry.runtime_plan_status.active_plan_revision = Some(plan_revision);
+                telemetry.runtime_plan_status.pending_plan_count = 0;
+                telemetry.runtime_plan_status.successful_swaps = telemetry
+                    .runtime_plan_status
+                    .successful_swaps
+                    .saturating_add(1);
+                self.last_telemetry = Some(telemetry);
+                writeln!(
+                    self.writer,
+                    "{{\"type\":\"engine:event\",\"event\":\"{}\"}}",
+                    escape_json(&format!(
+                        "ExecutionPlanSwapped {{ plan_id: {plan_id}, plan_revision: {plan_revision} }}"
+                    ))
+                )?;
+            }
+            EngineEvent::CommandRejected { command_id, reason } => {
+                self.last_command_rejection = Some((command_id, reason));
+                writeln!(
+                    self.writer,
+                    "{{\"type\":\"engine:event\",\"event\":\"command-rejected\",\"commandId\":{command_id},\"reason\":\"{reason:?}\"}}"
                 )?;
             }
             EngineEvent::LifecycleStarted => {
@@ -1061,7 +1115,7 @@ impl SessionDriver {
 
     fn last_telemetry(&self) -> Option<AudioTelemetry> {
         match self {
-            Self::Cpal(_) => None,
+            Self::Cpal(driver) => driver.last_telemetry(),
             Self::Null(driver) => driver.last_telemetry(),
         }
     }
@@ -1104,6 +1158,48 @@ fn optional_u64_json(value: Option<u64>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "null".to_string())
+}
+
+fn last_command_rejection_json(value: Option<(u64, CommandRejection)>) -> String {
+    value
+        .map(|(command_id, reason)| {
+            format!("{{\"commandId\":{command_id},\"reason\":\"{reason:?}\"}}")
+        })
+        .unwrap_or_else(|| "null".to_string())
+}
+
+fn merge_driver_telemetry(
+    previous: Option<AudioTelemetry>,
+    driver: AudioTelemetry,
+) -> AudioTelemetry {
+    let Some(previous) = previous else {
+        return driver;
+    };
+
+    AudioTelemetry {
+        command_diagnostics: if driver.command_diagnostics
+            == engine_protocol::CommandDiagnostics::default()
+        {
+            previous.command_diagnostics
+        } else {
+            driver.command_diagnostics
+        },
+        runtime_plan_status: if driver.runtime_plan_status
+            == engine_protocol::RuntimePlanStatus::default()
+        {
+            previous.runtime_plan_status
+        } else {
+            driver.runtime_plan_status
+        },
+        event_graph_diagnostics: if driver.event_graph_diagnostics
+            == engine_protocol::EventGraphDiagnostics::default()
+        {
+            previous.event_graph_diagnostics
+        } else {
+            driver.event_graph_diagnostics
+        },
+        ..driver
+    }
 }
 
 fn parse_session_execution_plan(
@@ -1928,6 +2024,94 @@ mod tests {
             .expect("null driver should produce telemetry");
 
         assert!(telemetry.sample_position > 128);
+    }
+
+    #[test]
+    fn driver_telemetry_merge_preserves_previous_plan_status() {
+        let previous = AudioTelemetry {
+            sample_position: 128,
+            callback_count: 1,
+            sample_rate: 48_000,
+            callback_frames: 128,
+            output_channels: 2,
+            runtime_plan_status: engine_protocol::RuntimePlanStatus {
+                active_plan_id: Some(42),
+                active_plan_revision: Some(7),
+                pending_plan_count: 1,
+                successful_swaps: 2,
+                rejected_swaps: 3,
+            },
+            ..AudioTelemetry::default()
+        };
+        let driver = AudioTelemetry {
+            sample_position: 512,
+            callback_count: 4,
+            sample_rate: 48_000,
+            callback_frames: 128,
+            output_channels: 2,
+            ..AudioTelemetry::default()
+        };
+
+        let merged = merge_driver_telemetry(Some(previous), driver);
+
+        assert_eq!(merged.sample_position, 512);
+        assert_eq!(merged.callback_count, 4);
+        assert_eq!(merged.runtime_plan_status.active_plan_id, Some(42));
+        assert_eq!(merged.runtime_plan_status.active_plan_revision, Some(7));
+        assert_eq!(merged.runtime_plan_status.successful_swaps, 2);
+    }
+
+    #[test]
+    fn plan_swapped_event_updates_cached_snapshot_plan_status() {
+        let mut session = Session::new(Vec::new());
+
+        session.last_telemetry = Some(AudioTelemetry {
+            sample_position: 512,
+            callback_count: 4,
+            sample_rate: 48_000,
+            callback_frames: 128,
+            output_channels: 2,
+            ..AudioTelemetry::default()
+        });
+
+        session
+            .write_engine_event(EngineEvent::ExecutionPlanSwapped {
+                command_id: 1,
+                plan_id: 2026884842,
+                plan_revision: 1671,
+                requested_sample: 512,
+                applied_sample: 640,
+            })
+            .unwrap();
+
+        let telemetry = session
+            .last_telemetry
+            .expect("swap event should update cached telemetry");
+
+        assert_eq!(
+            telemetry.runtime_plan_status.active_plan_id,
+            Some(2026884842)
+        );
+        assert_eq!(
+            telemetry.runtime_plan_status.active_plan_revision,
+            Some(1671)
+        );
+
+        let merged = merge_driver_telemetry(
+            session.last_telemetry,
+            AudioTelemetry {
+                sample_position: 1024,
+                callback_count: 8,
+                sample_rate: 48_000,
+                callback_frames: 128,
+                output_channels: 2,
+                ..AudioTelemetry::default()
+            },
+        );
+
+        assert_eq!(merged.sample_position, 1024);
+        assert_eq!(merged.runtime_plan_status.active_plan_id, Some(2026884842));
+        assert_eq!(merged.runtime_plan_status.active_plan_revision, Some(1671));
     }
 
     #[test]

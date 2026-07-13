@@ -519,7 +519,7 @@ function nativeEngineCommandPayload(command: EngineCommand): Record<string, unkn
     case 'panic':
       return {
         type: command.type,
-        atSample: 0
+        atSample: 'atSample' in command ? command.atSample : 0
       }
     case 'tempo-map:set':
       return {

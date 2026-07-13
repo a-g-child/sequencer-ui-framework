@@ -226,22 +226,16 @@ function computeRevision(
   diagnostics: readonly NativeCompilationDiagnostic[]
 ): number {
   const seed = [
-    playbackModel.id,
     playbackModel.tracks.length,
-    playbackModel.clips.length,
-    playbackModel.notes.length,
     playbackModel.tracks
       .map((track) =>
         [
           track.id,
-          track.mixer.volume,
-          track.mixer.pan,
           track.deviceInstanceIds?.join(',') ?? track.deviceInstanceId ?? ''
         ].join(':')
       )
       .join('|'),
-    graph.nodes.map((node) => `${node.descriptorId}:${node.id}`).join('|'),
-    diagnostics.map((diagnostic) => `${diagnostic.code}:${diagnostic.severity}`).join('|')
+    graph.nodes.map((node) => node.descriptorId).join('|')
   ].join('|')
 
   let hash = 5381

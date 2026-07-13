@@ -160,6 +160,7 @@
 
   const nativeBackendAvailable = canCreateNativeRuntimeTransport()
   const playbackBackendKind = resolveAvailablePlaybackBackendKind()
+  const nativeAudioDriver = resolveNativeAudioDriver()
   const runtimeController =
     playbackBackendKind === 'native'
       ? new PlaybackRuntimeController(
@@ -168,7 +169,7 @@
             native: {
               transport: createNativeRuntimeTransport(),
               audio: {
-                driver: resolveNativeAudioDriver(),
+                driver: nativeAudioDriver,
                 sampleRate: 48_000,
                 bufferFrames: 128,
                 channels: 2
@@ -301,6 +302,8 @@
 	    runtimeTransportStatus,
 	    transportPlaying
 	  )
+	  $: canStopTransport =
+	    effectiveTransportPlaying || runtimeCanStop(playbackStatus.runtime)
 	  $: effectiveTransportBeat =
 	    runtimePlayheadAnchor === undefined
 	      ? transportBeat
@@ -576,6 +579,18 @@
 	    }
 	  }
 
+	  function runtimeCanStop(
+	    runtime: PlaybackServiceStatus['runtime'] | undefined
+	  ): boolean {
+	    return Boolean(
+	      runtime &&
+	        (runtime.requestedTransportPlaying ||
+	          runtime.commandPending ||
+	          runtime.snapshot?.transport.playing ||
+	          runtime.state === 'failed')
+	    )
+	  }
+
 	  function interpolatedRuntimeBeat(
 	    anchor: RuntimePlayheadAnchor,
 	    now: number,
@@ -614,7 +629,7 @@
       readDevelopmentSetting('sequencer.nativeAudioDriver') ??
       import.meta.env.VITE_NATIVE_AUDIO_DRIVER
 
-    return value === 'cpal' ? 'cpal' : 'null'
+    return value === 'null' ? 'null' : 'cpal'
   }
 
   function normalizePlaybackBackendKind(value: unknown): RuntimeBackendKind {
@@ -2553,6 +2568,7 @@
 
     <TransportPanel
 	      playing={effectiveTransportPlaying}
+	      canStop={canStopTransport}
 	      bpm={transportBpm}
 	      beat={effectiveTransportBeat}
       swingAmount={groove.amount}
@@ -2809,6 +2825,7 @@
 	    {transportBpm}
 	    transportBeat={effectiveTransportBeat}
       {playbackBackendKind}
+      nativeAudioDriver={nativeAudioDriver}
 	    runtimeTransportState={runtimeTransportStatus.state}
 	    runtimeTransportFailure={runtimeTransportStatus.state === 'failed'
 	      ? runtimeTransportStatus.message

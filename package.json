@@ -9,6 +9,8 @@
     "dev": "npm run dev -w apps/ui",
     "dev:native-runtime": "npm run dev -w packages/native-runtime-server",
     "dev:ui-native": "VITE_PLAYBACK_BACKEND=native VITE_NATIVE_RUNTIME_WS=ws://127.0.0.1:43127/native-runtime npm run dev -w apps/ui",
+    "dev:native": "node scripts/start-browser-native-dev.mjs",
+    "dev:native:stop": "node scripts/stop-browser-native-dev.mjs",
     "smoke:browser-native": "npm run smoke:browser-native -w packages/native-runtime-server",
     "build": "npm run build --workspaces --if-present",
     "check": "npm run check --workspaces --if-present",

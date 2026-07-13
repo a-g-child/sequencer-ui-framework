@@ -59,6 +59,105 @@ describe('PlaybackService native startup', () => {
     assert.equal(controller.status.snapshot?.transport.playing, true)
   })
 
+  it('does not reactivate the native graph when playback only adds a clip schedule', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    const graphOnlyModel = createPlaybackGraphFixture()
+    const clipModel = createPlaybackModelFixture()
+    service['model'] = graphOnlyModel
+    service['runtimeBpm'] = 120
+
+    await service['prepareNativeRuntimePlan'](graphOnlyModel)
+
+    service['model'] = clipModel
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    assert.equal(backend.compileCalls.length, 1)
+    assert.equal(backend.activateCalls, 1)
+    assert.deepEqual(
+      backend.commands.map((command) => command.type),
+      [
+        'tempo-map:set',
+        'transport-loop:set',
+        'event:schedule-beat-batch',
+        'transport:start'
+      ]
+    )
+  })
+
+  it('does not send an empty native clip schedule batch', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    const model = createEmptyClipPlaybackModelFixture()
+    service['model'] = model
+    service['runtimeBpm'] = 120
+
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    assert.deepEqual(
+      backend.commands.map((command) => command.type),
+      ['tempo-map:set', 'transport-loop:set', 'transport:start']
+    )
+  })
+
+  it('uses a fresh native snapshot sample for clip scheduling', async () => {
+    const backend = new AdvancingSnapshotRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    const model = createPlaybackModelFixture()
+    service['model'] = model
+    service['runtimeBpm'] = 120
+
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    const scheduleCommands = backend.commands.filter(
+      (command) =>
+        command.type === 'tempo-map:set' ||
+        command.type === 'transport-loop:set' ||
+        command.type === 'event:schedule-beat-batch'
+    )
+
+    assert.ok(scheduleCommands.length > 0)
+    assert.ok(scheduleCommands.every((command) => command.atSample >= 256))
+  })
+
+  it('keeps native plan revisions stable across schedule-only model changes', () => {
+    const graphOnlyCompilation = compilePlaybackModelToNativePlan(
+      createPlaybackGraphFixture()
+    )
+    const clipCompilation = compilePlaybackModelToNativePlan(
+      createPlaybackModelFixture()
+    )
+
+    assert.equal(
+      graphOnlyCompilation.plan.revision,
+      clipCompilation.plan.revision
+    )
+  })
+
   it('fails native startup visibly when the project is unsupported', async () => {
     const backend = new FakeRuntimeBackend()
     const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
@@ -187,6 +286,28 @@ class FakeRuntimeBackend implements RuntimeBackend {
   async dispose(): Promise<void> {}
 }
 
+class AdvancingSnapshotRuntimeBackend extends FakeRuntimeBackend {
+  private samplePosition = 0
+
+  async getSnapshot(): Promise<RuntimeSnapshot> {
+    this.samplePosition += 128
+    const snapshot = await super.getSnapshot()
+
+    return {
+      ...snapshot,
+      samplePosition: this.samplePosition,
+      transport: {
+        ...snapshot.transport,
+        samplePosition: this.samplePosition
+      },
+      stream: {
+        ...snapshot.stream,
+        callbackCount: Math.floor(this.samplePosition / 128)
+      }
+    }
+  }
+}
+
 function createPlaybackModelFixture(): PlaybackModel {
   return freezePlaybackModel({
     ...createEmptyPlaybackModel(120),
@@ -229,5 +350,28 @@ function createPlaybackModelFixture(): PlaybackModel {
         duration: 1
       }
     ]
+  })
+}
+
+function createPlaybackGraphFixture(): PlaybackModel {
+  return freezePlaybackModel({
+    ...createEmptyPlaybackModel(120),
+    id: 'project-alpha',
+    tracks: [
+      {
+        id: 'track-1',
+        name: 'Lead',
+        channel: 1,
+        mixer: { volume: 1, pan: 0 },
+        deviceInstanceIds: ['device-1']
+      }
+    ]
+  })
+}
+
+function createEmptyClipPlaybackModelFixture(): PlaybackModel {
+  return freezePlaybackModel({
+    ...createPlaybackModelFixture(),
+    notes: []
   })
 }

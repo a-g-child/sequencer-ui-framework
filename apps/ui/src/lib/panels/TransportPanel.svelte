@@ -1,5 +1,6 @@
 <script lang="ts">
   export let playing = false
+  export let canStop = false
   export let bpm = 120
   export let beat = 0
   export let swingAmount = 0
@@ -131,7 +132,7 @@
       aria-label="Stop"
       title="Stop"
       on:click={onStop}
-      disabled={!playing}
+      disabled={!canStop}
     >
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <rect x="6" y="6" width="12" height="12" rx="1" />

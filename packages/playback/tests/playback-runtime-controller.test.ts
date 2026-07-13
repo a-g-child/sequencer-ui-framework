@@ -86,6 +86,73 @@ describe('PlaybackRuntimeController', () => {
     assert.equal(controller.status.failure, undefined)
   })
 
+  it('waits for activation even before pending transfers are observable', async () => {
+    const backend = new SnapshotLagActivationRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, {
+      autoPoll: false,
+      pollIntervalMs: 1,
+      activationConfirmTimeoutMs: 200
+    })
+
+    const snapshot = await controller.compileAndActivate(createPlan())
+
+    assert.equal(backend.snapshotReads, 4)
+    assert.equal(snapshot.plan.activePlanId, 7)
+    assert.equal(snapshot.plan.activeRevision, 2)
+  })
+
+  it('includes activation snapshot trace when confirmation fails', async () => {
+    const backend = new NeverActivatedRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, {
+      autoPoll: false,
+      pollIntervalMs: 1,
+      activationConfirmTimeoutMs: 2
+    })
+
+    await assert.rejects(
+      () => controller.compileAndActivate(createPlan()),
+      (error) => {
+        assert.ok(error instanceof Error)
+        assert.match(
+          error.message,
+          /runtime activation did not confirm plan 7; observed null/
+        )
+        assert.match(error.message, /handle=native planId=7 revision=2 transferId=1/)
+        assert.match(error.message, /snapshots=\[/)
+        assert.match(error.message, /plan=null\/null/)
+        assert.match(error.message, /callbacks=/)
+        return true
+      }
+    )
+  })
+
+  it('serializes overlapping plan activations', async () => {
+    const backend = new ManuallyActivatedRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, {
+      autoPoll: false
+    })
+
+    const first = controller.compileAndActivate(createPlan('native-plan:first', 2))
+    await backend.waitForPendingActivation()
+    const second = controller.compileAndActivate(createPlan('native-plan:second', 3))
+    await Promise.resolve()
+
+    assert.equal(backend.compileCalls, 1)
+
+    backend.confirmNextActivation()
+    const firstSnapshot = await first
+
+    assert.equal(firstSnapshot.plan.activeRevision, 2)
+    await backend.waitForPendingActivation()
+    assert.equal(backend.compileCalls, 2)
+
+    backend.confirmNextActivation()
+    const secondSnapshot = await second
+
+    assert.equal(secondSnapshot.plan.activeRevision, 3)
+    assert.equal(backend.maxConcurrentActivations, 1)
+  })
+
   it('allows stop to clean up controller intent after failure', async () => {
     const backend = new FakeRuntimeBackend()
     const controller = new PlaybackRuntimeController(backend, {
@@ -116,6 +183,25 @@ describe('PlaybackRuntimeController', () => {
     assert.equal(controller.status.commandPending, false)
   })
 
+  it('uses a fresh snapshot sample for transport commands', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, {
+      autoPoll: false
+    })
+
+    await controller.start()
+    const cachedSample = controller.status.snapshot?.transport.samplePosition ?? 0
+
+    await controller.play()
+
+    const command = backend.commands.find(
+      (candidate) => candidate.type === 'transport:start'
+    )
+
+    assert.equal(command?.type, 'transport:start')
+    assert.ok(command.atSample > cachedSample)
+  })
+
   it('fails visibly when transport start is not observed', async () => {
     const backend = new UnconfirmedTransportRuntimeBackend()
     const controller = new PlaybackRuntimeController(backend, {
@@ -128,7 +214,16 @@ describe('PlaybackRuntimeController', () => {
 
     await assert.rejects(
       () => controller.play(),
-      /runtime transport did not confirm start; observed stopped/
+      (error) => {
+        assert.ok(error instanceof Error)
+        assert.match(
+          error.message,
+          /runtime transport did not confirm start; observed stopped/
+        )
+        assert.match(error.message, /snapshots=\[/)
+        assert.match(error.message, /playing=false/)
+        return true
+      }
     )
     assert.equal(controller.status.state, 'failed')
     assert.match(
@@ -138,17 +233,131 @@ describe('PlaybackRuntimeController', () => {
   })
 })
 
-function createPlan(): RuntimeCompilePlan {
+function createPlan(id = 'native-plan:test', revision = 2): RuntimeCompilePlan {
   return {
-    id: 'native-plan:test',
+    id,
     graphId: 'test',
-    revision: 2,
+    revision,
     nodes: [],
     buffers: [],
     parameters: [],
     eventRoutes: [],
     executionGroups: [],
     latencySamples: 0
+  }
+}
+
+class ManuallyActivatedRuntimeBackend implements RuntimeBackend {
+  compileCalls = 0
+  maxConcurrentActivations = 0
+  private started = false
+  private activeActivations = 0
+  private activePlanId: number | null = null
+  private activeRevision: number | null = null
+  private pendingActivation:
+    | {
+        readonly planId: number
+        readonly revision: number
+        readonly resolve: () => void
+      }
+    | undefined
+  private pendingActivationWaiters: Array<() => void> = []
+
+  async start(): Promise<void> {
+    this.started = true
+  }
+
+  async stop(): Promise<void> {
+    this.started = false
+  }
+
+  async compile(plan: RuntimeCompilePlan): Promise<PreparedRuntimeHandle> {
+    this.compileCalls += 1
+
+    return {
+      id: `native:${this.compileCalls}`,
+      planId: String(this.compileCalls + 6),
+      backend: 'native',
+      transferId: this.compileCalls,
+      revision: 'revision' in plan && typeof plan.revision === 'number'
+        ? plan.revision
+        : this.compileCalls,
+      ownerId: 'manual'
+    }
+  }
+
+  async activate(handle: PreparedRuntimeHandle): Promise<void> {
+    this.activeActivations += 1
+    this.maxConcurrentActivations = Math.max(
+      this.maxConcurrentActivations,
+      this.activeActivations
+    )
+
+    await new Promise<void>((resolve) => {
+      this.pendingActivation = {
+        planId: Number(handle.planId),
+        revision: handle.backend === 'native' ? handle.revision : 0,
+        resolve
+      }
+      for (const waiter of this.pendingActivationWaiters.splice(0)) {
+        waiter()
+      }
+    })
+
+    this.activeActivations -= 1
+  }
+
+  confirmNextActivation(): void {
+    const pending = this.pendingActivation
+
+    if (!pending) return
+
+    this.pendingActivation = undefined
+    this.activePlanId = pending.planId
+    this.activeRevision = pending.revision
+    pending.resolve()
+  }
+
+  async waitForPendingActivation(): Promise<void> {
+    if (this.pendingActivation) return
+
+    await new Promise<void>((resolve) => {
+      this.pendingActivationWaiters.push(resolve)
+    })
+  }
+
+  sendCommands(_commands: readonly EngineCommand[]): void {}
+
+  async getSnapshot(): Promise<RuntimeSnapshot> {
+    return {
+      backend: 'native',
+      transport: {
+        playing: false,
+        samplePosition: 128,
+        beatPosition: 0,
+        loopIteration: 0
+      },
+      stream: {
+        sampleRate: 48_000,
+        callbackCount: 1
+      },
+      plan: {
+        activePlanId: this.activePlanId,
+        activeRevision: this.activeRevision,
+        pendingTransfers: this.pendingActivation ? 1 : 0
+      },
+      diagnostics: {
+        xruns: 0,
+        queueOverflows: 0
+      },
+      samplePosition: 128,
+      sampleRate: 48_000,
+      running: this.started
+    }
+  }
+
+  async dispose(): Promise<void> {
+    this.started = false
   }
 }
 
@@ -356,6 +565,134 @@ class DelayedActivationRuntimeBackend implements RuntimeBackend {
         activePlanId: activated ? 7 : 6,
         activeRevision: activated ? 2 : 1,
         pendingTransfers: activated ? 0 : 1
+      },
+      diagnostics: {
+        xruns: 0,
+        queueOverflows: 0
+      },
+      samplePosition: this.snapshotReads * 128,
+      sampleRate: 48_000,
+      running: this.started
+    }
+  }
+
+  async dispose(): Promise<void> {
+    this.started = false
+  }
+}
+
+class SnapshotLagActivationRuntimeBackend implements RuntimeBackend {
+  snapshotReads = 0
+  private started = false
+  private activationRequested = false
+
+  async start(): Promise<void> {
+    this.started = true
+  }
+
+  async stop(): Promise<void> {
+    this.started = false
+  }
+
+  async compile(_plan: RuntimeCompilePlan): Promise<PreparedRuntimeHandle> {
+    return {
+      id: 'native:1',
+      planId: '7',
+      backend: 'native',
+      transferId: 1,
+      revision: 2,
+      ownerId: 'lag'
+    }
+  }
+
+  async activate(_handle: PreparedRuntimeHandle): Promise<void> {
+    this.activationRequested = true
+  }
+
+  sendCommands(_commands: readonly EngineCommand[]): void {}
+
+  async getSnapshot(): Promise<RuntimeSnapshot> {
+    this.snapshotReads += 1
+    const activated = this.activationRequested && this.snapshotReads >= 4
+
+    return {
+      backend: 'native',
+      transport: {
+        playing: false,
+        samplePosition: this.snapshotReads * 128,
+        beatPosition: 0,
+        loopIteration: 0
+      },
+      stream: {
+        sampleRate: 48_000,
+        callbackCount: this.snapshotReads
+      },
+      plan: {
+        activePlanId: activated ? 7 : null,
+        activeRevision: activated ? 2 : null,
+        pendingTransfers: 0
+      },
+      diagnostics: {
+        xruns: 0,
+        queueOverflows: 0
+      },
+      samplePosition: this.snapshotReads * 128,
+      sampleRate: 48_000,
+      running: this.started
+    }
+  }
+
+  async dispose(): Promise<void> {
+    this.started = false
+  }
+}
+
+class NeverActivatedRuntimeBackend implements RuntimeBackend {
+  private started = false
+  private snapshotReads = 0
+
+  async start(): Promise<void> {
+    this.started = true
+  }
+
+  async stop(): Promise<void> {
+    this.started = false
+  }
+
+  async compile(_plan: RuntimeCompilePlan): Promise<PreparedRuntimeHandle> {
+    return {
+      id: 'native:1',
+      planId: '7',
+      backend: 'native',
+      transferId: 1,
+      revision: 2,
+      ownerId: 'never'
+    }
+  }
+
+  async activate(_handle: PreparedRuntimeHandle): Promise<void> {}
+
+  sendCommands(_commands: readonly EngineCommand[]): void {}
+
+  async getSnapshot(): Promise<RuntimeSnapshot> {
+    this.snapshotReads += 1
+
+    return {
+      backend: 'native',
+      transport: {
+        playing: false,
+        samplePosition: this.snapshotReads * 128,
+        beatPosition: 0,
+        loopIteration: 0
+      },
+      stream: {
+        sampleRate: 48_000,
+        callbackCount: this.snapshotReads
+      },
+      plan: {
+        activePlanId: null,
+        activeRevision: null,
+        pendingTransfers: 0
       },
       diagnostics: {
         xruns: 0,

@@ -25,6 +25,7 @@
   export let nativeRuntimeAction = 'idle';
   export let nativeRuntimeCommands = '';
   export let nativeRuntimeError: string | undefined = undefined;
+  export let nativeAudioDriver = 'n/a';
   export let playbackRunning = false;
   export let playbackQueuedEvents = 0;
   export let playbackBeat = 0;
@@ -64,6 +65,10 @@
   <div>
     <span>Playback Backend</span>
     <strong>{playbackBackendKind}</strong>
+  </div>
+  <div>
+    <span>Native Driver</span>
+    <strong>{playbackBackendKind === 'native' ? nativeAudioDriver : 'n/a'}</strong>
   </div>
   <div>
     <span>Audio Engine</span>

@@ -45,6 +45,7 @@ import {
   PlaybackRuntimeController,
 } from './native/PlaybackRuntimeController.ts'
 import type { PlaybackRuntimeControllerStatus } from './native/RuntimeTypes.ts'
+import type { EngineCommand } from './native/schemas.ts'
 import { createPanicDeviceCommand } from './native/voice-action-commands.ts'
 import {
   ConsoleOutput,
@@ -150,6 +151,10 @@ export class PlaybackService implements Service, DocumentObserver {
     readonly planId: string
     readonly revision: number
     readonly modelKey: string
+  }
+  private pendingNativePlanPreparation?: {
+    readonly modelKey: string
+    readonly promise: Promise<void>
   }
 
   constructor(
@@ -649,7 +654,7 @@ export class PlaybackService implements Service, DocumentObserver {
     this.setNativeRuntimeStatus('prepare-start')
     await this.prepareNativeRuntimePlan(this.model)
     this.setNativeRuntimeStatus('schedule-start')
-    this.submitNativeClipSchedule(state, 'begin')
+    await this.submitNativeClipSchedule(state, 'begin')
     this.setNativeRuntimeStatus('transport-start-requested')
     await this.runtimeController.play()
     this.setNativeRuntimeStatus('transport-start-confirmed')
@@ -673,15 +678,55 @@ export class PlaybackService implements Service, DocumentObserver {
 
     this.setNativeRuntimeStatus('plan-prepare')
     const modelKey = this.nativePlanInputKey(playbackModel)
-    const currentCompilation = this.activeNativeCompilation
 
     if (
-      currentCompilation &&
-      currentCompilation.modelKey === modelKey &&
+      this.activeNativeCompilation &&
+      this.activeNativeCompilation.modelKey === modelKey &&
       (this.runtimeController.status.snapshot?.plan.activePlanId ?? null) !== null
     ) {
       return
     }
+
+    if (this.pendingNativePlanPreparation) {
+      const pending = this.pendingNativePlanPreparation
+
+      if (pending.modelKey === modelKey) {
+        await pending.promise
+        return
+      }
+
+      await pending.promise.catch(() => undefined)
+
+      if (
+        this.activeNativeCompilation &&
+        this.activeNativeCompilation.modelKey === modelKey &&
+        (this.runtimeController.status.snapshot?.plan.activePlanId ?? null) !== null
+      ) {
+        return
+      }
+    }
+
+    const preparation = this.activateNativeRuntimePlan(playbackModel, modelKey)
+
+    this.pendingNativePlanPreparation = {
+      modelKey,
+      promise: preparation
+    }
+
+    try {
+      await preparation
+    } finally {
+      if (this.pendingNativePlanPreparation?.promise === preparation) {
+        this.pendingNativePlanPreparation = undefined
+      }
+    }
+  }
+
+  private async activateNativeRuntimePlan(
+    playbackModel: PlaybackModel,
+    modelKey: string
+  ): Promise<void> {
+    if (!this.runtimeController) return
 
     const compilation = compilePlaybackModelToNativePlan(playbackModel)
 
@@ -716,21 +761,9 @@ export class PlaybackService implements Service, DocumentObserver {
 
   private nativePlanInputKey(playbackModel: PlaybackModel): string {
     return JSON.stringify({
-      id: playbackModel.id,
-      bpm: playbackModel.tempoMap.defaultBpm,
       tracks: playbackModel.tracks.map((track) => ({
         id: track.id,
-        name: track.name,
-        mixer: track.mixer,
         deviceInstanceIds: track.deviceInstanceIds ?? track.deviceInstanceId
-      })),
-      clips: playbackModel.clips.map((clip) => ({
-        id: clip.id,
-        trackId: clip.trackId,
-        loop: clip.loop,
-        loopStart: clip.loopStart,
-        loopLength: clip.loopLength,
-        length: clip.length
       }))
     })
   }
@@ -739,10 +772,16 @@ export class PlaybackService implements Service, DocumentObserver {
     if (!this.runtimeController || !this.latestClockState?.running) return
     if (!this.runtimeController.status.snapshot?.transport.playing) return
 
-    this.submitNativeClipSchedule(this.latestClockState, 'replace')
+    void this.submitNativeClipSchedule(this.latestClockState, 'replace').catch((error) => {
+      this.setNativeRuntimeStatus('clip-schedule-replace-failed', [], error)
+      this.runtimeController?.fail(error)
+    })
   }
 
-  private submitNativeClipSchedule(state: ClockState, mode: 'begin' | 'replace'): void {
+  private async submitNativeClipSchedule(
+    state: ClockState,
+    mode: 'begin' | 'replace'
+  ): Promise<void> {
     if (!this.runtimeController || !this.model) return
 
     const clip = this.model.clips[0]
@@ -754,7 +793,7 @@ export class PlaybackService implements Service, DocumentObserver {
         : this.nativeClipScheduleSubmissions.begin(clip.id)
     if (generation === undefined) return
 
-    const snapshot = this.runtimeController.status.snapshot
+    const snapshot = await this.runtimeController.refreshSnapshot()
     const sampleRate = snapshot?.stream.sampleRate || snapshot?.sampleRate || 48_000
     const atSample = snapshot?.transport.samplePosition ?? 0
     const timeMs = nowMs()
@@ -763,7 +802,7 @@ export class PlaybackService implements Service, DocumentObserver {
       generation
     })
 
-    const commands = [
+    const commands: EngineCommand[] = [
       createNativeTempoMapCommand(this.model, {
         sampleRate,
         originSample: atSample,
@@ -777,12 +816,17 @@ export class PlaybackService implements Service, DocumentObserver {
         sampleRate,
         atSample,
         timeMs
-      }),
-      nativeClipScheduleBatchCommand(schedule, {
-        atSample,
-        timeMs
       })
     ]
+
+    if (schedule.events.length > 0) {
+      commands.push(
+        nativeClipScheduleBatchCommand(schedule, {
+          atSample,
+          timeMs
+        })
+      )
+    }
 
     this.setNativeRuntimeStatus(
       `clip-schedule-${mode}`,

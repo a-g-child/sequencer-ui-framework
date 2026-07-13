@@ -26,7 +26,35 @@ export async function startNativeRuntimeServer(): Promise<NativeRuntimeServer> {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  void startNativeRuntimeServer().catch((error) => {
+  let server: NativeRuntimeServer | undefined
+  let closing = false
+
+  const closeServer = async (exitCode: number): Promise<void> => {
+    if (closing) {
+      return
+    }
+
+    closing = true
+
+    await server?.close().catch((error) => {
+      console.error(error)
+      process.exitCode = 1
+    })
+
+    process.exit(process.exitCode ?? exitCode)
+  }
+
+  process.once('SIGINT', () => {
+    void closeServer(130)
+  })
+
+  process.once('SIGTERM', () => {
+    void closeServer(143)
+  })
+
+  void startNativeRuntimeServer().then((startedServer) => {
+    server = startedServer
+  }).catch((error) => {
     console.error(error)
     process.exitCode = 1
   })

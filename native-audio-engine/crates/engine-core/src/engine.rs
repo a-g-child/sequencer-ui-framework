@@ -21,6 +21,15 @@ const COMMITTED_SCHEDULING_HORIZON_SAMPLES: u64 = 128;
 const DEFAULT_PLAN_CROSSFADE_SAMPLES: u32 = 128;
 const DEFERRED_RETIREMENT_CAPACITY: usize = RETIRED_PLAN_TRANSFER_CAPACITY * 2;
 
+fn is_transport_control_command(command: EngineCommand) -> bool {
+    matches!(
+        command,
+        EngineCommand::TransportStart { .. }
+            | EngineCommand::TransportStop { .. }
+            | EngineCommand::Panic { .. }
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct DiagnosticSignalState {
     enabled: bool,
@@ -569,6 +578,10 @@ impl AudioEngine {
                 .map(|receiver| receiver.len() as u32)
                 .unwrap_or(0),
             pending_command_count: self.pending_commands.len() as u32,
+            next_pending_command_sample: self
+                .pending_commands
+                .first()
+                .map(EngineCommand::at_sample),
             command_diagnostics: self.current_command_diagnostics(),
             runtime_plan_status: self.runtime_plan_status(),
             event_graph_diagnostics: self.current_event_graph_diagnostics(),
@@ -796,6 +809,30 @@ impl AudioEngine {
         });
     }
 
+    fn apply_block_start_commands(&mut self, block_start: u64) {
+        self.block_commands.clear();
+
+        for index in 0..self.processing_commands.len() {
+            let command = self.processing_commands[index];
+            let applied_sample = command.at_sample().max(block_start);
+
+            if applied_sample <= block_start {
+                let late_by_samples = block_start.saturating_sub(command.at_sample());
+
+                if late_by_samples > 0 {
+                    self.command_diagnostics.late = self.command_diagnostics.late.saturating_add(1);
+                }
+
+                self.apply_command(command, applied_sample, late_by_samples);
+            } else {
+                self.block_commands.push(command);
+            }
+        }
+
+        self.processing_commands.clear();
+        std::mem::swap(&mut self.block_commands, &mut self.processing_commands);
+    }
+
     fn reject_swap_command(&mut self, command_id: u64, reason: CommandRejection) {
         self.rejected_plan_swaps = self.rejected_plan_swaps.saturating_add(1);
         self.reject_command(command_id, reason);
@@ -838,6 +875,8 @@ impl AudioEngine {
             self.retain_all_processing_commands();
             return;
         }
+
+        self.apply_block_start_commands(block_start);
 
         let mut command_index = 0;
         let mut current_frame = 0;
@@ -1408,7 +1447,7 @@ impl AudioEngine {
             let command = self.processing_commands[index];
 
             if command.at_sample() >= block_end {
-                self.pending_commands.push(command);
+                self.push_pending_command_sorted(command);
             }
         }
 
@@ -1417,10 +1456,20 @@ impl AudioEngine {
 
     fn retain_all_processing_commands(&mut self) {
         for index in 0..self.processing_commands.len() {
-            self.pending_commands.push(self.processing_commands[index]);
+            self.push_pending_command_sorted(self.processing_commands[index]);
         }
 
         self.processing_commands.clear();
+    }
+
+    fn push_pending_command_sorted(&mut self, command: EngineCommand) {
+        let insert_index = self
+            .pending_commands
+            .iter()
+            .position(|pending| pending.at_sample() > command.at_sample())
+            .unwrap_or(self.pending_commands.len());
+
+        self.pending_commands.insert(insert_index, command);
     }
 
     fn drain_command_queue(&mut self) {
@@ -1435,23 +1484,29 @@ impl AudioEngine {
 
             self.command_diagnostics.received = self.command_diagnostics.received.saturating_add(1);
 
-            if let Some(last_sample) = self.last_received_command_sample {
-                if command.at_sample() < last_sample {
-                    self.command_diagnostics.out_of_order =
-                        self.command_diagnostics.out_of_order.saturating_add(1);
-                    self.reject_command(command.id(), CommandRejection::OutOfOrder);
-                    continue;
-                }
-            }
+            let is_transport_control = is_transport_control_command(command);
 
-            self.last_received_command_sample = Some(command.at_sample());
+            if !is_transport_control {
+                if let Some(last_sample) = self.last_received_command_sample {
+                    if command.at_sample() < last_sample {
+                        self.command_diagnostics.out_of_order =
+                            self.command_diagnostics.out_of_order.saturating_add(1);
+                        self.reject_command(command.id(), CommandRejection::OutOfOrder);
+                        continue;
+                    }
+                }
+
+                self.last_received_command_sample = Some(command.at_sample());
+            } else if self.last_received_command_sample.is_none() {
+                self.last_received_command_sample = Some(command.at_sample());
+            }
 
             if self.pending_commands.len() >= PENDING_COMMAND_CAPACITY {
                 self.reject_command(command.id(), CommandRejection::PendingQueueFull);
                 continue;
             }
 
-            self.pending_commands.push(command);
+            self.push_pending_command_sorted(command);
         }
     }
 
@@ -4323,15 +4378,21 @@ mod tests {
         let mut output = [0.0_f32; 256];
 
         command_sender
-            .push(EngineCommand::TransportStart {
+            .push(EngineCommand::SetParameter {
                 id: 1,
+                parameter_id: PARAM_DIAGNOSTIC_GAIN,
+                value: 0.5,
                 at_sample: 256,
+                ramp_samples: 0,
             })
             .unwrap();
         command_sender
-            .push(EngineCommand::TransportStop {
+            .push(EngineCommand::SetParameter {
                 id: 2,
+                parameter_id: PARAM_DIAGNOSTIC_GAIN,
+                value: 0.25,
                 at_sample: 128,
+                ramp_samples: 0,
             })
             .unwrap();
 
@@ -4345,6 +4406,116 @@ mod tests {
                 reason: CommandRejection::OutOfOrder
             })
         );
+    }
+
+    #[test]
+    fn transport_control_can_apply_before_retained_future_commands() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine =
+            AudioEngine::new().with_realtime_queues(command_receiver, telemetry_sender);
+        let mut output = [0.0_f32; 256];
+
+        command_sender
+            .push(EngineCommand::SetParameter {
+                id: 1,
+                parameter_id: PARAM_DIAGNOSTIC_GAIN,
+                value: 0.5,
+                at_sample: 48_000,
+                ramp_samples: 0,
+            })
+            .unwrap();
+
+        process_block(&mut engine, &mut output, 128);
+
+        assert!(!engine.is_playing());
+        assert_eq!(engine.command_diagnostics().applied, 0);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 2,
+                at_sample: 128,
+            })
+            .unwrap();
+
+        process_block(&mut engine, &mut output, 128);
+
+        assert!(engine.is_playing());
+        assert_eq!(engine.command_diagnostics().out_of_order, 0);
+        assert_eq!(engine.command_diagnostics().applied, 1);
+        assert_eq!(
+            telemetry_receiver.pop(),
+            Some(EngineEvent::TransportStateChanged {
+                playing: true,
+                at_sample: 128
+            })
+        );
+        assert_eq!(
+            telemetry_receiver.pop(),
+            Some(EngineEvent::CommandApplied {
+                command_id: 2,
+                applied_sample: 128,
+                late_by_samples: 0
+            })
+        );
+    }
+
+    #[test]
+    fn overdue_stopped_plan_commands_apply_at_block_start() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let engine = AudioEngine::new()
+            .with_execution_plan(&monophonic_voice_plan(1), 128)
+            .expect("plan should prepare");
+        let mut engine = engine.with_realtime_queues(command_receiver, telemetry_sender);
+        let mut output = [0.0_f32; 256];
+
+        command_sender
+            .push(EngineCommand::SetScheduledEventOwnerGeneration {
+                id: 1,
+                owner_id: 7,
+                generation: 1,
+                at_sample: 128,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleBeatEvent {
+                id: 2,
+                event: ScheduledBeatEvent::NoteOn {
+                    target_node: NODE_VOICE,
+                    note: 60,
+                    velocity: 0.75,
+                    at_beat: 0.0,
+                },
+                owner: Some(ScheduledEventOwner::generation_bound(7, 1)),
+                at_sample: 128,
+            })
+            .unwrap();
+
+        let telemetry = process_block(&mut engine, &mut output, 128);
+
+        assert_eq!(telemetry.pending_command_count, 2);
+        assert_eq!(telemetry.next_pending_command_sample, Some(128));
+
+        let telemetry = process_block(&mut engine, &mut output, 128);
+
+        assert_eq!(telemetry.pending_command_count, 0);
+        assert_eq!(telemetry.next_pending_command_sample, None);
+        assert_eq!(engine.command_diagnostics().applied, 2);
+
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 3,
+                at_sample: 128,
+            })
+            .unwrap();
+
+        let telemetry = process_block(&mut engine, &mut output, 128);
+
+        assert!(engine.is_playing());
+        assert_eq!(telemetry.pending_command_count, 0);
+        assert_eq!(telemetry.next_pending_command_sample, None);
+        assert_eq!(engine.command_diagnostics().applied, 3);
     }
 
     #[test]

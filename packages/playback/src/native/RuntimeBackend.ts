@@ -4,6 +4,7 @@ import type { EngineCommand } from './schemas.ts'
 import type { RuntimeSnapshot } from './RuntimeTypes.ts'
 import {
   type NativeAudioStartRequest,
+  type NativeEngineSnapshot,
   type NativeRuntimeCapabilities,
   type NativeRuntimeTransport,
   RendererNativeRuntimeTransport
@@ -158,6 +159,7 @@ export class WebAudioBackend implements RuntimeBackend {
 export interface NativeBackendOptions {
   readonly transport?: NativeRuntimeTransport
   readonly audio?: NativeAudioStartRequest
+  readonly readinessCheckDelayMs?: number
 }
 
 export class NativeBackend implements RuntimeBackend {
@@ -166,12 +168,14 @@ export class NativeBackend implements RuntimeBackend {
   private readonly backendId = `native:${NativeBackend.nextBackendId++}`
   private readonly transport: NativeRuntimeTransport
   private readonly audio: NativeAudioStartRequest
+  private readonly readinessCheckDelayMs: number
   private readonly preparedHandles = new Set<number>()
   private readonly consumedHandles = new Set<number>()
   private capabilities?: NativeRuntimeCapabilities
   private running = false
   private pendingCommands: Promise<void> = Promise.resolve()
   private commandFailure: unknown
+  private lastSubmittedSample = 0
 
   constructor(options: NativeBackendOptions = {}) {
     this.transport = options.transport ?? new RendererNativeRuntimeTransport()
@@ -181,6 +185,7 @@ export class NativeBackend implements RuntimeBackend {
       bufferFrames: 128,
       channels: 2
     }
+    this.readinessCheckDelayMs = options.readinessCheckDelayMs ?? 80
   }
 
   async start(): Promise<void> {
@@ -191,8 +196,15 @@ export class NativeBackend implements RuntimeBackend {
     const session = await this.transport.start(this.audio)
 
     this.capabilities = session.capabilities
-    await this.transport.startAudio(this.audio)
-    this.running = true
+    try {
+      await this.transport.startAudio(this.audio)
+      this.running = true
+      await this.verifyAudioReadiness()
+    } catch (error) {
+      this.running = false
+      await this.transport.stopAudio().catch(() => undefined)
+      throw error
+    }
   }
 
   async stop(): Promise<void> {
@@ -242,8 +254,9 @@ export class NativeBackend implements RuntimeBackend {
 
     await this.flushCommands()
     const snapshot = await this.transport.getSnapshot()
-    const requestedSample =
+    const requestedSample = this.nextSubmittedSample(
       snapshot.transport?.samplePosition ?? snapshot.telemetry?.samplePosition ?? 0
+    )
 
     await this.transport.activatePlan(handle.transferId, requestedSample)
     this.preparedHandles.delete(handle.transferId)
@@ -251,7 +264,9 @@ export class NativeBackend implements RuntimeBackend {
   }
 
   sendCommands(commands: readonly EngineCommand[]): void {
-    const nativeCommands = commands.filter(isNativeRuntimeCommand)
+    const nativeCommands = commands
+      .filter(isNativeRuntimeCommand)
+      .map((command) => this.withMonotonicSubmittedSample(command))
 
     if (nativeCommands.length > 0) {
       const nextCommands = this.pendingCommands
@@ -327,8 +342,67 @@ export class NativeBackend implements RuntimeBackend {
     }
   }
 
+  private withMonotonicSubmittedSample(command: EngineCommand): EngineCommand {
+    if (!isSampleScheduledCommand(command) || isTransportControlCommand(command)) {
+      return command
+    }
+
+    const atSample = this.nextSubmittedSample(command.atSample)
+
+    if (atSample === command.atSample) {
+      return command
+    }
+
+    return {
+      ...command,
+      atSample
+    } as EngineCommand
+  }
+
+  private nextSubmittedSample(requestedSample: number): number {
+    const normalizedSample = Math.max(0, Math.floor(requestedSample))
+    const atSample = Math.max(normalizedSample, this.lastSubmittedSample)
+
+    this.lastSubmittedSample = atSample
+
+    return atSample
+  }
+
   get negotiatedCapabilities(): NativeRuntimeCapabilities | undefined {
     return this.capabilities
+  }
+
+  private async verifyAudioReadiness(): Promise<void> {
+    const before = await this.transport.getSnapshot()
+    let latest = before
+
+    for (const delay of this.readinessCheckDelays()) {
+      await wait(delay)
+
+      latest = await this.transport.getSnapshot()
+
+      if (nativeSnapshotAdvanced(before, latest)) {
+        return
+      }
+    }
+
+    this.running = false
+    throw new Error(
+      `Native audio driver ${this.audio.driver} did not advance after startup. ` +
+        `Stream reported ${nativeSnapshotStreamDescription(latest)}. ` +
+        `callbackCount remained ${nativeSnapshotCallbackCount(latest)}. ` +
+        `samplePosition remained ${nativeSnapshotSamplePosition(latest)}.`
+    )
+  }
+
+  private readinessCheckDelays(): readonly number[] {
+    if (this.readinessCheckDelayMs === 0) {
+      return [0]
+    }
+
+    return Array.from(
+      new Set([this.readinessCheckDelayMs, 100, 200, 400].map((delay) => Math.max(0, delay)))
+    )
   }
 }
 
@@ -373,4 +447,57 @@ function isNativeRuntimeCommand(command: EngineCommand): boolean {
     command.type === 'event:schedule-beat' ||
     command.type === 'event:schedule-beat-batch'
   )
+}
+
+function isTransportControlCommand(command: EngineCommand): boolean {
+  return (
+    command.type === 'transport:start' ||
+    command.type === 'transport:stop' ||
+    command.type === 'panic'
+  )
+}
+
+function isSampleScheduledCommand(
+  command: EngineCommand
+): command is EngineCommand & { readonly atSample: number } {
+  return (
+    'atSample' in command &&
+    typeof command.atSample === 'number' &&
+    Number.isFinite(command.atSample)
+  )
+}
+
+function nativeSnapshotAdvanced(
+  before: NativeEngineSnapshot,
+  after: NativeEngineSnapshot
+): boolean {
+  return (
+    nativeSnapshotSamplePosition(after) > nativeSnapshotSamplePosition(before) ||
+    nativeSnapshotCallbackCount(after) > nativeSnapshotCallbackCount(before)
+  )
+}
+
+function nativeSnapshotSamplePosition(snapshot: NativeEngineSnapshot): number {
+  return snapshot.transport?.samplePosition ?? snapshot.telemetry?.samplePosition ?? 0
+}
+
+function nativeSnapshotCallbackCount(snapshot: NativeEngineSnapshot): number {
+  return snapshot.telemetry?.callbackCount ?? 0
+}
+
+function nativeSnapshotStreamDescription(snapshot: NativeEngineSnapshot): string {
+  const sampleRate = snapshot.stream?.sampleRate ?? snapshot.telemetry?.sampleRate
+  const channels = snapshot.stream?.channels ?? snapshot.telemetry?.outputChannels
+
+  if (sampleRate && channels) {
+    return `${sampleRate} Hz / ${channels} channels`
+  }
+
+  return 'no active stream'
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
 }

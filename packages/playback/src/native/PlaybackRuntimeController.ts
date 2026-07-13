@@ -38,6 +38,7 @@ export class PlaybackRuntimeController {
   private failure: string | undefined
   private latestSnapshot: RuntimeSnapshot | undefined
   private startPromise: Promise<void> | undefined
+  private activationPromise: Promise<RuntimeSnapshot> | undefined
 
   constructor(
     private readonly backend: PlaybackRuntimeBackend,
@@ -96,16 +97,31 @@ export class PlaybackRuntimeController {
   }
 
   async compileAndActivate(plan: NativeExecutionPlan): Promise<RuntimeSnapshot> {
-    await this.start()
+    const previousActivation = this.activationPromise
+    const activation = (async () => {
+      if (previousActivation) {
+        await previousActivation
+      }
 
-    try {
+      await this.start()
+
       const handle = await this.backend.compile(plan)
       await this.backend.activate(handle)
       const snapshot = await this.waitForActivationConfirmation(handle)
       return snapshot
+    })()
+
+    this.activationPromise = activation
+
+    try {
+      return await activation
     } catch (error) {
       this.fail(error)
       throw error
+    } finally {
+      if (this.activationPromise === activation) {
+        this.activationPromise = undefined
+      }
     }
   }
 
@@ -116,26 +132,37 @@ export class PlaybackRuntimeController {
     const expectedRevision = handle.backend === 'native' ? handle.revision : null
     const deadline = nowMs() + this.activationConfirmTimeoutMs
     let snapshot = await this.refreshSnapshot()
+    const activationTrace = [formatActivationSnapshot(snapshot)]
 
     while (
       !activationConfirmed(snapshot, expectedPlanId, expectedRevision) &&
-      snapshot.plan.pendingTransfers > 0 &&
       nowMs() < deadline
     ) {
       await wait(Math.min(this.pollIntervalMs, Math.max(1, deadline - nowMs())))
       snapshot = await this.refreshSnapshot()
+      activationTrace.push(formatActivationSnapshot(snapshot))
     }
 
     if (!activationConfirmed(snapshot, expectedPlanId, expectedRevision)) {
       if (!Number.isNaN(expectedPlanId) && snapshot.plan.activePlanId !== expectedPlanId) {
         throw new Error(
-          `runtime activation did not confirm plan ${expectedPlanId}; observed ${snapshot.plan.activePlanId}`
+          buildActivationFailureMessage(
+            `runtime activation did not confirm plan ${expectedPlanId}; observed ${snapshot.plan.activePlanId}`,
+            handle,
+            this.activationConfirmTimeoutMs,
+            activationTrace
+          )
         )
       }
 
       if (expectedRevision !== null && snapshot.plan.activeRevision !== expectedRevision) {
         throw new Error(
-          `runtime activation did not confirm revision ${expectedRevision}; observed ${snapshot.plan.activeRevision}`
+          buildActivationFailureMessage(
+            `runtime activation did not confirm revision ${expectedRevision}; observed ${snapshot.plan.activeRevision}`,
+            handle,
+            this.activationConfirmTimeoutMs,
+            activationTrace
+          )
         )
       }
     }
@@ -210,6 +237,9 @@ export class PlaybackRuntimeController {
     requestedPlaying: boolean
   ): Promise<void> {
     this.ensureReady()
+    const commandSnapshot = await this.backend.getSnapshot()
+
+    this.latestSnapshot = commandSnapshot
     this.requestedTransportPlaying = requestedPlaying
     this.commandPending = true
     this.failure = undefined
@@ -221,7 +251,7 @@ export class PlaybackRuntimeController {
           id: `runtime-${this.commandSequence++}`,
           type,
           timeMs: nowMs(),
-          atSample: this.latestSnapshot?.transport.samplePosition ?? 0
+          atSample: commandSnapshot.transport.samplePosition
         } as EngineCommand
       ])
       await this.waitForTransportConfirmation(requestedPlaying)
@@ -236,17 +266,23 @@ export class PlaybackRuntimeController {
   ): Promise<RuntimeSnapshot> {
     const deadline = nowMs() + this.transportConfirmTimeoutMs
     let snapshot = await this.refreshSnapshot()
+    const transportTrace = [formatActivationSnapshot(snapshot)]
 
     while (snapshot.transport.playing !== requestedPlaying && nowMs() < deadline) {
       await wait(Math.min(this.pollIntervalMs, Math.max(1, deadline - nowMs())))
       snapshot = await this.refreshSnapshot()
+      transportTrace.push(formatActivationSnapshot(snapshot))
     }
 
     if (snapshot.transport.playing !== requestedPlaying) {
       throw new Error(
-        `runtime transport did not confirm ${
-          requestedPlaying ? 'start' : 'stop'
-        }; observed ${snapshot.transport.playing ? 'playing' : 'stopped'}`
+        buildTransportFailureMessage(
+          `runtime transport did not confirm ${
+            requestedPlaying ? 'start' : 'stop'
+          }; observed ${snapshot.transport.playing ? 'playing' : 'stopped'}`,
+          this.transportConfirmTimeoutMs,
+          transportTrace
+        )
       )
     }
 
@@ -307,6 +343,125 @@ function activationConfirmed(
     expectedRevision === null || snapshot.plan.activeRevision === expectedRevision
 
   return planMatches && revisionMatches
+}
+
+function buildActivationFailureMessage(
+  message: string,
+  handle: PreparedRuntimeHandle,
+  timeoutMs: number,
+  activationTrace: readonly string[]
+): string {
+  return [
+    message,
+    `handle=${formatPreparedHandle(handle)}`,
+    `timeoutMs=${timeoutMs}`,
+    `snapshots=[${activationTrace.join(' | ')}]`
+  ].join('; ')
+}
+
+function buildTransportFailureMessage(
+  message: string,
+  timeoutMs: number,
+  transportTrace: readonly string[]
+): string {
+  return [
+    message,
+    `timeoutMs=${timeoutMs}`,
+    `snapshots=[${transportTrace.join(' | ')}]`
+  ].join('; ')
+}
+
+function formatPreparedHandle(handle: PreparedRuntimeHandle): string {
+  const revision = handle.backend === 'native' ? ` revision=${handle.revision}` : ''
+  const transfer = handle.backend === 'native' ? ` transferId=${handle.transferId}` : ''
+
+  return `${handle.backend} planId=${handle.planId}${revision}${transfer}`
+}
+
+function formatActivationSnapshot(snapshot: RuntimeSnapshot): string {
+  const nativeDiagnostics = nativeCommandDiagnostics(snapshot.native)
+
+  return [
+    `plan=${snapshot.plan.activePlanId ?? 'null'}/${snapshot.plan.activeRevision ?? 'null'}`,
+    `pending=${snapshot.plan.pendingTransfers}`,
+    `sample=${snapshot.transport.samplePosition}`,
+    `callbacks=${snapshot.stream.callbackCount}`,
+    `playing=${snapshot.transport.playing}`,
+    `running=${snapshot.running}`,
+    nativeDiagnostics
+  ].join(',')
+}
+
+function nativeCommandDiagnostics(nativeSnapshot: unknown): string {
+  if (!nativeSnapshot || typeof nativeSnapshot !== 'object') {
+    return 'commands=n/a'
+  }
+
+  const diagnostics = (nativeSnapshot as {
+    diagnostics?: {
+      commandReceived?: number
+      commandApplied?: number
+      commandLate?: number
+      commandRejected?: number
+      commandOutOfOrder?: number
+      commandQueueDepth?: number
+      pendingCommandCount?: number
+      nextPendingCommandSample?: number | null
+      lastCommandRejection?: {
+        commandId: number
+        reason: string
+      } | null
+    }
+  }).diagnostics
+
+  const telemetryDiagnostics = (nativeSnapshot as {
+    telemetry?: {
+      nextPendingCommandSample?: number | null
+      commandDiagnostics?: {
+        received?: number
+        applied?: number
+        late?: number
+        rejected?: number
+        outOfOrder?: number
+        commandQueueDepth?: number
+        pendingCommandCount?: number
+      }
+    } | null
+  }).telemetry?.commandDiagnostics
+
+  const received = diagnostics?.commandReceived ?? telemetryDiagnostics?.received
+  const applied = diagnostics?.commandApplied ?? telemetryDiagnostics?.applied
+  const late = diagnostics?.commandLate ?? telemetryDiagnostics?.late
+  const rejected = diagnostics?.commandRejected ?? telemetryDiagnostics?.rejected
+  const outOfOrder =
+    diagnostics?.commandOutOfOrder ?? telemetryDiagnostics?.outOfOrder
+  const queueDepth =
+    diagnostics?.commandQueueDepth ?? telemetryDiagnostics?.commandQueueDepth
+  const pendingCommandCount =
+    diagnostics?.pendingCommandCount ?? telemetryDiagnostics?.pendingCommandCount
+  const nextPendingCommandSample =
+    diagnostics?.nextPendingCommandSample ??
+    (nativeSnapshot as {
+      telemetry?: {
+        nextPendingCommandSample?: number | null
+      } | null
+    }).telemetry?.nextPendingCommandSample
+  const lastRejection = diagnostics?.lastCommandRejection
+
+  return [
+    `commands=${received ?? 'n/a'}/${applied ?? 'n/a'}`,
+    `queue=${queueDepth ?? 'n/a'}`,
+    `pendingCommands=${pendingCommandCount ?? 'n/a'}`,
+    `nextPending=${nextPendingCommandSample ?? 'none'}`,
+    `late=${late ?? 'n/a'}`,
+    `rejected=${rejected ?? 'n/a'}`,
+    `outOfOrder=${outOfOrder ?? 'n/a'}`,
+    `lastRejection=${
+      lastRejection
+        ? `${lastRejection.commandId}:${lastRejection.reason}`
+        : 'none'
+    }`
+  ].join(',')
 }
 
 function wait(ms: number): Promise<void> {

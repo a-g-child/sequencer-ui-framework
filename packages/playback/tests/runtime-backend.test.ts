@@ -141,6 +141,53 @@ describe('RuntimeBackend', () => {
     await backend.dispose()
   })
 
+  it('does not defer transport commands behind prior native command samples', async () => {
+    const transport = new FakeNativeRuntimeTransport({
+      snapshotSamples: [128, 256, 1_024, 512]
+    })
+    const backend = new NativeBackend({
+      transport,
+      readinessCheckDelayMs: 0
+    })
+
+    await backend.start()
+    const handle = await backend.compile(createDiagnosticNativeExecutionPlan())
+
+    await backend.activate(handle)
+    backend.sendCommands([
+      {
+        id: 'start',
+        type: 'transport:start',
+        timeMs: 0,
+        atSample: 256
+      }
+    ])
+    await backend.getSnapshot()
+
+    assert.equal(transport.activationRequestedSamples.at(-1), 1_024)
+    assert.equal(transport.sentCommands.at(-1)?.type, 'transport:start')
+    assert.equal(
+      (transport.sentCommands.at(-1) as { atSample?: number } | undefined)?.atSample,
+      256
+    )
+
+    await backend.dispose()
+  })
+
+  it('rejects native startup when audio snapshots do not advance', async () => {
+    const backend = new NativeBackend({
+      transport: new FakeNativeRuntimeTransport({ advanceSnapshots: false }),
+      readinessCheckDelayMs: 0
+    })
+
+    await assert.rejects(
+      () => backend.start(),
+      /Native audio driver null did not advance after startup/
+    )
+
+    await backend.dispose()
+  })
+
   it('compiles a PlaybackModel into a native plan with deterministic identity', () => {
     const model = createPlaybackModelFixture()
 
@@ -371,6 +418,19 @@ class FakeNativeRuntimeTransport implements NativeRuntimeTransport {
   startedAudioWith: NativeAudioStartRequest | undefined
   startCalls = 0
   startAudioCalls = 0
+  activationRequestedSamples: number[] = []
+  sentCommands: EngineCommand[] = []
+  private audioStarted = false
+  private samplePosition = 0
+  private callbackCount = 0
+  private snapshotIndex = 0
+
+  constructor(
+    private readonly options: {
+      readonly advanceSnapshots?: boolean
+      readonly snapshotSamples?: readonly number[]
+    } = {}
+  ) {}
 
   async start(options?: NativeRuntimeStartOptions) {
     this.startCalls += 1
@@ -397,6 +457,7 @@ class FakeNativeRuntimeTransport implements NativeRuntimeTransport {
   async startAudio(request: NativeAudioStartRequest) {
     this.startAudioCalls += 1
     this.startedAudioWith = request
+    this.audioStarted = true
 
     return {
       driver: request.driver,
@@ -408,7 +469,9 @@ class FakeNativeRuntimeTransport implements NativeRuntimeTransport {
     }
   }
 
-  async stopAudio() {}
+  async stopAudio() {
+    this.audioStarted = false
+  }
 
   async preparePlan(_plan: unknown) {
     return {
@@ -418,16 +481,20 @@ class FakeNativeRuntimeTransport implements NativeRuntimeTransport {
     }
   }
 
-  async activatePlan(_transferId: number, _requestedSample = 0) {
+  async activatePlan(_transferId: number, requestedSample = 0) {
+    this.activationRequestedSamples.push(requestedSample)
+
     return {
       planId: 1,
       revision: 1,
-      requestedSample: 0,
-      appliedSample: 0
+      requestedSample,
+      appliedSample: requestedSample
     }
   }
 
-  async sendCommands() {
+  async sendCommands(commands: readonly EngineCommand[]) {
+    this.sentCommands.push(...commands)
+
     return [
       {
         commandId: 1
@@ -436,9 +503,36 @@ class FakeNativeRuntimeTransport implements NativeRuntimeTransport {
   }
 
   async getSnapshot() {
+    const scriptedSample = this.options.snapshotSamples?.[this.snapshotIndex]
+    this.snapshotIndex += 1
+
+    if (scriptedSample !== undefined) {
+      this.samplePosition = scriptedSample
+      this.callbackCount += 1
+    } else if (this.audioStarted && this.options.advanceSnapshots !== false) {
+      this.samplePosition += this.startedAudioWith?.bufferFrames ?? 128
+      this.callbackCount += 1
+    }
+
     return {
-      stream: null,
-      telemetry: null
+      stream: {
+        deviceId: 'null',
+        sampleRate: this.startedAudioWith?.sampleRate ?? 48_000,
+        channels: this.startedAudioWith?.channels ?? 2
+      },
+      transport: {
+        playing: false,
+        samplePosition: this.samplePosition,
+        beatPosition: 0,
+        loopIteration: 0
+      },
+      telemetry: {
+        samplePosition: this.samplePosition,
+        callbackCount: this.callbackCount,
+        sampleRate: this.startedAudioWith?.sampleRate ?? 48_000,
+        callbackFrames: this.startedAudioWith?.bufferFrames ?? 128,
+        outputChannels: this.startedAudioWith?.channels ?? 2
+      }
     }
   }
 

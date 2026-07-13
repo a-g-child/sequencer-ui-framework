@@ -1,4 +1,7 @@
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{
+    mpsc::{self, Receiver, Sender},
+    Arc,
+};
 
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -9,6 +12,7 @@ use engine_core::ProcessContext;
 use crate::{
     ActiveOutputStream, AudioDeviceInfo, AudioDriver, AudioDriverError, AudioDriverErrorCode,
     AudioDriverEvent, AudioProcessor, AudioSampleFormat, OutputStreamRequest,
+    RealtimeSnapshotAtomics,
 };
 
 const DEFAULT_SCRATCH_FRAMES: usize = 4096;
@@ -16,6 +20,7 @@ const DEFAULT_SCRATCH_FRAMES: usize = 4096;
 pub struct CpalAudioDriver {
     host: cpal::Host,
     stream: Option<Stream>,
+    realtime_snapshot: Option<Arc<RealtimeSnapshotAtomics>>,
     events: Vec<AudioDriverEvent>,
     event_sender: Sender<AudioDriverEvent>,
     event_receiver: Receiver<AudioDriverEvent>,
@@ -34,6 +39,7 @@ impl CpalAudioDriver {
         Self {
             host: cpal::default_host(),
             stream: None,
+            realtime_snapshot: None,
             events: Vec::new(),
             event_sender,
             event_receiver,
@@ -184,15 +190,21 @@ impl AudioDriver for CpalAudioDriver {
                 .unwrap_or(BufferSize::Default),
         };
         let event_sender = self.event_sender.clone();
+        let realtime_snapshot = Arc::new(RealtimeSnapshotAtomics::new());
         let stream = match sample_format {
-            SampleFormat::F32 => {
-                build_f32_stream(&device, &config, processor, event_sender.clone())?
-            }
+            SampleFormat::F32 => build_f32_stream(
+                &device,
+                &config,
+                processor,
+                event_sender.clone(),
+                Arc::clone(&realtime_snapshot),
+            )?,
             SampleFormat::I16 => build_i16_stream(
                 &device,
                 &config,
                 processor,
                 event_sender.clone(),
+                Arc::clone(&realtime_snapshot),
                 request.preferred_buffer_frames,
             )?,
             SampleFormat::U16 => build_u16_stream(
@@ -200,6 +212,7 @@ impl AudioDriver for CpalAudioDriver {
                 &config,
                 processor,
                 event_sender.clone(),
+                Arc::clone(&realtime_snapshot),
                 request.preferred_buffer_frames,
             )?,
             _ => {
@@ -218,6 +231,7 @@ impl AudioDriver for CpalAudioDriver {
         })?;
 
         self.stream = Some(stream);
+        self.realtime_snapshot = Some(realtime_snapshot);
         self.events.push(AudioDriverEvent::StreamStarted {
             sample_rate,
             channels,
@@ -235,6 +249,7 @@ impl AudioDriver for CpalAudioDriver {
 
     fn stop(&mut self) -> Result<(), AudioDriverError> {
         if self.stream.take().is_some() {
+            self.realtime_snapshot = None;
             self.events.push(AudioDriverEvent::StreamStopped);
         }
 
@@ -250,16 +265,27 @@ impl AudioDriver for CpalAudioDriver {
     }
 }
 
+impl CpalAudioDriver {
+    pub fn last_telemetry(&self) -> Option<engine_protocol::AudioTelemetry> {
+        self.realtime_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.read())
+    }
+}
+
 fn build_f32_stream(
     device: &Device,
     config: &StreamConfig,
     mut processor: Box<dyn AudioProcessor>,
     event_sender: Sender<AudioDriverEvent>,
+    realtime_snapshot: Arc<RealtimeSnapshotAtomics>,
 ) -> Result<Stream, AudioDriverError> {
     let sample_rate = config.sample_rate.0;
     let channels = config.channels as usize;
     let mut sample_position = 0_u64;
     let error_sender = event_sender.clone();
+    let callback_snapshot = Arc::clone(&realtime_snapshot);
+    let error_snapshot = Arc::clone(&realtime_snapshot);
 
     device
         .build_output_stream(
@@ -268,7 +294,7 @@ fn build_f32_stream(
                 let frame_count = frame_count(output.len(), channels);
                 let block_start_sample = sample_position;
 
-                processor.process(
+                let telemetry = processor.process(
                     output,
                     ProcessContext {
                         block_start_sample,
@@ -277,9 +303,11 @@ fn build_f32_stream(
                         output_channels: channels as u16,
                     },
                 );
+                callback_snapshot.publish(telemetry);
                 sample_position = sample_position.saturating_add(frame_count as u64);
             },
             move |_| {
+                error_snapshot.increment_stream_errors();
                 let _ = error_sender.send(AudioDriverEvent::StreamError {
                     code: AudioDriverErrorCode::StreamRuntime,
                 });
@@ -299,6 +327,7 @@ fn build_i16_stream(
     config: &StreamConfig,
     mut processor: Box<dyn AudioProcessor>,
     event_sender: Sender<AudioDriverEvent>,
+    realtime_snapshot: Arc<RealtimeSnapshotAtomics>,
     preferred_buffer_frames: Option<u32>,
 ) -> Result<Stream, AudioDriverError> {
     let sample_rate = config.sample_rate.0;
@@ -306,6 +335,8 @@ fn build_i16_stream(
     let mut sample_position = 0_u64;
     let mut scratch = vec![0.0_f32; scratch_len(channels, preferred_buffer_frames)];
     let error_sender = event_sender.clone();
+    let callback_snapshot = Arc::clone(&realtime_snapshot);
+    let error_snapshot = Arc::clone(&realtime_snapshot);
 
     device
         .build_output_stream(
@@ -322,7 +353,7 @@ fn build_i16_stream(
                 let block_start_sample = sample_position;
                 let scratch = &mut scratch[..required_len];
 
-                processor.process(
+                let telemetry = processor.process(
                     scratch,
                     ProcessContext {
                         block_start_sample,
@@ -331,6 +362,7 @@ fn build_i16_stream(
                         output_channels: channels as u16,
                     },
                 );
+                callback_snapshot.publish(telemetry);
 
                 for (target, sample) in output.iter_mut().zip(scratch.iter()) {
                     *target = f32_to_i16(*sample);
@@ -339,6 +371,7 @@ fn build_i16_stream(
                 sample_position = sample_position.saturating_add(frame_count as u64);
             },
             move |_| {
+                error_snapshot.increment_stream_errors();
                 let _ = error_sender.send(AudioDriverEvent::StreamError {
                     code: AudioDriverErrorCode::StreamRuntime,
                 });
@@ -358,6 +391,7 @@ fn build_u16_stream(
     config: &StreamConfig,
     mut processor: Box<dyn AudioProcessor>,
     event_sender: Sender<AudioDriverEvent>,
+    realtime_snapshot: Arc<RealtimeSnapshotAtomics>,
     preferred_buffer_frames: Option<u32>,
 ) -> Result<Stream, AudioDriverError> {
     let sample_rate = config.sample_rate.0;
@@ -365,6 +399,8 @@ fn build_u16_stream(
     let mut sample_position = 0_u64;
     let mut scratch = vec![0.0_f32; scratch_len(channels, preferred_buffer_frames)];
     let error_sender = event_sender.clone();
+    let callback_snapshot = Arc::clone(&realtime_snapshot);
+    let error_snapshot = Arc::clone(&realtime_snapshot);
 
     device
         .build_output_stream(
@@ -381,7 +417,7 @@ fn build_u16_stream(
                 let block_start_sample = sample_position;
                 let scratch = &mut scratch[..required_len];
 
-                processor.process(
+                let telemetry = processor.process(
                     scratch,
                     ProcessContext {
                         block_start_sample,
@@ -390,6 +426,7 @@ fn build_u16_stream(
                         output_channels: channels as u16,
                     },
                 );
+                callback_snapshot.publish(telemetry);
 
                 for (target, sample) in output.iter_mut().zip(scratch.iter()) {
                     *target = f32_to_u16(*sample);
@@ -398,6 +435,7 @@ fn build_u16_stream(
                 sample_position = sample_position.saturating_add(frame_count as u64);
             },
             move |_| {
+                error_snapshot.increment_stream_errors();
                 let _ = error_sender.send(AudioDriverEvent::StreamError {
                     code: AudioDriverErrorCode::StreamRuntime,
                 });

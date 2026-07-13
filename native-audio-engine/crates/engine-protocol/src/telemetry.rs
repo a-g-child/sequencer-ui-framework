@@ -12,6 +12,7 @@ pub struct AudioTelemetry {
     pub probable_xruns: u64,
     pub command_queue_depth: u32,
     pub pending_command_count: u32,
+    pub next_pending_command_sample: Option<u64>,
     pub command_diagnostics: CommandDiagnostics,
     pub runtime_plan_status: RuntimePlanStatus,
     pub event_graph_diagnostics: EventGraphDiagnostics,

@@ -64,6 +64,18 @@ export interface NativeEngineSnapshot {
     readonly xruns: number
     readonly queueOverflows: number
     readonly streamErrors: number
+    readonly commandQueueDepth?: number
+    readonly pendingCommandCount?: number
+    readonly nextPendingCommandSample?: number | null
+    readonly commandReceived?: number
+    readonly commandApplied?: number
+    readonly commandLate?: number
+    readonly commandRejected?: number
+    readonly commandOutOfOrder?: number
+    readonly lastCommandRejection?: {
+      readonly commandId: number
+      readonly reason: string
+    } | null
   }
   readonly telemetry: {
     readonly samplePosition: number
@@ -71,6 +83,18 @@ export interface NativeEngineSnapshot {
     readonly sampleRate: number
     readonly callbackFrames: number
     readonly outputChannels: number
+    readonly commandQueueDepth?: number
+    readonly pendingCommandCount?: number
+    readonly nextPendingCommandSample?: number | null
+    readonly commandDiagnostics?: {
+      readonly received: number
+      readonly applied: number
+      readonly late: number
+      readonly rejected: number
+      readonly outOfOrder: number
+      readonly commandQueueOverflows: number
+      readonly telemetryQueueOverflows: number
+    }
     readonly plan?: {
       readonly activePlanId: number | null
       readonly activeRevision: number | null
