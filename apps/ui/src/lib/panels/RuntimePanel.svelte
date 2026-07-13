@@ -22,6 +22,9 @@
   export let runtimePendingTransfers: number | undefined = undefined;
   export let runtimeXruns: number | undefined = undefined;
   export let runtimeQueueOverflows: number | undefined = undefined;
+  export let nativeRuntimeAction = 'idle';
+  export let nativeRuntimeCommands = '';
+  export let nativeRuntimeError: string | undefined = undefined;
   export let playbackRunning = false;
   export let playbackQueuedEvents = 0;
   export let playbackBeat = 0;
@@ -130,6 +133,20 @@
     <span>Runtime Queues</span>
     <strong>{runtimeQueueOverflows ?? 0}</strong>
   </div>
+  <div>
+    <span>Native Action</span>
+    <strong>{nativeRuntimeAction}</strong>
+  </div>
+  <div>
+    <span>Native Commands</span>
+    <strong>{nativeRuntimeCommands || 'none'}</strong>
+  </div>
+  {#if nativeRuntimeError}
+    <div class="runtime-failure">
+      <span>Native Error</span>
+      <strong>{nativeRuntimeError}</strong>
+    </div>
+  {/if}
   {#if runtimeTransportFailure}
     <div class="runtime-failure">
       <span>Runtime Failure</span>

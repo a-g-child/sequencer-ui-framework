@@ -69,6 +69,73 @@ describe('PlaybackRuntimeController', () => {
     assert.equal(backend.compileCalls, 1)
     assert.equal(snapshot.plan.activeRevision, 2)
   })
+
+  it('waits for block-boundary activation before confirming the active plan', async () => {
+    const backend = new DelayedActivationRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, {
+      autoPoll: false,
+      pollIntervalMs: 1,
+      activationConfirmTimeoutMs: 200
+    })
+
+    const snapshot = await controller.compileAndActivate(createPlan())
+
+    assert.equal(backend.snapshotReads, 4)
+    assert.equal(snapshot.plan.activePlanId, 7)
+    assert.equal(snapshot.plan.activeRevision, 2)
+    assert.equal(controller.status.failure, undefined)
+  })
+
+  it('allows stop to clean up controller intent after failure', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, {
+      autoPoll: false
+    })
+
+    controller.fail(new Error('activation failed'))
+    await controller.stop()
+
+    assert.equal(controller.status.state, 'failed')
+    assert.equal(controller.status.requestedTransportPlaying, false)
+    assert.equal(controller.status.commandPending, false)
+  })
+
+  it('waits for transport start confirmation before settling command pending', async () => {
+    const backend = new DelayedTransportRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, {
+      autoPoll: false,
+      pollIntervalMs: 1,
+      transportConfirmTimeoutMs: 50
+    })
+
+    await controller.start()
+    await controller.play()
+
+    assert.equal(backend.snapshotReads, 4)
+    assert.equal(controller.status.snapshot?.transport.playing, true)
+    assert.equal(controller.status.commandPending, false)
+  })
+
+  it('fails visibly when transport start is not observed', async () => {
+    const backend = new UnconfirmedTransportRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, {
+      autoPoll: false,
+      pollIntervalMs: 1,
+      transportConfirmTimeoutMs: 5
+    })
+
+    await controller.start()
+
+    await assert.rejects(
+      () => controller.play(),
+      /runtime transport did not confirm start; observed stopped/
+    )
+    assert.equal(controller.status.state, 'failed')
+    assert.match(
+      controller.status.failure ?? '',
+      /runtime transport did not confirm start; observed stopped/
+    )
+  })
 })
 
 function createPlan(): RuntimeCompilePlan {
@@ -238,5 +305,110 @@ class SlowStartRuntimeBackend implements RuntimeBackend {
 
   async dispose(): Promise<void> {
     this.started = false
+  }
+}
+
+class DelayedActivationRuntimeBackend implements RuntimeBackend {
+  snapshotReads = 0
+  private started = false
+
+  async start(): Promise<void> {
+    this.started = true
+  }
+
+  async stop(): Promise<void> {
+    this.started = false
+  }
+
+  async compile(_plan: RuntimeCompilePlan): Promise<PreparedRuntimeHandle> {
+    return {
+      id: 'native:1',
+      planId: '7',
+      backend: 'native',
+      transferId: 1,
+      revision: 2,
+      ownerId: 'delayed'
+    }
+  }
+
+  async activate(_handle: PreparedRuntimeHandle): Promise<void> {}
+
+  sendCommands(_commands: readonly EngineCommand[]): void {}
+
+  async getSnapshot(): Promise<RuntimeSnapshot> {
+    this.snapshotReads += 1
+
+    const activated = this.snapshotReads >= 4
+
+    return {
+      backend: 'native',
+      transport: {
+        playing: false,
+        samplePosition: this.snapshotReads * 128,
+        beatPosition: 0,
+        loopIteration: 0
+      },
+      stream: {
+        sampleRate: 48_000,
+        callbackCount: this.snapshotReads
+      },
+      plan: {
+        activePlanId: activated ? 7 : 6,
+        activeRevision: activated ? 2 : 1,
+        pendingTransfers: activated ? 0 : 1
+      },
+      diagnostics: {
+        xruns: 0,
+        queueOverflows: 0
+      },
+      samplePosition: this.snapshotReads * 128,
+      sampleRate: 48_000,
+      running: this.started
+    }
+  }
+
+  async dispose(): Promise<void> {
+    this.started = false
+  }
+}
+
+class DelayedTransportRuntimeBackend extends FakeRuntimeBackend {
+  snapshotReads = 0
+  private startRequested = false
+
+  sendCommands(commands: readonly EngineCommand[]): void {
+    super.sendCommands(commands)
+
+    if (commands.some((command) => command.type === 'transport:start')) {
+      this.startRequested = true
+    }
+  }
+
+  async getSnapshot(): Promise<RuntimeSnapshot> {
+    this.snapshotReads += 1
+    const snapshot = await super.getSnapshot()
+    const confirmed = !this.startRequested || this.snapshotReads >= 4
+
+    return {
+      ...snapshot,
+      transport: {
+        ...snapshot.transport,
+        playing: confirmed ? snapshot.transport.playing : false
+      }
+    }
+  }
+}
+
+class UnconfirmedTransportRuntimeBackend extends FakeRuntimeBackend {
+  async getSnapshot(): Promise<RuntimeSnapshot> {
+    const snapshot = await super.getSnapshot()
+
+    return {
+      ...snapshot,
+      transport: {
+        ...snapshot.transport,
+        playing: false
+      }
+    }
   }
 }

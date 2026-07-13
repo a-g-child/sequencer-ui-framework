@@ -20,11 +20,15 @@ export interface PlaybackRuntimeBackend {
 export interface PlaybackRuntimeControllerOptions {
   readonly pollIntervalMs?: number
   readonly autoPoll?: boolean
+  readonly activationConfirmTimeoutMs?: number
+  readonly transportConfirmTimeoutMs?: number
 }
 
 export class PlaybackRuntimeController {
   private readonly pollIntervalMs: number
   private readonly autoPoll: boolean
+  private readonly activationConfirmTimeoutMs: number
+  private readonly transportConfirmTimeoutMs: number
   private readonly listeners = new Set<PlaybackRuntimeControllerListener>()
   private pollTimer?: ReturnType<typeof setInterval>
   private commandSequence = 1
@@ -41,6 +45,8 @@ export class PlaybackRuntimeController {
   ) {
     this.pollIntervalMs = options.pollIntervalMs ?? 40
     this.autoPoll = options.autoPoll ?? true
+    this.activationConfirmTimeoutMs = options.activationConfirmTimeoutMs ?? 750
+    this.transportConfirmTimeoutMs = options.transportConfirmTimeoutMs ?? 500
   }
 
   get status(): PlaybackRuntimeControllerStatus {
@@ -95,10 +101,32 @@ export class PlaybackRuntimeController {
     try {
       const handle = await this.backend.compile(plan)
       await this.backend.activate(handle)
-      const snapshot = await this.refreshSnapshot()
-      const expectedPlanId = Number(handle.planId)
-      const expectedRevision = handle.backend === 'native' ? handle.revision : null
+      const snapshot = await this.waitForActivationConfirmation(handle)
+      return snapshot
+    } catch (error) {
+      this.fail(error)
+      throw error
+    }
+  }
 
+  private async waitForActivationConfirmation(
+    handle: PreparedRuntimeHandle
+  ): Promise<RuntimeSnapshot> {
+    const expectedPlanId = Number(handle.planId)
+    const expectedRevision = handle.backend === 'native' ? handle.revision : null
+    const deadline = nowMs() + this.activationConfirmTimeoutMs
+    let snapshot = await this.refreshSnapshot()
+
+    while (
+      !activationConfirmed(snapshot, expectedPlanId, expectedRevision) &&
+      snapshot.plan.pendingTransfers > 0 &&
+      nowMs() < deadline
+    ) {
+      await wait(Math.min(this.pollIntervalMs, Math.max(1, deadline - nowMs())))
+      snapshot = await this.refreshSnapshot()
+    }
+
+    if (!activationConfirmed(snapshot, expectedPlanId, expectedRevision)) {
       if (!Number.isNaN(expectedPlanId) && snapshot.plan.activePlanId !== expectedPlanId) {
         throw new Error(
           `runtime activation did not confirm plan ${expectedPlanId}; observed ${snapshot.plan.activePlanId}`
@@ -110,12 +138,9 @@ export class PlaybackRuntimeController {
           `runtime activation did not confirm revision ${expectedRevision}; observed ${snapshot.plan.activeRevision}`
         )
       }
-
-      return snapshot
-    } catch (error) {
-      this.fail(error)
-      throw error
     }
+
+    return snapshot
   }
 
   async play(): Promise<void> {
@@ -123,10 +148,24 @@ export class PlaybackRuntimeController {
   }
 
   async stop(): Promise<void> {
+    if (this.currentState === 'failed' || this.currentState === 'stopped') {
+      this.requestedTransportPlaying = false
+      this.commandPending = false
+      this.emit()
+      return
+    }
+
     await this.sendTransportCommand('transport:stop', false)
   }
 
   async panic(): Promise<void> {
+    if (this.currentState === 'failed' || this.currentState === 'stopped') {
+      this.requestedTransportPlaying = false
+      this.commandPending = false
+      this.emit()
+      return
+    }
+
     await this.sendTransportCommand('panic', false)
   }
 
@@ -185,11 +224,33 @@ export class PlaybackRuntimeController {
           atSample: this.latestSnapshot?.transport.samplePosition ?? 0
         } as EngineCommand
       ])
-      await this.refreshSnapshot()
+      await this.waitForTransportConfirmation(requestedPlaying)
     } catch (error) {
       this.fail(error)
       throw error
     }
+  }
+
+  private async waitForTransportConfirmation(
+    requestedPlaying: boolean
+  ): Promise<RuntimeSnapshot> {
+    const deadline = nowMs() + this.transportConfirmTimeoutMs
+    let snapshot = await this.refreshSnapshot()
+
+    while (snapshot.transport.playing !== requestedPlaying && nowMs() < deadline) {
+      await wait(Math.min(this.pollIntervalMs, Math.max(1, deadline - nowMs())))
+      snapshot = await this.refreshSnapshot()
+    }
+
+    if (snapshot.transport.playing !== requestedPlaying) {
+      throw new Error(
+        `runtime transport did not confirm ${
+          requestedPlaying ? 'start' : 'stop'
+        }; observed ${snapshot.transport.playing ? 'playing' : 'stopped'}`
+      )
+    }
+
+    return snapshot
   }
 
   private ensureReady(): void {
@@ -233,4 +294,23 @@ export class PlaybackRuntimeController {
 
 function nowMs(): number {
   return globalThis.performance?.now() ?? Date.now()
+}
+
+function activationConfirmed(
+  snapshot: RuntimeSnapshot,
+  expectedPlanId: number,
+  expectedRevision: number | null
+): boolean {
+  const planMatches =
+    Number.isNaN(expectedPlanId) || snapshot.plan.activePlanId === expectedPlanId
+  const revisionMatches =
+    expectedRevision === null || snapshot.plan.activeRevision === expectedRevision
+
+  return planMatches && revisionMatches
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
 }

@@ -159,7 +159,7 @@
   )
 
   const nativeBackendAvailable = canCreateNativeRuntimeTransport()
-  const playbackBackendKind = resolvePlaybackBackendKind()
+  const playbackBackendKind = resolveAvailablePlaybackBackendKind()
   const runtimeController =
     playbackBackendKind === 'native'
       ? new PlaybackRuntimeController(
@@ -465,7 +465,13 @@
 	    }
 
 	    if (event.type === 'playback:runtime-snapshot') {
-	      syncRuntimeSnapshot(event.payload as RuntimeSnapshot | undefined)
+	      const snapshot = event.payload as RuntimeSnapshot | undefined
+
+	      syncRuntimeSnapshot(snapshot)
+	      playbackStatus = mergeRuntimeSnapshotIntoPlaybackStatus(
+	        playbackStatus,
+	        snapshot
+	      )
 	    }
 
     if (event.type === 'playback:runtime-parameters') {
@@ -499,7 +505,7 @@
 	    runtimeParameterValues = nextValues
 	  }
 
-  function syncRuntimeSnapshot(snapshot: RuntimeSnapshot | undefined): void {
+	  function syncRuntimeSnapshot(snapshot: RuntimeSnapshot | undefined): void {
 	    if (!snapshot) return
 
 	    runtimePlayheadAnchor = {
@@ -511,18 +517,29 @@
 	    }
 	  }
 
+	  function mergeRuntimeSnapshotIntoPlaybackStatus(
+	    status: PlaybackServiceStatus,
+	    snapshot: RuntimeSnapshot | undefined
+	  ): PlaybackServiceStatus {
+	    if (!snapshot || !status.runtime) return status
+
+	    return {
+	      ...status,
+	      runtime: {
+	        ...status.runtime,
+	        snapshot,
+	        commandPending:
+	          snapshot.transport.playing !== status.runtime.requestedTransportPlaying
+	      }
+	    }
+	  }
+
 	  function buildRuntimeTransportStatus(
 	    status: PlaybackServiceStatus
 	  ): RuntimeTransportStatus {
 	    const runtime = status.runtime
 
 	    if (!runtime) return { state: 'stopped' }
-	    if (runtime.state === 'failed') {
-	      return {
-	        state: 'failed',
-	        message: runtime.failure ?? 'Native runtime failed'
-	      }
-	    }
 	    if (runtime.commandPending && runtime.requestedTransportPlaying) {
 	      return { state: 'starting' }
 	    }
@@ -531,6 +548,12 @@
 	    }
 	    if (runtime.snapshot?.transport.playing) {
 	      return { state: 'playing', snapshot: runtime.snapshot }
+	    }
+	    if (runtime.state === 'failed') {
+	      return {
+	        state: 'failed',
+	        message: runtime.failure ?? 'Native runtime failed'
+	      }
 	    }
 
 	    return { state: 'stopped' }
@@ -575,13 +598,15 @@
     )
   }
 
-  function resolvePlaybackBackendKind(): RuntimeBackendKind {
+  function resolveAvailablePlaybackBackendKind(): RuntimeBackendKind {
     const requested = normalizePlaybackBackendKind(
       readDevelopmentSetting('sequencer.playbackBackend') ??
         import.meta.env.VITE_PLAYBACK_BACKEND
     )
 
-    return requested
+    return requested === 'native' && !nativeBackendAvailable
+      ? 'web-audio'
+      : requested
   }
 
   function resolveNativeAudioDriver(): NativeAudioDriver {
@@ -642,9 +667,17 @@
       defaultSameOriginNativeRuntimeSocketUrl()
 
     if (socketUrl) {
+      const token = nativeRuntimeToken(socketUrl)
+
+      if (!token) {
+        throw new NativeRuntimeUnavailableError(
+          'Native runtime token is required. Start npm run dev:native-runtime, then open the printed Vite dev URL with its real nativeToken value.'
+        )
+      }
+
       return new BrowserSocketNativeRuntimeTransport({
         url: socketUrl,
-        token: nativeRuntimeTokenFromUrl()
+        token
       })
     }
 
@@ -662,6 +695,10 @@
   }
 
   function defaultSameOriginNativeRuntimeSocketUrl(): string | undefined {
+    if (import.meta.env.DEV && !nativeRuntimeSameOriginEnabled()) {
+      return undefined
+    }
+
     const location = globalThis.location
 
     if (!location?.host) {
@@ -677,16 +714,60 @@
     return `${protocol}://${location.host}/native-runtime`
   }
 
-  function nativeRuntimeTokenFromUrl(): string | undefined {
-    const search = globalThis.location?.search
+  function nativeRuntimeSameOriginEnabled(): boolean {
+    const value = import.meta.env.VITE_NATIVE_RUNTIME_SAME_ORIGIN
 
+    return typeof value === 'string' && value.toLowerCase() === 'true'
+  }
+
+  function nativeRuntimeToken(socketUrl: string): string | undefined {
+    return (
+      nativeRuntimeTokenFromEnv() ??
+      nativeRuntimeTokenFromSearch(globalThis.location?.search) ??
+      nativeRuntimeTokenFromSearch(socketUrlSearch(socketUrl))
+    )
+  }
+
+  function nativeRuntimeTokenFromEnv(): string | undefined {
+    const value = import.meta.env.VITE_NATIVE_RUNTIME_TOKEN
+
+    return normalizeNativeRuntimeToken(value)
+  }
+
+  function nativeRuntimeTokenFromSearch(search: string | undefined): string | undefined {
     if (!search) {
       return undefined
     }
 
     const token = new URLSearchParams(search).get('nativeToken')
 
-    return token && token.length > 0 ? token : undefined
+    return normalizeNativeRuntimeToken(token)
+  }
+
+  function socketUrlSearch(socketUrl: string): string | undefined {
+    try {
+      return new URL(socketUrl).search
+    } catch {
+      return undefined
+    }
+  }
+
+  function normalizeNativeRuntimeToken(value: string | null | undefined): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined
+    }
+
+    const token = value.trim()
+
+    if (
+      token.length === 0 ||
+      token === '<token>' ||
+      token === '<token printed by dev:native-runtime>'
+    ) {
+      return undefined
+    }
+
+    return token
   }
 
   class NativeRuntimeUnavailableError extends Error {
@@ -2741,6 +2822,9 @@
 	    runtimePendingTransfers={playbackStatus.runtime?.snapshot?.plan.pendingTransfers}
 	    runtimeXruns={playbackStatus.runtime?.snapshot?.diagnostics.xruns}
 	    runtimeQueueOverflows={playbackStatus.runtime?.snapshot?.diagnostics.queueOverflows}
+	    nativeRuntimeAction={playbackStatus.nativeRuntime.lastAction}
+	    nativeRuntimeCommands={playbackStatus.nativeRuntime.lastCommandTypes.join(', ')}
+	    nativeRuntimeError={playbackStatus.nativeRuntime.lastError}
     {audioEngineStatus}
     {midiStatus}
     {preferencesStatus}

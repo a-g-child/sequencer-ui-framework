@@ -128,6 +128,19 @@ describe('RuntimeBackend', () => {
     await backend.dispose()
   })
 
+  it('does not start an already running native transport twice', async () => {
+    const transport = new FakeNativeRuntimeTransport()
+    const backend = new NativeBackend({ transport })
+
+    await backend.start()
+    await backend.start()
+
+    assert.equal(transport.startCalls, 1)
+    assert.equal(transport.startAudioCalls, 1)
+
+    await backend.dispose()
+  })
+
   it('compiles a PlaybackModel into a native plan with deterministic identity', () => {
     const model = createPlaybackModelFixture()
 
@@ -356,8 +369,11 @@ class FakeWebAudioOutput {
 class FakeNativeRuntimeTransport implements NativeRuntimeTransport {
   startedWith: NativeRuntimeStartOptions | undefined
   startedAudioWith: NativeAudioStartRequest | undefined
+  startCalls = 0
+  startAudioCalls = 0
 
   async start(options?: NativeRuntimeStartOptions) {
+    this.startCalls += 1
     this.startedWith = options
 
     return {
@@ -379,6 +395,7 @@ class FakeNativeRuntimeTransport implements NativeRuntimeTransport {
   }
 
   async startAudio(request: NativeAudioStartRequest) {
+    this.startAudioCalls += 1
     this.startedAudioWith = request
 
     return {

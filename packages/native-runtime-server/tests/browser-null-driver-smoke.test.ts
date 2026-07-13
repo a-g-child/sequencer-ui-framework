@@ -96,6 +96,9 @@ describe('browser null-driver smoke', () => {
         assert.ok(
           playingSnapshot.transport.samplePosition > snapshot.transport.samplePosition
         )
+        assert.ok(
+          playingSnapshot.transport.beatPosition > snapshot.transport.beatPosition
+        )
 
         await backend.stop()
 

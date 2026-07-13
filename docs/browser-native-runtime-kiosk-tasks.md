@@ -384,6 +384,33 @@ const socketUrl =
   `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/native-runtime`;
 ```
 
+In Vite development, do not use the same-origin default because that points at
+the Vite dev server, not `native-runtime-server`. Use the explicit socket URL
+instead:
+
+```text
+npm run dev:native-runtime
+```
+
+Then start the UI and open the exact Vite URL printed by the runtime server,
+for example:
+
+```text
+http://localhost:5173/?nativeToken=<actual printed token>
+```
+
+Do not use the literal `<token>` placeholder. The server also prints an
+environment-variable form:
+
+```text
+VITE_NATIVE_RUNTIME_WS=ws://127.0.0.1:43127/native-runtime \
+VITE_NATIVE_RUNTIME_TOKEN=<actual printed token> \
+npm run dev -w apps/ui
+```
+
+If same-origin discovery is needed during development, opt in with
+`VITE_NATIVE_RUNTIME_SAME_ORIGIN=true`.
+
 ---
 
 ## Task 9 - Add runtime server commands

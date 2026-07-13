@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { ServiceEventBus, type ServiceEvent } from '@sequencer/core'
 import { PlaybackService } from '../src/playback-service.ts'
 import { createEmptyPlaybackModel, freezePlaybackModel, type PlaybackModel } from '../src/model.ts'
 import { PlaybackRuntimeController } from '../src/native/PlaybackRuntimeController.ts'
@@ -25,6 +26,37 @@ describe('PlaybackService native startup', () => {
     assert.equal(backend.activateCalls, 1)
     assert.equal(controller.status.snapshot?.plan.activePlanId, 99)
     assert.equal(controller.status.snapshot?.plan.activeRevision, compilation.plan.revision)
+  })
+
+  it('submits clip schedule and starts native transport from playback start path', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    const model = createPlaybackModelFixture()
+    service['model'] = model
+    service['runtimeBpm'] = 120
+
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    assert.equal(backend.compileCalls.length, 1)
+    assert.equal(backend.activateCalls, 1)
+    assert.deepEqual(
+      backend.commands.map((command) => command.type),
+      [
+        'tempo-map:set',
+        'transport-loop:set',
+        'event:schedule-beat-batch',
+        'transport:start'
+      ]
+    )
+    assert.equal(controller.status.snapshot?.transport.playing, true)
   })
 
   it('fails native startup visibly when the project is unsupported', async () => {
@@ -57,11 +89,38 @@ describe('PlaybackService native startup', () => {
     assert.equal(controller.status.state, 'failed')
     assert.match(controller.status.failure ?? '', /Automation lanes are not supported/)
   })
+
+  it('requests clock stop when native startup fails after play was requested', () => {
+    const controller = new PlaybackRuntimeController(new FakeRuntimeBackend(), {
+      autoPoll: false
+    })
+    const service = new PlaybackService(undefined, controller)
+    const events = new ServiceEventBus()
+    const emitted: ServiceEvent[] = []
+
+    events.subscribe((event) => {
+      emitted.push(event)
+    })
+
+    service['context'] = {
+      events
+    } as never
+
+    service['stopClockAfterNativeStartFailure']()
+
+    assert.deepEqual(
+      emitted.map((event) => event.type),
+      ['transport:playing-changed', 'transport:beat-changed']
+    )
+    assert.deepEqual(emitted[0]?.payload, { playing: false })
+    assert.deepEqual(emitted[1]?.payload, { currentBeat: 0, currentStep: 0 })
+  })
 })
 
 class FakeRuntimeBackend implements RuntimeBackend {
   compileCalls: RuntimeCompilePlan[] = []
   activateCalls = 0
+  commands: EngineCommand[] = []
   private started = false
   private playing = false
   private snapshot: RuntimeSnapshot = {
@@ -107,6 +166,8 @@ class FakeRuntimeBackend implements RuntimeBackend {
 
   sendCommands(commands: readonly EngineCommand[]): void {
     for (const command of commands) {
+      this.commands.push(command)
+
       if (command.type === 'transport:start') {
         this.playing = true
       } else if (command.type === 'transport:stop' || command.type === 'panic') {

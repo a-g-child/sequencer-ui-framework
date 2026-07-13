@@ -12,7 +12,7 @@ use engine_core::{
     build_state_transfer, engine_command_queue, engine_telemetry_queue,
     prepared_plan_transfer_queue, retired_plan_queue, AudioEngine, EngineCommandSender,
     EngineTelemetryReceiver, PreparedExecutionPlan, PreparedExecutionPlanMetadata,
-    PreparedPlanSender, PreparedPlanTransfer,
+    PreparedPlanSender, PreparedPlanTransfer, RetiredPlanReceiver,
 };
 use engine_protocol::{
     diagnostic_tone_plan, event_endpoint, AudioBufferSlot, AudioTelemetry, EngineCommand,
@@ -74,6 +74,7 @@ struct Session<W: Write> {
     command_sender: Option<EngineCommandSender>,
     telemetry_receiver: Option<EngineTelemetryReceiver>,
     prepared_plan_sender: Option<PreparedPlanSender>,
+    retired_plan_receiver: Option<RetiredPlanReceiver>,
     prepared_plans: Vec<SessionPreparedPlan>,
     active_plan_metadata: Option<PreparedExecutionPlanMetadata>,
     transport_playing: bool,
@@ -81,6 +82,8 @@ struct Session<W: Write> {
     next_transfer_id: u64,
     next_command_id: u64,
     last_telemetry: Option<AudioTelemetry>,
+    null_driver_last_pump_at: Option<Instant>,
+    null_driver_frame_accumulator: f64,
 }
 
 struct SessionPreparedPlan {
@@ -105,6 +108,7 @@ impl<W: Write> Session<W> {
             command_sender: None,
             telemetry_receiver: None,
             prepared_plan_sender: None,
+            retired_plan_receiver: None,
             prepared_plans: Vec::new(),
             active_plan_metadata: None,
             transport_playing: false,
@@ -112,6 +116,8 @@ impl<W: Write> Session<W> {
             next_transfer_id: 1,
             next_command_id: 1,
             last_telemetry: None,
+            null_driver_last_pump_at: None,
+            null_driver_frame_accumulator: 0.0,
         }
     }
 
@@ -259,7 +265,7 @@ impl<W: Write> Session<W> {
         let (command_sender, command_receiver) = engine_command_queue();
         let (telemetry_sender, telemetry_receiver) = engine_telemetry_queue();
         let (prepared_sender, prepared_receiver) = prepared_plan_transfer_queue();
-        let (retired_sender, _retired_receiver) = retired_plan_queue();
+        let (retired_sender, retired_receiver) = retired_plan_queue();
         let engine = AudioEngine::new()
             .with_realtime_queues(command_receiver, telemetry_sender)
             .with_plan_transfer_queues(prepared_receiver, retired_sender);
@@ -285,6 +291,9 @@ impl<W: Write> Session<W> {
         self.command_sender = Some(command_sender);
         self.telemetry_receiver = Some(telemetry_receiver);
         self.prepared_plan_sender = Some(prepared_sender);
+        self.retired_plan_receiver = Some(retired_receiver);
+        self.null_driver_last_pump_at = Some(Instant::now());
+        self.null_driver_frame_accumulator = 0.0;
         self.prepared_plans.clear();
         self.active_plan_metadata = None;
         self.drain_runtime_events()?;
@@ -310,6 +319,9 @@ impl<W: Write> Session<W> {
         self.command_sender = None;
         self.telemetry_receiver = None;
         self.prepared_plan_sender = None;
+        self.retired_plan_receiver = None;
+        self.null_driver_last_pump_at = None;
+        self.null_driver_frame_accumulator = 0.0;
         self.prepared_plans.clear();
         self.active_plan_metadata = None;
         self.transport_playing = false;
@@ -562,6 +574,8 @@ impl<W: Write> Session<W> {
     }
 
     fn write_snapshot(&mut self, request: &SessionRequest) -> Result<(), SessionError> {
+        self.process_driver_for_snapshot()?;
+
         self.drain_runtime_events()?;
 
         self.write_ok_prefix(request, "engine:snapshot")?;
@@ -580,8 +594,16 @@ impl<W: Write> Session<W> {
 
         if let Some(telemetry) = self.last_telemetry {
             let plan_status = telemetry.runtime_plan_status;
-            let beat_position =
-                sample_to_default_beat(telemetry.sample_position, telemetry.sample_rate.max(1));
+            let beat_position = if self.transport_playing {
+                sample_to_default_beat(
+                    telemetry
+                        .sample_position
+                        .saturating_sub(self.transport_changed_at_sample),
+                    telemetry.sample_rate.max(1),
+                )
+            } else {
+                0.0
+            };
             write!(
                 self.writer,
                 ",\"transport\":{{\"playing\":{},\"samplePosition\":{},\"beatPosition\":{},\"loopIteration\":0}},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"pendingTransfers\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}},\"diagnostics\":{{\"xruns\":{},\"queueOverflows\":{},\"streamErrors\":{}}},\"telemetry\":{{\"samplePosition\":{},\"callbackCount\":{},\"sampleRate\":{},\"callbackFrames\":{},\"outputChannels\":{},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"pendingPlanCount\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}}}}",
@@ -620,6 +642,38 @@ impl<W: Write> Session<W> {
         Ok(())
     }
 
+    fn process_driver_for_snapshot(&mut self) -> Result<(), SessionError> {
+        let Some(driver) = &mut self.driver else {
+            return Ok(());
+        };
+
+        if !driver.is_null() {
+            return Ok(());
+        }
+
+        let Some(stream) = self.stream.as_ref() else {
+            return Ok(());
+        };
+
+        let now = Instant::now();
+        let last = self.null_driver_last_pump_at.get_or_insert(now);
+        let elapsed = now.saturating_duration_since(*last);
+        *last = now;
+
+        self.null_driver_frame_accumulator +=
+            elapsed.as_secs_f64() * f64::from(stream.sample_rate.max(1));
+
+        let frames_per_block = f64::from(stream.requested_buffer_frames.unwrap_or(128).max(1));
+        let block_count = (self.null_driver_frame_accumulator / frames_per_block).floor() as usize;
+
+        if block_count == 0 {
+            return Ok(());
+        }
+
+        self.null_driver_frame_accumulator -= block_count as f64 * frames_per_block;
+        driver.process_blocks(block_count)
+    }
+
     fn drain_runtime_events(&mut self) -> Result<(), SessionError> {
         if let Some(driver) = &mut self.driver {
             let driver_events = driver.drain_events();
@@ -646,7 +700,17 @@ impl<W: Write> Session<W> {
             }
         }
 
+        self.drain_retired_plans();
+
         Ok(())
+    }
+
+    fn drain_retired_plans(&mut self) {
+        if let Some(receiver) = &self.retired_plan_receiver {
+            while let Some(retired) = receiver.pop() {
+                drop(retired);
+            }
+        }
     }
 
     fn wait_for_plan_activation(
@@ -692,6 +756,7 @@ impl<W: Write> Session<W> {
                             self.write_engine_event(event)?;
 
                             if event_command_id == command_id {
+                                self.drain_retired_plans();
                                 return Ok(PlanActivation {
                                     plan_id,
                                     plan_revision,
@@ -990,6 +1055,10 @@ impl AudioDriver for SessionDriver {
 }
 
 impl SessionDriver {
+    fn is_null(&self) -> bool {
+        matches!(self, Self::Null(_))
+    }
+
     fn last_telemetry(&self) -> Option<AudioTelemetry> {
         match self {
             Self::Cpal(_) => None,
@@ -1001,6 +1070,15 @@ impl SessionDriver {
         match self {
             Self::Cpal(_) => Ok(()),
             Self::Null(driver) => driver.process_blocks(1).map_err(session_driver_error),
+        }
+    }
+
+    fn process_blocks(&mut self, block_count: usize) -> Result<(), SessionError> {
+        match self {
+            Self::Cpal(_) => Ok(()),
+            Self::Null(driver) => driver
+                .process_blocks(block_count)
+                .map_err(session_driver_error),
         }
     }
 }
@@ -1809,6 +1887,50 @@ mod tests {
     }
 
     #[test]
+    fn stopped_transport_snapshot_reports_zero_beat_while_audio_clock_advances() {
+        let output = run_session(
+            "audio:start driver=null sample_rate=48000 buffer_frames=128 channels=2\n\
+             engine:snapshot\n\
+             {\"requestId\":2,\"type\":\"engine:command\",\"command\":{\"type\":\"tempo-map:set\",\"originSample\":0,\"originBeat\":0,\"bpm\":120,\"sampleRate\":48000,\"atSample\":0}}\n\
+             engine:snapshot\n\
+             session:shutdown\n",
+        );
+
+        assert!(output.contains("\"samplePosition\":256"));
+        assert_eq!(output.matches("\"beatPosition\":0").count(), 2);
+    }
+
+    #[test]
+    fn null_driver_snapshot_pump_advances_by_elapsed_time() {
+        let mut driver = build_session_driver(DriverKind::Null);
+        let stream = driver
+            .start_output(
+                OutputStreamRequest {
+                    device_id: None,
+                    preferred_sample_rate: Some(48_000),
+                    preferred_buffer_frames: Some(128),
+                    preferred_channels: Some(2),
+                },
+                Box::new(EngineProcessor::new(AudioEngine::new())),
+            )
+            .expect("null driver should start");
+        let mut session = Session::new(Vec::new());
+
+        session.driver = Some(driver);
+        session.stream = Some(stream);
+        session.null_driver_last_pump_at = Some(Instant::now() - Duration::from_millis(40));
+        session.process_driver_for_snapshot().unwrap();
+
+        let telemetry = session
+            .driver
+            .as_ref()
+            .and_then(SessionDriver::last_telemetry)
+            .expect("null driver should produce telemetry");
+
+        assert!(telemetry.sample_position > 128);
+    }
+
+    #[test]
     fn json_requests_echo_request_ids() {
         let output = run_session(
             "{\"requestId\":1,\"type\":\"session:hello\"}\n\
@@ -1839,5 +1961,34 @@ mod tests {
         assert!(output.contains("\"requestId\":5,\"type\":\"engine:command\""));
         assert!(output.contains("\"requestId\":6,\"type\":\"engine:command\""));
         assert!(!output.contains("\"ok\":false"));
+    }
+
+    #[test]
+    fn repeated_plan_activation_drains_retired_plans_in_session_mode() {
+        let mut input =
+            "{\"requestId\":1,\"type\":\"audio:start\",\"driver\":\"null\",\"sample_rate\":48000,\"buffer_frames\":128,\"channels\":2}\n"
+                .to_string();
+
+        for index in 0..12 {
+            let request_id = 2 + index * 2;
+            let plan_id = 100 + index as u64;
+            let transfer_id = 1 + index as u64;
+
+            input.push_str(&format!(
+                "{{\"requestId\":{request_id},\"type\":\"plan:prepare\",\"plan\":{{\"kind\":\"diagnostic-tone\",\"version\":1,\"planId\":{plan_id},\"planRevision\":1,\"frequencyHz\":440,\"gain\":0.01,\"outputChannels\":2}}}}\n"
+            ));
+            input.push_str(&format!(
+                "{{\"requestId\":{},\"type\":\"plan:activate\",\"transferId\":{transfer_id},\"requestedSample\":0}}\n",
+                request_id + 1
+            ));
+        }
+
+        input.push_str("{\"requestId\":99,\"type\":\"session:shutdown\"}\n");
+
+        let output = run_session(&input);
+
+        assert!(!output.contains("RetirementQueueFull"));
+        assert!(!output.contains("PlanActivationFailed"));
+        assert_eq!(output.matches("\"type\":\"plan:activated\"").count(), 12);
     }
 }

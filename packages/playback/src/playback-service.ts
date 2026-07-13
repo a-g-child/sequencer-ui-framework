@@ -87,6 +87,13 @@ export interface PlaybackServiceStatus extends SchedulerStatus {
   }
   readonly webMidi: WebMidiOutputStatus
   readonly runtime?: PlaybackRuntimeControllerStatus
+  readonly nativeRuntime: PlaybackNativeRuntimeStatus
+}
+
+export interface PlaybackNativeRuntimeStatus {
+  readonly lastAction: string
+  readonly lastCommandTypes: readonly string[]
+  readonly lastError?: string
 }
 
 export interface PlaybackTrackGraphDiagnostics {
@@ -133,6 +140,10 @@ export class PlaybackService implements Service, DocumentObserver {
   private readonly webAudioOutput = new WebAudioOutput()
   private readonly webMidiOutput = new WebMidiOutput()
   private readonly nativeClipScheduleSubmissions = new NativeClipScheduleSubmissionState()
+  private nativeRuntimeStatus: PlaybackNativeRuntimeStatus = {
+    lastAction: 'idle',
+    lastCommandTypes: []
+  }
   private unsubscribeServiceEvents?: () => void
   private unsubscribeRuntimeController?: () => void
   private activeNativeCompilation?: {
@@ -208,7 +219,8 @@ export class PlaybackService implements Service, DocumentObserver {
       statistics: this.statisticsOutput.statistics,
       webAudio: this.webAudioOutput.settings,
       webMidi: this.webMidiOutput.status,
-      runtime: this.runtimeController?.status
+      runtime: this.runtimeController?.status,
+      nativeRuntime: this.nativeRuntimeStatus
     }
   }
 
@@ -478,7 +490,9 @@ export class PlaybackService implements Service, DocumentObserver {
     return this.webAudioOutput.trackSettingsFor(trackId)
   }
 
-  private rebuildModel(): void {
+  private rebuildModel(
+    options: { readonly prepareNativeRuntimePlan?: boolean } = {}
+  ): void {
     if (!this.context) return
 
     const startedAt = nowMs()
@@ -492,7 +506,7 @@ export class PlaybackService implements Service, DocumentObserver {
     this.syncTrackMixersToWebAudio()
     this.syncRuntimeParametersToWebAudio()
     this.statisticsOutput.recordPlaybackModelRebuild(nowMs() - startedAt)
-    if (this.runtimeController) {
+    if (this.runtimeController && options.prepareNativeRuntimePlan !== false) {
       void this.prepareNativeRuntimePlan(this.model).catch((error) => {
         this.runtimeController?.fail(error)
       })
@@ -545,10 +559,12 @@ export class PlaybackService implements Service, DocumentObserver {
         this.liveClips.resetLaunchOrigins(0)
       }
       this.clearTrackVoicesForAppliedLaunches(this.liveClips.applyDueLaunches(state))
-      this.rebuildModel()
+      this.rebuildModel({ prepareNativeRuntimePlan: false })
       if (this.runtimeController) {
         void this.prepareAndStartNativeRuntime(state).catch((error) => {
+          this.setNativeRuntimeStatus('transport-start-failed', [], error)
           this.runtimeController?.fail(error)
+          this.stopClockAfterNativeStartFailure()
         })
       } else {
         this.scheduler.start(state.beat)
@@ -630,14 +646,32 @@ export class PlaybackService implements Service, DocumentObserver {
   private async prepareAndStartNativeRuntime(state: ClockState): Promise<void> {
     if (!this.runtimeController || !this.model) return
 
+    this.setNativeRuntimeStatus('prepare-start')
     await this.prepareNativeRuntimePlan(this.model)
+    this.setNativeRuntimeStatus('schedule-start')
     this.submitNativeClipSchedule(state, 'begin')
+    this.setNativeRuntimeStatus('transport-start-requested')
     await this.runtimeController.play()
+    this.setNativeRuntimeStatus('transport-start-confirmed')
+  }
+
+  private stopClockAfterNativeStartFailure(): void {
+    this.context?.events.emit({
+      type: 'transport:playing-changed',
+      serviceId: this.id,
+      payload: { playing: false }
+    })
+    this.context?.events.emit({
+      type: 'transport:beat-changed',
+      serviceId: this.id,
+      payload: { currentBeat: 0, currentStep: 0 }
+    })
   }
 
   private async prepareNativeRuntimePlan(playbackModel: PlaybackModel | undefined): Promise<void> {
     if (!this.runtimeController || !playbackModel) return
 
+    this.setNativeRuntimeStatus('plan-prepare')
     const modelKey = this.nativePlanInputKey(playbackModel)
     const currentCompilation = this.activeNativeCompilation
 
@@ -677,6 +711,7 @@ export class PlaybackService implements Service, DocumentObserver {
       revision: compilation.plan.revision,
       modelKey
     }
+    this.setNativeRuntimeStatus('plan-active')
   }
 
   private nativePlanInputKey(playbackModel: PlaybackModel): string {
@@ -728,7 +763,7 @@ export class PlaybackService implements Service, DocumentObserver {
       generation
     })
 
-    this.runtimeController.sendCommands([
+    const commands = [
       createNativeTempoMapCommand(this.model, {
         sampleRate,
         originSample: atSample,
@@ -747,7 +782,26 @@ export class PlaybackService implements Service, DocumentObserver {
         atSample,
         timeMs
       })
-    ])
+    ]
+
+    this.setNativeRuntimeStatus(
+      `clip-schedule-${mode}`,
+      commands.map((command) => command.type)
+    )
+    this.runtimeController.sendCommands(commands)
+  }
+
+  private setNativeRuntimeStatus(
+    lastAction: string,
+    lastCommandTypes: readonly string[] = this.nativeRuntimeStatus.lastCommandTypes,
+    error?: unknown
+  ): void {
+    this.nativeRuntimeStatus = {
+      lastAction,
+      lastCommandTypes: [...lastCommandTypes],
+      lastError: error === undefined ? undefined : runtimeErrorMessage(error)
+    }
+    this.emitStatus()
   }
 
   private async initialiseOutputs(): Promise<void> {
@@ -1242,4 +1296,10 @@ function hasNumber<T extends string>(
   key: T
 ): value is Record<T, number> {
   return key in value && typeof value[key as keyof typeof value] === 'number'
+}
+
+function runtimeErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message
+
+  return String(error)
 }

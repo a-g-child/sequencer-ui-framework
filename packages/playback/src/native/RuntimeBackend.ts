@@ -184,6 +184,10 @@ export class NativeBackend implements RuntimeBackend {
   }
 
   async start(): Promise<void> {
+    if (this.running) {
+      return
+    }
+
     const session = await this.transport.start(this.audio)
 
     this.capabilities = session.capabilities
