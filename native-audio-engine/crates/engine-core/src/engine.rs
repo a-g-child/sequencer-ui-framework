@@ -103,6 +103,14 @@ impl ScheduledEventEntry {
     fn effective_sample(&self) -> u64 {
         self.event.at_sample()
     }
+
+    fn due_order(&self) -> u8 {
+        match self.event {
+            ScheduledEngineEvent::NoteOff { .. } => 0,
+            ScheduledEngineEvent::NoteOn { .. } => 1,
+            ScheduledEngineEvent::ArpeggiatorTick { .. } => 2,
+        }
+    }
 }
 
 struct ScheduledEventSet {
@@ -178,10 +186,14 @@ impl ScheduledEventSet {
             .filter_map(|(index, entry)| {
                 let entry = entry.as_ref()?;
 
-                (entry.effective_sample() <= sample).then_some((index, entry.effective_sample()))
+                (entry.effective_sample() <= sample).then_some((
+                    index,
+                    entry.effective_sample(),
+                    entry.due_order(),
+                ))
             })
-            .min_by_key(|(_, effective_sample)| *effective_sample)
-            .map(|(index, _)| index)?;
+            .min_by_key(|(_, effective_sample, due_order)| (*effective_sample, *due_order))
+            .map(|(index, _, _)| index)?;
 
         self.entries[index].take()
     }
@@ -370,6 +382,7 @@ fn drain_future_event_requests_from(
 pub struct AudioEngine {
     sample_position: u64,
     callback_count: u64,
+    maximum_callback_frames: u32,
     maximum_callback_duration_ns: u64,
     stream_errors: u64,
     probable_xruns: u64,
@@ -409,6 +422,7 @@ impl AudioEngine {
         Self {
             sample_position: 0,
             callback_count: 0,
+            maximum_callback_frames: 0,
             maximum_callback_duration_ns: 0,
             stream_errors: 0,
             probable_xruns: 0,
@@ -539,6 +553,7 @@ impl AudioEngine {
             .sample_position
             .saturating_add(context.frame_count as u64);
         self.callback_count = self.callback_count.saturating_add(1);
+        self.maximum_callback_frames = self.maximum_callback_frames.max(context.frame_count);
 
         let callback_duration_ns = started_at.elapsed().as_nanos() as u64;
         self.maximum_callback_duration_ns =
@@ -557,6 +572,7 @@ impl AudioEngine {
             callback_count: self.callback_count,
             sample_rate: context.sample_rate.round() as u32,
             callback_frames: context.frame_count,
+            maximum_callback_frames: self.maximum_callback_frames,
             output_channels: context.output_channels,
             callback_duration_ns,
             maximum_callback_duration_ns: self.maximum_callback_duration_ns,
@@ -600,6 +616,16 @@ impl AudioEngine {
                         .as_ref()
                         .and_then(|crossfade| crossfade.new_plan.as_ref())
                         .map(PreparedExecutionPlan::plan_revision)
+                }),
+            active_plan_maximum_frames: self
+                .execution_plan
+                .as_ref()
+                .map(|plan| plan.maximum_frames() as u32)
+                .or_else(|| {
+                    self.crossfade
+                        .as_ref()
+                        .and_then(|crossfade| crossfade.new_plan.as_ref())
+                        .map(|plan| plan.maximum_frames() as u32)
                 }),
             pending_plan_count: self.pending_plans.len() as u32,
             successful_swaps: self.successful_plan_swaps,
@@ -4201,6 +4227,281 @@ mod tests {
         assert!(frame_is_silent(&output, 112));
         assert!(frame_has_signal(&output, 129));
         assert!(frame_is_silent(&output, 144));
+    }
+
+    #[test]
+    fn owned_beat_events_continue_across_transport_loop_iterations() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine = AudioEngine::new()
+            .with_scheduled_test_voice()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::SetTempoMap {
+                id: 1,
+                tempo: TempoMapSnapshot {
+                    origin_sample: 0,
+                    origin_beat: 0.0,
+                    bpm: 120.0,
+                    sample_rate: 64.0,
+                },
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetTransportLoop {
+                id: 2,
+                transport_loop: TransportLoop {
+                    enabled: true,
+                    start_sample: 64,
+                    end_sample: 96,
+                },
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetScheduledEventOwnerGeneration {
+                id: 3,
+                owner_id: 42,
+                generation: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 4,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleBeatEvent {
+                id: 5,
+                event: ScheduledBeatEvent::NoteOn {
+                    target_node: 1,
+                    note: 69,
+                    velocity: 1.0,
+                    at_beat: 2.0,
+                },
+                owner: Some(ScheduledEventOwner::generation_bound(42, 1)),
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleBeatEvent {
+                id: 6,
+                event: ScheduledBeatEvent::NoteOff {
+                    target_node: 1,
+                    note: 69,
+                    at_beat: 2.5,
+                },
+                owner: Some(ScheduledEventOwner::completion_required(42, 1)),
+                at_sample: 0,
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 160);
+
+        assert!(frame_has_signal(&output, 65));
+        assert!(frame_is_silent(&output, 80));
+        assert!(frame_has_signal(&output, 97));
+        assert!(frame_is_silent(&output, 112));
+        assert!(frame_has_signal(&output, 129));
+        assert!(frame_is_silent(&output, 144));
+    }
+
+    #[test]
+    fn owned_beat_events_continue_across_loops_through_instrument_plan() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let plan = monophonic_instrument_plan(2);
+        let mut engine = AudioEngine::new()
+            .with_execution_plan(&plan, 512)
+            .unwrap()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::SetTempoMap {
+                id: 1,
+                tempo: TempoMapSnapshot {
+                    origin_sample: 0,
+                    origin_beat: 0.0,
+                    bpm: 120.0,
+                    sample_rate: 64.0,
+                },
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetTransportLoop {
+                id: 2,
+                transport_loop: TransportLoop {
+                    enabled: true,
+                    start_sample: 64,
+                    end_sample: 96,
+                },
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetScheduledEventOwnerGeneration {
+                id: 3,
+                owner_id: 42,
+                generation: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 4,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleBeatEvent {
+                id: 5,
+                event: ScheduledBeatEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 69,
+                    velocity: 1.0,
+                    at_beat: 2.0,
+                },
+                owner: Some(ScheduledEventOwner::generation_bound(42, 1)),
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleBeatEvent {
+                id: 6,
+                event: ScheduledBeatEvent::NoteOff {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 69,
+                    at_beat: 2.5,
+                },
+                owner: Some(ScheduledEventOwner::completion_required(42, 1)),
+                at_sample: 0,
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 160);
+
+        assert!(frame_has_signal(&output, 65));
+        assert!(frame_is_silent(&output, 80));
+        assert!(frame_has_signal(&output, 97));
+        assert!(frame_is_silent(&output, 112));
+        assert!(frame_has_signal(&output, 129));
+        assert!(frame_is_silent(&output, 144));
+    }
+
+    #[test]
+    fn loop_boundary_note_off_does_not_silence_rescheduled_first_note() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine = AudioEngine::new()
+            .with_scheduled_test_voice()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+
+        command_sender
+            .push(EngineCommand::SetTransportLoop {
+                id: 1,
+                transport_loop: TransportLoop {
+                    enabled: true,
+                    start_sample: 64,
+                    end_sample: 96,
+                },
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 2,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetTempoMap {
+                id: 3,
+                tempo: TempoMapSnapshot {
+                    origin_sample: 0,
+                    origin_beat: 0.0,
+                    bpm: 120.0,
+                    sample_rate: 64.0,
+                },
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleBeatEvent {
+                id: 4,
+                event: ScheduledBeatEvent::NoteOn {
+                    target_node: NODE_VOICE,
+                    note: 69,
+                    velocity: 0.5,
+                    at_beat: 2.0,
+                },
+                owner: None,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleBeatEvent {
+                id: 5,
+                event: ScheduledBeatEvent::NoteOff {
+                    target_node: NODE_VOICE,
+                    note: 69,
+                    at_beat: 3.0,
+                },
+                owner: None,
+                at_sample: 0,
+            })
+            .unwrap();
+
+        let output = process_frames(&mut engine, 97);
+
+        assert!(frame_has_signal(&output, 65));
+        assert!(engine.scheduled_test_voice.active);
+    }
+
+    #[test]
+    fn due_scheduled_events_order_note_off_before_note_on_at_same_sample() {
+        let mut events = ScheduledEventSet::default();
+
+        events.insert(scheduled_note_on(96), None, None).unwrap();
+        events.insert(scheduled_note_off(96), None, None).unwrap();
+
+        assert!(matches!(
+            events.take_due_before(96).map(|entry| entry.event),
+            Some(ScheduledEngineEvent::NoteOff { .. })
+        ));
+        assert!(matches!(
+            events.take_due_before(96).map(|entry| entry.event),
+            Some(ScheduledEngineEvent::NoteOn { .. })
+        ));
+    }
+
+    #[test]
+    fn loop_rescheduler_keeps_first_note_active_at_boundary() {
+        let mut engine = AudioEngine::new().with_scheduled_test_voice();
+
+        engine.playing = true;
+        engine.transport_loop = TransportLoop {
+            enabled: true,
+            start_sample: 64,
+            end_sample: 96,
+        };
+        engine
+            .scheduled_events
+            .insert(scheduled_note_on(64), None, None)
+            .unwrap();
+        engine
+            .scheduled_events
+            .insert(scheduled_note_off(96), None, None)
+            .unwrap();
+
+        engine.apply_scheduled_events_until(64);
+        assert!(engine.scheduled_test_voice.active);
+        engine.apply_scheduled_events_until(96);
+        assert!(engine.scheduled_test_voice.active);
     }
 
     #[test]

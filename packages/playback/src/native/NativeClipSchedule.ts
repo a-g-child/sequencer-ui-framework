@@ -3,6 +3,7 @@ import type {
   NativeScheduledBeatEvent,
   ScheduleBeatEventBatchCommand,
   ScheduleBeatEventCommand,
+  SetScheduledEventOwnerGenerationCommand,
   SetTempoMapCommand,
   SetTransportLoopCommand
 } from './schemas.ts'
@@ -33,6 +34,16 @@ export interface NativeClipScheduleCommandOptions {
   readonly atSample?: number
 }
 
+export interface NativeClipScheduleGeneration {
+  readonly clipId: string
+  readonly generation: number
+}
+
+export interface NativeClipScheduleSubmission {
+  readonly active?: NativeClipScheduleGeneration
+  readonly invalidations: readonly NativeClipScheduleGeneration[]
+}
+
 export interface NativeTempoMapCommandOptions {
   readonly sampleRate: number
   readonly originSample?: number
@@ -45,35 +56,74 @@ export interface NativeTransportLoopCommandOptions {
   readonly clip: PlaybackClip
   readonly bpm: number
   readonly sampleRate: number
+  readonly originSample?: number
+  readonly originBeat?: number
   readonly atSample?: number
   readonly timeMs: number
 }
 
 export class NativeClipScheduleSubmissionState {
   private readonly generations = new Map<string, number>()
+  private activeClipId: string | undefined
   private active = false
 
-  begin(clipId: string): number | undefined {
+  begin(clipId: string): NativeClipScheduleSubmission | undefined {
     if (this.active) return undefined
 
-    return this.nextGeneration(clipId)
+    return {
+      active: this.activate(clipId),
+      invalidations: []
+    }
   }
 
-  replace(clipId: string): number {
-    return this.nextGeneration(clipId)
+  replace(clipId: string): NativeClipScheduleSubmission {
+    const invalidations =
+      this.activeClipId && this.activeClipId !== clipId
+        ? [this.nextGeneration(this.activeClipId)]
+        : []
+
+    return {
+      active: this.activate(clipId),
+      invalidations
+    }
+  }
+
+  clear(): NativeClipScheduleSubmission | undefined {
+    if (!this.activeClipId) {
+      this.active = false
+      return undefined
+    }
+
+    const invalidation = this.nextGeneration(this.activeClipId)
+
+    this.activeClipId = undefined
+    this.active = false
+
+    return {
+      invalidations: [invalidation]
+    }
   }
 
   stop(): void {
     this.active = false
+    this.activeClipId = undefined
   }
 
-  private nextGeneration(clipId: string): number {
-    const generation = (this.generations.get(clipId) ?? 0) + 1
+  private activate(clipId: string): NativeClipScheduleGeneration {
+    const generation = this.nextGeneration(clipId)
 
-    this.generations.set(clipId, generation)
+    this.activeClipId = clipId
     this.active = true
 
     return generation
+  }
+
+  private nextGeneration(clipId: string): NativeClipScheduleGeneration {
+    const generation = (this.generations.get(clipId) ?? 0) + 1
+
+    this.generations.set(clipId, generation)
+
+    return { clipId, generation }
   }
 }
 
@@ -134,6 +184,20 @@ export function nativeClipScheduleBatchCommand(
   }
 }
 
+export function nativeScheduledEventOwnerGenerationCommand(
+  generation: NativeClipScheduleGeneration,
+  options: NativeClipScheduleCommandOptions
+): SetScheduledEventOwnerGenerationCommand {
+  return {
+    id: `${generation.clipId}:${generation.generation}:owner-generation`,
+    type: 'event-owner:generation:set',
+    clipId: generation.clipId,
+    generation: generation.generation,
+    atSample: options.atSample ?? 0,
+    timeMs: options.timeMs
+  }
+}
+
 export function createNativeTempoMapCommand(
   model: PlaybackModel,
   options: NativeTempoMapCommandOptions
@@ -159,11 +223,19 @@ export function createNativeTransportLoopCommand(
     ? options.clip.start + options.clip.loopStart
     : options.clip.start
   const lengthBeat = options.clip.loop ? options.clip.loopLength : options.clip.length
-  const startSample = beatToSample(startBeat, options.bpm, options.sampleRate)
+  const startSample = beatToSample(
+    startBeat,
+    options.bpm,
+    options.sampleRate,
+    options.originSample,
+    options.originBeat
+  )
   const endSample = beatToSample(
     startBeat + Math.max(0, lengthBeat),
     options.bpm,
-    options.sampleRate
+    options.sampleRate,
+    options.originSample,
+    options.originBeat
   )
 
   return {
@@ -228,6 +300,15 @@ function normalizeVelocity(value: number): number {
   return Math.max(0, Math.min(1, normalized))
 }
 
-function beatToSample(beat: number, bpm: number, sampleRate: number): number {
-  return Math.max(0, Math.round((beat * 60 * sampleRate) / Math.max(1, bpm)))
+function beatToSample(
+  beat: number,
+  bpm: number,
+  sampleRate: number,
+  originSample = 0,
+  originBeat = 0
+): number {
+  return Math.max(
+    0,
+    Math.round(originSample + ((beat - originBeat) * 60 * sampleRate) / Math.max(1, bpm))
+  )
 }

@@ -32,6 +32,7 @@ const PARAMETER_GRAPH_VERSION: u32 = 0;
 const MAX_PREPARED_TRANSFERS: usize = 8;
 const MAX_SCHEDULED_BEAT_BATCH_EVENTS: usize = 256;
 const PLAN_ACTIVATION_TIMEOUT: Duration = Duration::from_millis(500);
+const DEFAULT_MAXIMUM_PROCESS_FRAMES: usize = 2048;
 
 pub fn run_stdio_session<R, W>(reader: R, writer: W) -> Result<(), SessionError>
 where
@@ -409,7 +410,8 @@ impl<W: Write> Session<W> {
             return Ok(());
         }
 
-        let maximum_frames = stream.requested_buffer_frames.unwrap_or(128).max(1) as usize;
+        let requested_frames = stream.requested_buffer_frames.unwrap_or(128).max(1) as usize;
+        let maximum_frames = requested_frames.max(DEFAULT_MAXIMUM_PROCESS_FRAMES);
         let plan = match parse_session_execution_plan(request) {
             Ok(plan) => plan,
             Err(error) => {
@@ -610,12 +612,13 @@ impl<W: Write> Session<W> {
             let command_diagnostics = telemetry.command_diagnostics;
             write!(
                 self.writer,
-                ",\"transport\":{{\"playing\":{},\"samplePosition\":{},\"beatPosition\":{},\"loopIteration\":0}},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"pendingTransfers\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}},\"diagnostics\":{{\"xruns\":{},\"queueOverflows\":{},\"streamErrors\":{},\"commandQueueDepth\":{},\"pendingCommandCount\":{},\"nextPendingCommandSample\":{},\"commandReceived\":{},\"commandApplied\":{},\"commandLate\":{},\"commandRejected\":{},\"commandOutOfOrder\":{},\"lastCommandRejection\":{}}},\"telemetry\":{{\"samplePosition\":{},\"callbackCount\":{},\"sampleRate\":{},\"callbackFrames\":{},\"outputChannels\":{},\"commandQueueDepth\":{},\"pendingCommandCount\":{},\"nextPendingCommandSample\":{},\"commandDiagnostics\":{{\"received\":{},\"applied\":{},\"late\":{},\"rejected\":{},\"outOfOrder\":{},\"commandQueueOverflows\":{},\"telemetryQueueOverflows\":{}}},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"pendingPlanCount\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}}}}",
+                ",\"transport\":{{\"playing\":{},\"samplePosition\":{},\"beatPosition\":{},\"loopIteration\":0}},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"planMaximumFrames\":{},\"pendingTransfers\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}},\"diagnostics\":{{\"xruns\":{},\"queueOverflows\":{},\"streamErrors\":{},\"callbackFrames\":{},\"maximumCallbackFrames\":{},\"commandQueueDepth\":{},\"pendingCommandCount\":{},\"nextPendingCommandSample\":{},\"commandReceived\":{},\"commandApplied\":{},\"commandLate\":{},\"commandRejected\":{},\"commandOutOfOrder\":{},\"lastCommandRejection\":{}}},\"telemetry\":{{\"samplePosition\":{},\"callbackCount\":{},\"sampleRate\":{},\"callbackFrames\":{},\"maximumCallbackFrames\":{},\"outputChannels\":{},\"commandQueueDepth\":{},\"pendingCommandCount\":{},\"nextPendingCommandSample\":{},\"commandDiagnostics\":{{\"received\":{},\"applied\":{},\"late\":{},\"rejected\":{},\"outOfOrder\":{},\"commandQueueOverflows\":{},\"telemetryQueueOverflows\":{}}},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"planMaximumFrames\":{},\"pendingPlanCount\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}}}}",
                 self.transport_playing,
                 telemetry.sample_position,
                 beat_position,
                 optional_u64_json(plan_status.active_plan_id),
                 optional_u64_json(plan_status.active_plan_revision),
+                optional_u32_json(plan_status.active_plan_maximum_frames),
                 plan_status
                     .pending_plan_count
                     .saturating_add(self.prepared_plans.len() as u32),
@@ -625,6 +628,8 @@ impl<W: Write> Session<W> {
                 telemetry.command_diagnostics.command_queue_overflows
                     .saturating_add(telemetry.command_diagnostics.telemetry_queue_overflows),
                 telemetry.stream_errors,
+                telemetry.callback_frames,
+                telemetry.maximum_callback_frames,
                 telemetry.command_queue_depth,
                 telemetry.pending_command_count,
                 optional_u64_json(telemetry.next_pending_command_sample),
@@ -638,6 +643,7 @@ impl<W: Write> Session<W> {
                 telemetry.callback_count,
                 telemetry.sample_rate,
                 telemetry.callback_frames,
+                telemetry.maximum_callback_frames,
                 telemetry.output_channels,
                 telemetry.command_queue_depth,
                 telemetry.pending_command_count,
@@ -651,6 +657,7 @@ impl<W: Write> Session<W> {
                 command_diagnostics.telemetry_queue_overflows,
                 optional_u64_json(plan_status.active_plan_id),
                 optional_u64_json(plan_status.active_plan_revision),
+                optional_u32_json(plan_status.active_plan_maximum_frames),
                 plan_status
                     .pending_plan_count
                     .saturating_add(self.prepared_plans.len() as u32),
@@ -1378,6 +1385,18 @@ fn parse_session_engine_commands(
                 at_sample,
             }
         }
+        Some("event-owner:generation:set") => {
+            let clip_id =
+                field("clipId").ok_or_else(|| SessionError::new("command.clipId is required"))?;
+            let generation = parse_required_u64(field("generation"), "command.generation")?;
+
+            EngineCommand::SetScheduledEventOwnerGeneration {
+                id: first_command_id,
+                owner_id: stable_owner_id(clip_id),
+                generation,
+                at_sample,
+            }
+        }
         Some("event:schedule-beat") => {
             let event = parse_scheduled_beat_event(&command_json)?;
 
@@ -2037,6 +2056,7 @@ mod tests {
             runtime_plan_status: engine_protocol::RuntimePlanStatus {
                 active_plan_id: Some(42),
                 active_plan_revision: Some(7),
+                active_plan_maximum_frames: Some(2048),
                 pending_plan_count: 1,
                 successful_swaps: 2,
                 rejected_swaps: 3,

@@ -379,16 +379,72 @@ function formatPreparedHandle(handle: PreparedRuntimeHandle): string {
 }
 
 function formatActivationSnapshot(snapshot: RuntimeSnapshot): string {
+  const nativePlan = nativePlanDiagnostics(snapshot.native)
+  const nativeStream = nativeStreamDiagnostics(snapshot.native)
   const nativeDiagnostics = nativeCommandDiagnostics(snapshot.native)
 
   return [
     `plan=${snapshot.plan.activePlanId ?? 'null'}/${snapshot.plan.activeRevision ?? 'null'}`,
+    nativePlan,
     `pending=${snapshot.plan.pendingTransfers}`,
     `sample=${snapshot.transport.samplePosition}`,
     `callbacks=${snapshot.stream.callbackCount}`,
+    nativeStream,
     `playing=${snapshot.transport.playing}`,
     `running=${snapshot.running}`,
     nativeDiagnostics
+  ].join(',')
+}
+
+function nativePlanDiagnostics(nativeSnapshot: unknown): string {
+  if (!nativeSnapshot || typeof nativeSnapshot !== 'object') {
+    return 'planMax=n/a'
+  }
+
+  const planMaximumFrames =
+    (nativeSnapshot as {
+      plan?: {
+        planMaximumFrames?: number | null
+      }
+    }).plan?.planMaximumFrames ??
+    (nativeSnapshot as {
+      telemetry?: {
+        plan?: {
+          planMaximumFrames?: number | null
+        }
+      } | null
+    }).telemetry?.plan?.planMaximumFrames
+
+  return `planMax=${planMaximumFrames ?? 'none'}`
+}
+
+function nativeStreamDiagnostics(nativeSnapshot: unknown): string {
+  if (!nativeSnapshot || typeof nativeSnapshot !== 'object') {
+    return 'frames=n/a/max=n/a,streamErrors=n/a'
+  }
+
+  const diagnostics = (nativeSnapshot as {
+    diagnostics?: {
+      streamErrors?: number
+      callbackFrames?: number
+      maximumCallbackFrames?: number
+    }
+  }).diagnostics
+  const telemetry = (nativeSnapshot as {
+    telemetry?: {
+      callbackFrames?: number
+      maximumCallbackFrames?: number
+    } | null
+  }).telemetry
+
+  return [
+    `frames=${diagnostics?.callbackFrames ?? telemetry?.callbackFrames ?? 'n/a'}`,
+    `maxFrames=${
+      diagnostics?.maximumCallbackFrames ??
+      telemetry?.maximumCallbackFrames ??
+      'n/a'
+    }`,
+    `streamErrors=${diagnostics?.streamErrors ?? 'n/a'}`
   ].join(',')
 }
 

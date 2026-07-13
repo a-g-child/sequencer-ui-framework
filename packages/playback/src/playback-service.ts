@@ -39,6 +39,7 @@ import {
   createNativeTempoMapCommand,
   createNativeTransportLoopCommand,
   nativeClipScheduleBatchCommand,
+  nativeScheduledEventOwnerGenerationCommand,
   NativeClipScheduleSubmissionState,
 } from './native/NativeClipSchedule.ts'
 import {
@@ -260,8 +261,7 @@ export class PlaybackService implements Service, DocumentObserver {
     }
 
     if (isPlaybackModelOperation(operation)) {
-      this.panicRuntimeVoices()
-      this.rebuildModel()
+      this.handlePlaybackModelOperation()
       return
     }
 
@@ -281,8 +281,7 @@ export class PlaybackService implements Service, DocumentObserver {
     }
 
     if (isPlaybackModelOperation(operation)) {
-      this.panicRuntimeVoices()
-      this.rebuildModel()
+      this.handlePlaybackModelOperation()
       return
     }
 
@@ -302,12 +301,19 @@ export class PlaybackService implements Service, DocumentObserver {
     }
 
     if (isPlaybackModelOperation(operation)) {
-      this.panicRuntimeVoices()
-      this.rebuildModel()
+      this.handlePlaybackModelOperation()
       return
     }
 
     void this.rebuildRuntimeDevicesAndModel()
+  }
+
+  private handlePlaybackModelOperation(): void {
+    if (!this.runtimeController) {
+      this.panicRuntimeVoices()
+    }
+
+    this.rebuildModel()
   }
 
   private applyRuntimeDeviceParameterOperation(operation: Operation): boolean {
@@ -612,6 +618,13 @@ export class PlaybackService implements Service, DocumentObserver {
 
       if (this.runtimeController) {
         void this.runtimeController.refreshSnapshot().catch(() => {})
+        const appliedLaunches = this.liveClips.applyDueLaunches(state)
+
+        if (appliedLaunches.length > 0) {
+          this.clearTrackVoicesForAppliedLaunches(appliedLaunches)
+          this.rebuildModel({ prepareNativeRuntimePlan: false })
+        }
+
         this.emitStatus()
         return
       }
@@ -784,49 +797,71 @@ export class PlaybackService implements Service, DocumentObserver {
   ): Promise<void> {
     if (!this.runtimeController || !this.model) return
 
-    const clip = this.model.clips[0]
-    if (!clip) return
-
-    const generation =
-      mode === 'replace'
-        ? this.nativeClipScheduleSubmissions.replace(clip.id)
-        : this.nativeClipScheduleSubmissions.begin(clip.id)
-    if (generation === undefined) return
-
     const snapshot = await this.runtimeController.refreshSnapshot()
     const sampleRate = snapshot?.stream.sampleRate || snapshot?.sampleRate || 48_000
     const atSample = snapshot?.transport.samplePosition ?? 0
     const timeMs = nowMs()
-    const schedule = compileNativeClipSchedule(this.model, {
-      clipId: clip.id,
-      generation
-    })
+    const clip = this.model.clips[0]
+    const submission = clip
+      ? mode === 'replace'
+        ? this.nativeClipScheduleSubmissions.replace(clip.id)
+        : this.nativeClipScheduleSubmissions.begin(clip.id)
+      : mode === 'replace'
+        ? this.nativeClipScheduleSubmissions.clear()
+        : undefined
 
-    const commands: EngineCommand[] = [
-      createNativeTempoMapCommand(this.model, {
-        sampleRate,
-        originSample: atSample,
-        originBeat: state.beat,
-        atSample,
-        timeMs
-      }),
-      createNativeTransportLoopCommand({
-        clip,
-        bpm: state.bpm,
-        sampleRate,
+    if (submission === undefined) return
+
+    const commands: EngineCommand[] = submission.invalidations.map((generation) =>
+      nativeScheduledEventOwnerGenerationCommand(generation, {
         atSample,
         timeMs
       })
-    ]
+    )
 
-    if (schedule.events.length > 0) {
+    if (clip && submission.active) {
+      const schedule = compileNativeClipSchedule(this.model, {
+        clipId: clip.id,
+        generation: submission.active.generation
+      })
+
       commands.push(
-        nativeClipScheduleBatchCommand(schedule, {
+        createNativeTempoMapCommand(this.model, {
+          sampleRate,
+          originSample: atSample,
+          originBeat: state.beat,
+          atSample,
+          timeMs
+        }),
+        createNativeTransportLoopCommand({
+          clip,
+          bpm: state.bpm,
+          sampleRate,
+          originSample: atSample,
+          originBeat: state.beat,
           atSample,
           timeMs
         })
       )
+
+      if (schedule.events.length > 0) {
+        commands.push(
+          nativeClipScheduleBatchCommand(schedule, {
+            atSample,
+            timeMs
+          })
+        )
+      } else {
+        commands.push(
+          nativeScheduledEventOwnerGenerationCommand(submission.active, {
+            atSample,
+            timeMs
+          })
+        )
+      }
     }
+
+    if (commands.length === 0) return
 
     this.setNativeRuntimeStatus(
       `clip-schedule-${mode}`,

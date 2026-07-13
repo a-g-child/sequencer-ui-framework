@@ -444,6 +444,7 @@ function isNativeRuntimeCommand(command: EngineCommand): boolean {
     command.type === 'panic' ||
     command.type === 'tempo-map:set' ||
     command.type === 'transport-loop:set' ||
+    command.type === 'event-owner:generation:set' ||
     command.type === 'event:schedule-beat' ||
     command.type === 'event:schedule-beat-batch'
   )

@@ -7,6 +7,7 @@ import {
   createNativeTransportLoopCommand,
   nativeClipScheduleBatchCommand,
   nativeClipScheduleCommands,
+  nativeScheduledEventOwnerGenerationCommand,
   NativeClipScheduleSubmissionState,
   NATIVE_EVENT_INPUT_NODE_ID
 } from '../src/native/NativeClipSchedule.ts'
@@ -128,6 +129,23 @@ describe('NativeClipSchedule', () => {
     )
   })
 
+  it('turns a clip owner generation into an invalidation command', () => {
+    assert.deepEqual(
+      nativeScheduledEventOwnerGenerationCommand(
+        { clipId: 'clip-1', generation: 6 },
+        { timeMs: 300, atSample: 768 }
+      ),
+      {
+        id: 'clip-1:6:owner-generation',
+        type: 'event-owner:generation:set',
+        clipId: 'clip-1',
+        generation: 6,
+        atSample: 768,
+        timeMs: 300
+      }
+    )
+  })
+
   it('creates native tempo and loop commands for the fixture', () => {
     const model = createFourQuarterNoteFixture()
     const clip = model.clips[0]
@@ -190,6 +208,27 @@ describe('NativeClipSchedule', () => {
         timeMs: 0
       }
     )
+
+    assert.deepEqual(
+      createNativeTransportLoopCommand({
+        clip,
+        bpm: 120,
+        sampleRate: 48_000,
+        originSample: 500_000,
+        originBeat: 0,
+        atSample: 500_000,
+        timeMs: 10
+      }),
+      {
+        id: 'clip-1:transport-loop:set',
+        type: 'transport-loop:set',
+        enabled: true,
+        startSample: 500_000,
+        endSample: 596_000,
+        atSample: 500_000,
+        timeMs: 10
+      }
+    )
   })
 
   it('keeps the first clip timing transform as an explicit identity seam', () => {
@@ -199,14 +238,38 @@ describe('NativeClipSchedule', () => {
   it('prevents duplicate active submissions until transport stop opens the next generation', () => {
     const submissions = new NativeClipScheduleSubmissionState()
 
-    assert.equal(submissions.begin('clip-1'), 1)
+    assert.deepEqual(submissions.begin('clip-1'), {
+      active: { clipId: 'clip-1', generation: 1 },
+      invalidations: []
+    })
     assert.equal(submissions.begin('clip-1'), undefined)
-    assert.equal(submissions.replace('clip-1'), 2)
+    assert.deepEqual(submissions.replace('clip-1'), {
+      active: { clipId: 'clip-1', generation: 2 },
+      invalidations: []
+    })
     assert.equal(submissions.begin('clip-1'), undefined)
 
     submissions.stop()
 
-    assert.equal(submissions.begin('clip-1'), 3)
+    assert.deepEqual(submissions.begin('clip-1'), {
+      active: { clipId: 'clip-1', generation: 3 },
+      invalidations: []
+    })
+  })
+
+  it('invalidates the previous owner when replacing or clearing the active clip', () => {
+    const submissions = new NativeClipScheduleSubmissionState()
+
+    submissions.begin('clip-a')
+
+    assert.deepEqual(submissions.replace('clip-b'), {
+      active: { clipId: 'clip-b', generation: 1 },
+      invalidations: [{ clipId: 'clip-a', generation: 2 }]
+    })
+    assert.deepEqual(submissions.clear(), {
+      invalidations: [{ clipId: 'clip-b', generation: 2 }]
+    })
+    assert.equal(submissions.clear(), undefined)
   })
 })
 

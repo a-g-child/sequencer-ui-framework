@@ -59,6 +59,60 @@ describe('PlaybackService native startup', () => {
     assert.equal(controller.status.snapshot?.transport.playing, true)
   })
 
+  it('schedules a clip that was armed before native playback starts', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    service['model'] = createPlaybackModelFixture()
+    service['runtimeBpm'] = 120
+    service.requestClipLaunch('track-1', 'clip-1', 'bar')
+
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    assert.deepEqual(
+      backend.commands.map((command) => command.type),
+      [
+        'tempo-map:set',
+        'transport-loop:set',
+        'event:schedule-beat-batch',
+        'transport:start'
+      ]
+    )
+  })
+
+  it('uses the current native sample origin for scheduled loop bounds', async () => {
+    const backend = new AdvancingSnapshotRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    const model = createPlaybackModelFixture()
+    service['model'] = model
+    service['runtimeBpm'] = 120
+
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    const tempo = backend.commands.find((command) => command.type === 'tempo-map:set')
+    const loop = backend.commands.find((command) => command.type === 'transport-loop:set')
+
+    assert.equal(tempo?.type, 'tempo-map:set')
+    assert.equal(loop?.type, 'transport-loop:set')
+    assert.equal(loop?.startSample, tempo?.originSample)
+    assert.equal(loop?.endSample, (tempo?.originSample ?? 0) + 96_000)
+  })
+
   it('does not reactivate the native graph when playback only adds a clip schedule', async () => {
     const backend = new FakeRuntimeBackend()
     const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
@@ -112,7 +166,114 @@ describe('PlaybackService native startup', () => {
 
     assert.deepEqual(
       backend.commands.map((command) => command.type),
-      ['tempo-map:set', 'transport-loop:set', 'transport:start']
+      [
+        'tempo-map:set',
+        'transport-loop:set',
+        'event-owner:generation:set',
+        'transport:start'
+      ]
+    )
+  })
+
+  it('invalidates the previous native clip owner when the active clip clears during playback', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    service['model'] = createPlaybackModelFixture()
+    service['runtimeBpm'] = 120
+
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    backend.commands = []
+    service['model'] = createPlaybackGraphFixture()
+    service['latestClockState'] = {
+      bpm: 120,
+      beat: 2,
+      currentStep: 8,
+      running: true,
+      timeMs: 1_000
+    }
+
+    service['submitNativeClipScheduleReplacement']()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    assert.deepEqual(
+      backend.commands.map((command) => command.type),
+      ['event-owner:generation:set']
+    )
+    assert.equal(backend.commands[0]?.type, 'event-owner:generation:set')
+    assert.equal(
+      (backend.commands[0] as { clipId?: string } | undefined)?.clipId,
+      'clip-1'
+    )
+  })
+
+  it('does not panic native transport for schedule-only MIDI edits', () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+    let rebuilt = false
+
+    service['rebuildModel'] = () => {
+      rebuilt = true
+    }
+
+    service.onCommandExecuted({ name: 'Create Note' } as never)
+
+    assert.equal(rebuilt, true)
+    assert.equal(
+      backend.commands.some((command) => command.type === 'panic'),
+      false
+    )
+  })
+
+  it('applies queued native clip launches on clock ticks', () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+    let rebuilt = false
+
+    service['rebuildModel'] = () => {
+      rebuilt = true
+    }
+    service['latestClockState'] = {
+      bpm: 120,
+      beat: 0.25,
+      currentStep: 1,
+      running: true,
+      timeMs: 125
+    }
+    service.requestClipLaunch('track-1', 'clip-1', 1)
+    rebuilt = false
+
+    service['handleServiceEvent']({
+      type: 'clock:tick',
+      serviceId: 'clock',
+      payload: {
+        bpm: 120,
+        beat: 1,
+        currentStep: 4,
+        running: true,
+        timeMs: 500
+      }
+    })
+
+    assert.equal(rebuilt, true)
+    assert.equal(
+      service.status.liveClips.activeClipByTrackId['track-1']?.clipId,
+      'clip-1'
+    )
+    assert.equal(
+      service.status.liveClips.pendingLaunchByTrackId['track-1'],
+      undefined
     )
   })
 

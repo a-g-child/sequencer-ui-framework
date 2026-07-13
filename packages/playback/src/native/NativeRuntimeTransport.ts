@@ -56,6 +56,7 @@ export interface NativeEngineSnapshot {
   readonly plan?: {
     readonly activePlanId: number | null
     readonly activeRevision: number | null
+    readonly planMaximumFrames?: number | null
     readonly pendingTransfers: number
     readonly successfulSwaps: number
     readonly rejectedSwaps: number
@@ -64,6 +65,8 @@ export interface NativeEngineSnapshot {
     readonly xruns: number
     readonly queueOverflows: number
     readonly streamErrors: number
+    readonly callbackFrames?: number
+    readonly maximumCallbackFrames?: number
     readonly commandQueueDepth?: number
     readonly pendingCommandCount?: number
     readonly nextPendingCommandSample?: number | null
@@ -82,6 +85,7 @@ export interface NativeEngineSnapshot {
     readonly callbackCount: number
     readonly sampleRate: number
     readonly callbackFrames: number
+    readonly maximumCallbackFrames?: number
     readonly outputChannels: number
     readonly commandQueueDepth?: number
     readonly pendingCommandCount?: number
@@ -98,6 +102,7 @@ export interface NativeEngineSnapshot {
     readonly plan?: {
       readonly activePlanId: number | null
       readonly activeRevision: number | null
+      readonly planMaximumFrames?: number | null
       readonly pendingPlanCount: number
       readonly successfulSwaps: number
       readonly rejectedSwaps: number

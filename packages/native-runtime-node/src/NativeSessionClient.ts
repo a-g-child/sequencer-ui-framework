@@ -538,6 +538,13 @@ function nativeEngineCommandPayload(command: EngineCommand): Record<string, unkn
         endSample: command.endSample,
         atSample: command.atSample
       }
+    case 'event-owner:generation:set':
+      return {
+        type: command.type,
+        clipId: command.clipId,
+        generation: command.generation,
+        atSample: command.atSample
+      }
     case 'event:schedule-beat':
       return {
         type: command.type,

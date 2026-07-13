@@ -4,6 +4,7 @@ pub struct AudioTelemetry {
     pub callback_count: u64,
     pub sample_rate: u32,
     pub callback_frames: u32,
+    pub maximum_callback_frames: u32,
     pub output_channels: u16,
     pub callback_duration_ns: u64,
     pub maximum_callback_duration_ns: u64,
@@ -33,6 +34,7 @@ pub struct CommandDiagnostics {
 pub struct RuntimePlanStatus {
     pub active_plan_id: Option<u64>,
     pub active_plan_revision: Option<u64>,
+    pub active_plan_maximum_frames: Option<u32>,
     pub pending_plan_count: u32,
     pub successful_swaps: u64,
     pub rejected_swaps: u64,

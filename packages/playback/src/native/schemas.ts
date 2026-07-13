@@ -23,6 +23,7 @@ export type EngineCommand =
   | SeekCommand
   | SetTempoMapCommand
   | SetTransportLoopCommand
+  | SetScheduledEventOwnerGenerationCommand
   | ScheduleBeatEventCommand
   | ScheduleBeatEventBatchCommand
   | LaunchClipCommand
@@ -121,6 +122,13 @@ export interface SetTransportLoopCommand extends DeviceCommandBase {
   readonly enabled: boolean
   readonly startSample: number
   readonly endSample: number
+  readonly atSample: number
+}
+
+export interface SetScheduledEventOwnerGenerationCommand extends DeviceCommandBase {
+  readonly type: 'event-owner:generation:set'
+  readonly clipId: string
+  readonly generation: number
   readonly atSample: number
 }
 

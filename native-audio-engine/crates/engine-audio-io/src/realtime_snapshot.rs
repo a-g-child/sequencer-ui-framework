@@ -10,6 +10,7 @@ pub struct RealtimeSnapshotAtomics {
     callback_count: AtomicU64,
     sample_rate: AtomicU32,
     callback_frames: AtomicU32,
+    maximum_callback_frames: AtomicU32,
     output_channels: AtomicU32,
     stream_errors: AtomicU64,
     probable_xruns: AtomicU64,
@@ -39,6 +40,8 @@ impl RealtimeSnapshotAtomics {
             .store(telemetry.sample_rate, Ordering::Relaxed);
         self.callback_frames
             .store(telemetry.callback_frames, Ordering::Relaxed);
+        self.maximum_callback_frames
+            .fetch_max(telemetry.maximum_callback_frames, Ordering::Relaxed);
         self.output_channels
             .store(u32::from(telemetry.output_channels), Ordering::Relaxed);
         self.stream_errors
@@ -85,6 +88,7 @@ impl RealtimeSnapshotAtomics {
             callback_count: self.callback_count.load(Ordering::Relaxed),
             sample_rate: self.sample_rate.load(Ordering::Relaxed),
             callback_frames: self.callback_frames.load(Ordering::Relaxed),
+            maximum_callback_frames: self.maximum_callback_frames.load(Ordering::Relaxed),
             output_channels: self.output_channels.load(Ordering::Relaxed) as u16,
             stream_errors: self.stream_errors.load(Ordering::Relaxed),
             probable_xruns: self.probable_xruns.load(Ordering::Relaxed),
@@ -126,6 +130,7 @@ mod tests {
             callback_count: 4,
             sample_rate: 48_000,
             callback_frames: 128,
+            maximum_callback_frames: 256,
             output_channels: 2,
             stream_errors: 1,
             probable_xruns: 2,
@@ -150,6 +155,7 @@ mod tests {
         assert_eq!(published.callback_count, 4);
         assert_eq!(published.sample_rate, 48_000);
         assert_eq!(published.callback_frames, 128);
+        assert_eq!(published.maximum_callback_frames, 256);
         assert_eq!(published.output_channels, 2);
         assert_eq!(published.stream_errors, 1);
         assert_eq!(published.probable_xruns, 2);
