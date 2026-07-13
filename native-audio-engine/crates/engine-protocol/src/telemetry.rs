@@ -16,6 +16,7 @@ pub struct AudioTelemetry {
     pub next_pending_command_sample: Option<u64>,
     pub command_diagnostics: CommandDiagnostics,
     pub runtime_plan_status: RuntimePlanStatus,
+    pub scheduler_diagnostics: SchedulerDiagnostics,
     pub event_graph_diagnostics: EventGraphDiagnostics,
 }
 
@@ -38,6 +39,28 @@ pub struct RuntimePlanStatus {
     pub pending_plan_count: u32,
     pub successful_swaps: u64,
     pub rejected_swaps: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SchedulerDiagnostics {
+    pub owner_generations_set: u64,
+    pub sample_events_inserted: u64,
+    pub beat_events_inserted: u64,
+    pub beat_event_min_sample: Option<u64>,
+    pub beat_event_max_sample: Option<u64>,
+    pub events_dropped_capacity: u64,
+    pub events_dropped_not_playing: u64,
+    pub events_discarded_owner: u64,
+    pub events_discarded_future_owner: u64,
+    pub note_ons_dispatched: u64,
+    pub note_offs_dispatched: u64,
+    pub loop_reschedules: u64,
+    pub loop_reschedule_skipped_disabled: u64,
+    pub loop_reschedule_skipped_outside: u64,
+    pub events_cleared: u64,
+    pub transport_loop_enabled: bool,
+    pub transport_loop_start_sample: u64,
+    pub transport_loop_end_sample: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

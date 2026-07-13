@@ -41,6 +41,43 @@ export interface NativeActiveStreamInfo {
   readonly requestedBufferFrames?: number
 }
 
+export interface NativeSchedulerDiagnostics {
+  readonly ownerGenerationsSet: number
+  readonly sampleEventsInserted: number
+  readonly beatEventsInserted: number
+  readonly beatEventMinSample?: number | null
+  readonly beatEventMaxSample?: number | null
+  readonly eventsDroppedCapacity: number
+  readonly eventsDroppedNotPlaying: number
+  readonly eventsDiscardedOwner: number
+  readonly eventsDiscardedFutureOwner: number
+  readonly noteOnsDispatched: number
+  readonly noteOffsDispatched: number
+  readonly loopReschedules: number
+  readonly loopRescheduleSkippedDisabled: number
+  readonly loopRescheduleSkippedOutside: number
+  readonly eventsCleared: number
+  readonly transportLoopEnabled: boolean
+  readonly transportLoopStartSample: number
+  readonly transportLoopEndSample: number
+}
+
+export interface NativeEventGraphDiagnostics {
+  readonly eventsReceived: number
+  readonly routeDispatches: number
+  readonly eventsEmitted: number
+  readonly eventsSuppressed: number
+  readonly eventsDroppedCapacity: number
+  readonly eventsDroppedDepth: number
+  readonly eventsDroppedBudget: number
+  readonly futureEventsRequested: number
+  readonly futureEventsRejectedLate: number
+  readonly futureEventsDroppedCapacity: number
+  readonly futureEventsDroppedSchedulerFull: number
+  readonly futureEventsDiscardedPlanRevision: number
+  readonly futureEventsDiscardedGeneration: number
+}
+
 export interface NativeEngineSnapshot {
   readonly stream: {
     readonly deviceId: string
@@ -79,6 +116,8 @@ export interface NativeEngineSnapshot {
       readonly commandId: number
       readonly reason: string
     } | null
+    readonly scheduler?: NativeSchedulerDiagnostics
+    readonly eventGraph?: NativeEventGraphDiagnostics
   }
   readonly telemetry: {
     readonly samplePosition: number
@@ -99,6 +138,8 @@ export interface NativeEngineSnapshot {
       readonly commandQueueOverflows: number
       readonly telemetryQueueOverflows: number
     }
+    readonly schedulerDiagnostics?: NativeSchedulerDiagnostics
+    readonly eventGraphDiagnostics?: NativeEventGraphDiagnostics
     readonly plan?: {
       readonly activePlanId: number | null
       readonly activeRevision: number | null

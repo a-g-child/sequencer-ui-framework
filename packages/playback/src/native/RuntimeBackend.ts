@@ -314,7 +314,13 @@ export class NativeBackend implements RuntimeBackend {
       },
       diagnostics: {
         xruns: snapshot.diagnostics?.xruns ?? 0,
-        queueOverflows: snapshot.diagnostics?.queueOverflows ?? 0
+        queueOverflows: snapshot.diagnostics?.queueOverflows ?? 0,
+        scheduler:
+          snapshot.diagnostics?.scheduler ??
+          snapshot.telemetry?.schedulerDiagnostics,
+        eventGraph:
+          snapshot.diagnostics?.eventGraph ??
+          snapshot.telemetry?.eventGraphDiagnostics
       },
       samplePosition:
         snapshot.transport?.samplePosition ?? snapshot.telemetry?.samplePosition ?? 0,

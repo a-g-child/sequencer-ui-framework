@@ -621,9 +621,14 @@ impl<W: Write> Session<W> {
                 0.0
             };
             let command_diagnostics = telemetry.command_diagnostics;
+            let scheduler_diagnostics = telemetry.scheduler_diagnostics;
+            let scheduler_diagnostics_json =
+                scheduler_diagnostics_json(scheduler_diagnostics);
+            let event_graph_diagnostics_json =
+                event_graph_diagnostics_json(telemetry.event_graph_diagnostics);
             write!(
                 self.writer,
-                ",\"transport\":{{\"playing\":{},\"samplePosition\":{},\"beatPosition\":{},\"loopIteration\":0}},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"planMaximumFrames\":{},\"pendingTransfers\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}},\"diagnostics\":{{\"xruns\":{},\"queueOverflows\":{},\"streamErrors\":{},\"callbackFrames\":{},\"maximumCallbackFrames\":{},\"commandQueueDepth\":{},\"pendingCommandCount\":{},\"nextPendingCommandSample\":{},\"commandReceived\":{},\"commandApplied\":{},\"commandLate\":{},\"commandRejected\":{},\"commandOutOfOrder\":{},\"lastCommandRejection\":{}}},\"telemetry\":{{\"samplePosition\":{},\"callbackCount\":{},\"sampleRate\":{},\"callbackFrames\":{},\"maximumCallbackFrames\":{},\"outputChannels\":{},\"commandQueueDepth\":{},\"pendingCommandCount\":{},\"nextPendingCommandSample\":{},\"commandDiagnostics\":{{\"received\":{},\"applied\":{},\"late\":{},\"rejected\":{},\"outOfOrder\":{},\"commandQueueOverflows\":{},\"telemetryQueueOverflows\":{}}},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"planMaximumFrames\":{},\"pendingPlanCount\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}}}}",
+                ",\"transport\":{{\"playing\":{},\"samplePosition\":{},\"beatPosition\":{},\"loopIteration\":0}},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"planMaximumFrames\":{},\"pendingTransfers\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}},\"diagnostics\":{{\"xruns\":{},\"queueOverflows\":{},\"streamErrors\":{},\"callbackFrames\":{},\"maximumCallbackFrames\":{},\"commandQueueDepth\":{},\"pendingCommandCount\":{},\"nextPendingCommandSample\":{},\"commandReceived\":{},\"commandApplied\":{},\"commandLate\":{},\"commandRejected\":{},\"commandOutOfOrder\":{},\"lastCommandRejection\":{},\"scheduler\":{},\"eventGraph\":{}}},\"telemetry\":{{\"samplePosition\":{},\"callbackCount\":{},\"sampleRate\":{},\"callbackFrames\":{},\"maximumCallbackFrames\":{},\"outputChannels\":{},\"commandQueueDepth\":{},\"pendingCommandCount\":{},\"nextPendingCommandSample\":{},\"commandDiagnostics\":{{\"received\":{},\"applied\":{},\"late\":{},\"rejected\":{},\"outOfOrder\":{},\"commandQueueOverflows\":{},\"telemetryQueueOverflows\":{}}},\"schedulerDiagnostics\":{},\"eventGraphDiagnostics\":{},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"planMaximumFrames\":{},\"pendingPlanCount\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}}}}",
                 self.transport_playing,
                 telemetry.sample_position,
                 beat_position,
@@ -650,6 +655,8 @@ impl<W: Write> Session<W> {
                 command_diagnostics.rejected,
                 command_diagnostics.out_of_order,
                 last_command_rejection_json(self.last_command_rejection),
+                scheduler_diagnostics_json,
+                event_graph_diagnostics_json,
                 telemetry.sample_position,
                 telemetry.callback_count,
                 telemetry.sample_rate,
@@ -666,6 +673,8 @@ impl<W: Write> Session<W> {
                 command_diagnostics.out_of_order,
                 command_diagnostics.command_queue_overflows,
                 command_diagnostics.telemetry_queue_overflows,
+                scheduler_diagnostics_json,
+                event_graph_diagnostics_json,
                 optional_u64_json(plan_status.active_plan_id),
                 optional_u64_json(plan_status.active_plan_revision),
                 optional_u32_json(plan_status.active_plan_maximum_frames),
@@ -1186,6 +1195,53 @@ fn last_command_rejection_json(value: Option<(u64, CommandRejection)>) -> String
         .unwrap_or_else(|| "null".to_string())
 }
 
+fn scheduler_diagnostics_json(
+    diagnostics: engine_protocol::SchedulerDiagnostics,
+) -> String {
+    format!(
+        "{{\"ownerGenerationsSet\":{},\"sampleEventsInserted\":{},\"beatEventsInserted\":{},\"beatEventMinSample\":{},\"beatEventMaxSample\":{},\"eventsDroppedCapacity\":{},\"eventsDroppedNotPlaying\":{},\"eventsDiscardedOwner\":{},\"eventsDiscardedFutureOwner\":{},\"noteOnsDispatched\":{},\"noteOffsDispatched\":{},\"loopReschedules\":{},\"loopRescheduleSkippedDisabled\":{},\"loopRescheduleSkippedOutside\":{},\"eventsCleared\":{},\"transportLoopEnabled\":{},\"transportLoopStartSample\":{},\"transportLoopEndSample\":{}}}",
+        diagnostics.owner_generations_set,
+        diagnostics.sample_events_inserted,
+        diagnostics.beat_events_inserted,
+        optional_u64_json(diagnostics.beat_event_min_sample),
+        optional_u64_json(diagnostics.beat_event_max_sample),
+        diagnostics.events_dropped_capacity,
+        diagnostics.events_dropped_not_playing,
+        diagnostics.events_discarded_owner,
+        diagnostics.events_discarded_future_owner,
+        diagnostics.note_ons_dispatched,
+        diagnostics.note_offs_dispatched,
+        diagnostics.loop_reschedules,
+        diagnostics.loop_reschedule_skipped_disabled,
+        diagnostics.loop_reschedule_skipped_outside,
+        diagnostics.events_cleared,
+        diagnostics.transport_loop_enabled,
+        diagnostics.transport_loop_start_sample,
+        diagnostics.transport_loop_end_sample,
+    )
+}
+
+fn event_graph_diagnostics_json(
+    diagnostics: engine_protocol::EventGraphDiagnostics,
+) -> String {
+    format!(
+        "{{\"eventsReceived\":{},\"routeDispatches\":{},\"eventsEmitted\":{},\"eventsSuppressed\":{},\"eventsDroppedCapacity\":{},\"eventsDroppedDepth\":{},\"eventsDroppedBudget\":{},\"futureEventsRequested\":{},\"futureEventsRejectedLate\":{},\"futureEventsDroppedCapacity\":{},\"futureEventsDroppedSchedulerFull\":{},\"futureEventsDiscardedPlanRevision\":{},\"futureEventsDiscardedGeneration\":{}}}",
+        diagnostics.events_received,
+        diagnostics.route_dispatches,
+        diagnostics.events_emitted,
+        diagnostics.events_suppressed,
+        diagnostics.events_dropped_capacity,
+        diagnostics.events_dropped_depth,
+        diagnostics.events_dropped_budget,
+        diagnostics.future_events_requested,
+        diagnostics.future_events_rejected_late,
+        diagnostics.future_events_dropped_capacity,
+        diagnostics.future_events_dropped_scheduler_full,
+        diagnostics.future_events_discarded_plan_revision,
+        diagnostics.future_events_discarded_generation,
+    )
+}
+
 fn merge_driver_telemetry(
     previous: Option<AudioTelemetry>,
     driver: AudioTelemetry,
@@ -1208,6 +1264,13 @@ fn merge_driver_telemetry(
             previous.runtime_plan_status
         } else {
             driver.runtime_plan_status
+        },
+        scheduler_diagnostics: if driver.scheduler_diagnostics
+            == engine_protocol::SchedulerDiagnostics::default()
+        {
+            previous.scheduler_diagnostics
+        } else {
+            driver.scheduler_diagnostics
         },
         event_graph_diagnostics: if driver.event_graph_diagnostics
             == engine_protocol::EventGraphDiagnostics::default()

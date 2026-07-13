@@ -1,7 +1,8 @@
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use engine_protocol::{
     AudioTelemetry, CommandDiagnostics, EventGraphDiagnostics, RuntimePlanStatus,
+    SchedulerDiagnostics,
 };
 
 #[derive(Debug, Default)]
@@ -24,6 +25,24 @@ pub struct RealtimeSnapshotAtomics {
     command_out_of_order: AtomicU64,
     command_queue_overflows: AtomicU64,
     telemetry_queue_overflows: AtomicU64,
+    scheduler_owner_generations_set: AtomicU64,
+    scheduler_sample_events_inserted: AtomicU64,
+    scheduler_beat_events_inserted: AtomicU64,
+    scheduler_beat_event_min_sample: AtomicU64,
+    scheduler_beat_event_max_sample: AtomicU64,
+    scheduler_events_dropped_capacity: AtomicU64,
+    scheduler_events_dropped_not_playing: AtomicU64,
+    scheduler_events_discarded_owner: AtomicU64,
+    scheduler_events_discarded_future_owner: AtomicU64,
+    scheduler_note_ons_dispatched: AtomicU64,
+    scheduler_note_offs_dispatched: AtomicU64,
+    scheduler_loop_reschedules: AtomicU64,
+    scheduler_loop_reschedule_skipped_disabled: AtomicU64,
+    scheduler_loop_reschedule_skipped_outside: AtomicU64,
+    scheduler_events_cleared: AtomicU64,
+    scheduler_transport_loop_enabled: AtomicBool,
+    scheduler_transport_loop_start_sample: AtomicU64,
+    scheduler_transport_loop_end_sample: AtomicU64,
 }
 
 impl RealtimeSnapshotAtomics {
@@ -76,6 +95,90 @@ impl RealtimeSnapshotAtomics {
             telemetry.command_diagnostics.telemetry_queue_overflows,
             Ordering::Relaxed,
         );
+        self.scheduler_owner_generations_set.store(
+            telemetry.scheduler_diagnostics.owner_generations_set,
+            Ordering::Relaxed,
+        );
+        self.scheduler_sample_events_inserted.store(
+            telemetry.scheduler_diagnostics.sample_events_inserted,
+            Ordering::Relaxed,
+        );
+        self.scheduler_beat_events_inserted.store(
+            telemetry.scheduler_diagnostics.beat_events_inserted,
+            Ordering::Relaxed,
+        );
+        self.scheduler_beat_event_min_sample.store(
+            telemetry
+                .scheduler_diagnostics
+                .beat_event_min_sample
+                .unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        self.scheduler_beat_event_max_sample.store(
+            telemetry
+                .scheduler_diagnostics
+                .beat_event_max_sample
+                .unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        self.scheduler_events_dropped_capacity.store(
+            telemetry.scheduler_diagnostics.events_dropped_capacity,
+            Ordering::Relaxed,
+        );
+        self.scheduler_events_dropped_not_playing.store(
+            telemetry.scheduler_diagnostics.events_dropped_not_playing,
+            Ordering::Relaxed,
+        );
+        self.scheduler_events_discarded_owner.store(
+            telemetry.scheduler_diagnostics.events_discarded_owner,
+            Ordering::Relaxed,
+        );
+        self.scheduler_events_discarded_future_owner.store(
+            telemetry.scheduler_diagnostics.events_discarded_future_owner,
+            Ordering::Relaxed,
+        );
+        self.scheduler_note_ons_dispatched.store(
+            telemetry.scheduler_diagnostics.note_ons_dispatched,
+            Ordering::Relaxed,
+        );
+        self.scheduler_note_offs_dispatched.store(
+            telemetry.scheduler_diagnostics.note_offs_dispatched,
+            Ordering::Relaxed,
+        );
+        self.scheduler_loop_reschedules.store(
+            telemetry.scheduler_diagnostics.loop_reschedules,
+            Ordering::Relaxed,
+        );
+        self.scheduler_loop_reschedule_skipped_disabled.store(
+            telemetry
+                .scheduler_diagnostics
+                .loop_reschedule_skipped_disabled,
+            Ordering::Relaxed,
+        );
+        self.scheduler_loop_reschedule_skipped_outside.store(
+            telemetry
+                .scheduler_diagnostics
+                .loop_reschedule_skipped_outside,
+            Ordering::Relaxed,
+        );
+        self.scheduler_events_cleared.store(
+            telemetry.scheduler_diagnostics.events_cleared,
+            Ordering::Relaxed,
+        );
+        self.scheduler_transport_loop_enabled.store(
+            telemetry.scheduler_diagnostics.transport_loop_enabled,
+            Ordering::Relaxed,
+        );
+        self.scheduler_transport_loop_start_sample.store(
+            telemetry
+                .scheduler_diagnostics
+                .transport_loop_start_sample,
+            Ordering::Relaxed,
+        );
+        self.scheduler_transport_loop_end_sample.store(
+            telemetry.scheduler_diagnostics.transport_loop_end_sample,
+            Ordering::Relaxed,
+        );
     }
 
     pub fn increment_stream_errors(&self) {
@@ -111,9 +214,69 @@ impl RealtimeSnapshotAtomics {
                 telemetry_queue_overflows: self.telemetry_queue_overflows.load(Ordering::Relaxed),
             },
             runtime_plan_status: RuntimePlanStatus::default(),
+            scheduler_diagnostics: SchedulerDiagnostics {
+                owner_generations_set: self
+                    .scheduler_owner_generations_set
+                    .load(Ordering::Relaxed),
+                sample_events_inserted: self
+                    .scheduler_sample_events_inserted
+                    .load(Ordering::Relaxed),
+                beat_events_inserted: self
+                    .scheduler_beat_events_inserted
+                    .load(Ordering::Relaxed),
+                beat_event_min_sample: scheduler_optional_sample(
+                    self.scheduler_beat_events_inserted.load(Ordering::Relaxed),
+                    self.scheduler_beat_event_min_sample.load(Ordering::Relaxed),
+                ),
+                beat_event_max_sample: scheduler_optional_sample(
+                    self.scheduler_beat_events_inserted.load(Ordering::Relaxed),
+                    self.scheduler_beat_event_max_sample.load(Ordering::Relaxed),
+                ),
+                events_dropped_capacity: self
+                    .scheduler_events_dropped_capacity
+                    .load(Ordering::Relaxed),
+                events_dropped_not_playing: self
+                    .scheduler_events_dropped_not_playing
+                    .load(Ordering::Relaxed),
+                events_discarded_owner: self
+                    .scheduler_events_discarded_owner
+                    .load(Ordering::Relaxed),
+                events_discarded_future_owner: self
+                    .scheduler_events_discarded_future_owner
+                    .load(Ordering::Relaxed),
+                note_ons_dispatched: self.scheduler_note_ons_dispatched.load(Ordering::Relaxed),
+                note_offs_dispatched: self
+                    .scheduler_note_offs_dispatched
+                    .load(Ordering::Relaxed),
+                loop_reschedules: self.scheduler_loop_reschedules.load(Ordering::Relaxed),
+                loop_reschedule_skipped_disabled: self
+                    .scheduler_loop_reschedule_skipped_disabled
+                    .load(Ordering::Relaxed),
+                loop_reschedule_skipped_outside: self
+                    .scheduler_loop_reschedule_skipped_outside
+                    .load(Ordering::Relaxed),
+                events_cleared: self.scheduler_events_cleared.load(Ordering::Relaxed),
+                transport_loop_enabled: self
+                    .scheduler_transport_loop_enabled
+                    .load(Ordering::Relaxed),
+                transport_loop_start_sample: self
+                    .scheduler_transport_loop_start_sample
+                    .load(Ordering::Relaxed),
+                transport_loop_end_sample: self
+                    .scheduler_transport_loop_end_sample
+                    .load(Ordering::Relaxed),
+            },
             event_graph_diagnostics: EventGraphDiagnostics::default(),
             ..AudioTelemetry::default()
         }
+    }
+}
+
+fn scheduler_optional_sample(event_count: u64, sample: u64) -> Option<u64> {
+    if event_count == 0 || sample == u64::MAX {
+        None
+    } else {
+        Some(sample)
     }
 }
 

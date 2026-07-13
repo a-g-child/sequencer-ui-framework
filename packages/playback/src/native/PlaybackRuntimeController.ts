@@ -383,6 +383,8 @@ function formatActivationSnapshot(snapshot: RuntimeSnapshot): string {
   const nativePlan = nativePlanDiagnostics(snapshot.native)
   const nativeStream = nativeStreamDiagnostics(snapshot.native)
   const nativeDiagnostics = nativeCommandDiagnostics(snapshot.native)
+  const nativeScheduler = nativeSchedulerDiagnostics(snapshot)
+  const nativeEventGraph = nativeEventGraphDiagnostics(snapshot)
 
   return [
     `plan=${snapshot.plan.activePlanId ?? 'null'}/${snapshot.plan.activeRevision ?? 'null'}`,
@@ -393,7 +395,9 @@ function formatActivationSnapshot(snapshot: RuntimeSnapshot): string {
     nativeStream,
     `playing=${snapshot.transport.playing}`,
     `running=${snapshot.running}`,
-    nativeDiagnostics
+    nativeDiagnostics,
+    nativeScheduler,
+    nativeEventGraph
   ].join(',')
 }
 
@@ -518,6 +522,87 @@ function nativeCommandDiagnostics(nativeSnapshot: unknown): string {
         ? `${lastRejection.commandId}:${lastRejection.reason}`
         : 'none'
     }`
+  ].join(',')
+}
+
+function nativeSchedulerDiagnostics(snapshot: RuntimeSnapshot): string {
+  const scheduler =
+    snapshot.diagnostics.scheduler ??
+    ((snapshot.native as {
+      diagnostics?: {
+        scheduler?: RuntimeSnapshot['diagnostics']['scheduler']
+      }
+      telemetry?: {
+        schedulerDiagnostics?: RuntimeSnapshot['diagnostics']['scheduler']
+      } | null
+    } | undefined)?.diagnostics?.scheduler) ??
+    ((snapshot.native as {
+      telemetry?: {
+        schedulerDiagnostics?: RuntimeSnapshot['diagnostics']['scheduler']
+      } | null
+    } | undefined)?.telemetry?.schedulerDiagnostics)
+
+  if (!scheduler) {
+    return 'scheduler=n/a'
+  }
+
+  return [
+    `ownerGen=${scheduler.ownerGenerationsSet}`,
+    `beatIns=${scheduler.beatEventsInserted}`,
+    `beatRange=${formatSampleRange(
+      scheduler.beatEventMinSample,
+      scheduler.beatEventMaxSample
+    )}`,
+    `sampleIns=${scheduler.sampleEventsInserted}`,
+    `noteOn=${scheduler.noteOnsDispatched}`,
+    `noteOff=${scheduler.noteOffsDispatched}`,
+    `ownerDrop=${scheduler.eventsDiscardedOwner}`,
+    `futureDrop=${scheduler.eventsDiscardedFutureOwner}`,
+    `notPlayingDrop=${scheduler.eventsDroppedNotPlaying}`,
+    `capacityDrop=${scheduler.eventsDroppedCapacity}`,
+    `loops=${scheduler.loopReschedules}`,
+    `loopDisabled=${scheduler.loopRescheduleSkippedDisabled}`,
+    `loopOutside=${scheduler.loopRescheduleSkippedOutside}`,
+    `loopWindow=${scheduler.transportLoopEnabled ? 'on' : 'off'}:${scheduler.transportLoopStartSample}-${scheduler.transportLoopEndSample}`,
+    `cleared=${scheduler.eventsCleared}`
+  ].join(',')
+}
+
+function formatSampleRange(
+  start: number | null | undefined,
+  end: number | null | undefined
+): string {
+  return start === undefined || start === null || end === undefined || end === null
+    ? 'n/a'
+    : `${start}-${end}`
+}
+
+function nativeEventGraphDiagnostics(snapshot: RuntimeSnapshot): string {
+  const eventGraph =
+    snapshot.diagnostics.eventGraph ??
+    ((snapshot.native as {
+      diagnostics?: {
+        eventGraph?: RuntimeSnapshot['diagnostics']['eventGraph']
+      }
+      telemetry?: {
+        eventGraphDiagnostics?: RuntimeSnapshot['diagnostics']['eventGraph']
+      } | null
+    } | undefined)?.diagnostics?.eventGraph) ??
+    ((snapshot.native as {
+      telemetry?: {
+        eventGraphDiagnostics?: RuntimeSnapshot['diagnostics']['eventGraph']
+      } | null
+    } | undefined)?.telemetry?.eventGraphDiagnostics)
+
+  if (!eventGraph) {
+    return 'eventGraph=n/a'
+  }
+
+  return [
+    `eventIn=${eventGraph.eventsReceived}`,
+    `routes=${eventGraph.routeDispatches}`,
+    `eventEmit=${eventGraph.eventsEmitted}`,
+    `eventDrop=${eventGraph.eventsDroppedCapacity}/${eventGraph.eventsDroppedDepth}/${eventGraph.eventsDroppedBudget}`
   ].join(',')
 }
 

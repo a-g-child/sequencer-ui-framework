@@ -322,19 +322,12 @@ export class PlaybackService implements Service, DocumentObserver {
       return
     }
 
-    const previousModel = this.model
     const previousClockState = this.latestClockState
 
     this.rebuildModel({ submitNativeClipSchedule: false })
 
-    if (previousModel && previousClockState?.running) {
-      void this.releaseAndReplaceNativeClipSchedule(
-        previousModel,
-        previousClockState
-      ).catch((error) => {
-        this.setNativeRuntimeStatus('clip-schedule-replace-failed', [], error)
-        this.runtimeController?.fail(error)
-      })
+    if (previousClockState?.running) {
+      this.setNativeRuntimeStatus('clip-schedule-replace-deferred')
       return
     }
 
@@ -599,9 +592,7 @@ export class PlaybackService implements Service, DocumentObserver {
       const state = event.payload as ClockState
       this.latestClockState = state
       this.runtimeBpm = state.bpm
-      if (state.beat === 0) {
-        this.liveClips.resetLaunchOrigins(0)
-      }
+      this.liveClips.resetLaunchOrigins(state.beat)
       this.clearTrackVoicesForAppliedLaunches(this.liveClips.applyDueLaunches(state))
       this.rebuildModel({ prepareNativeRuntimePlan: false })
       if (this.runtimeController) {
@@ -852,42 +843,6 @@ export class PlaybackService implements Service, DocumentObserver {
       this.setNativeRuntimeStatus('clip-stop-failed', [], error)
       this.runtimeController?.fail(error)
     })
-  }
-
-  private async releaseAndReplaceNativeClipSchedule(
-    previousModel: PlaybackModel,
-    state: ClockState
-  ): Promise<void> {
-    await this.sendNativeActiveClipReleases(previousModel, state, 'clip-edit-release')
-    await this.submitNativeClipSchedule(state, 'replace')
-  }
-
-  private async sendNativeActiveClipReleases(
-    playbackModel: PlaybackModel,
-    state: ClockState,
-    action: string
-  ): Promise<void> {
-    if (!this.runtimeController) return
-    if (!this.runtimeController.status.snapshot?.transport.playing) return
-
-    const snapshot = await this.runtimeController.refreshSnapshot()
-    const atSample = snapshot?.transport.samplePosition ?? 0
-    const commands = this.nativeActiveClips(playbackModel).flatMap((clip) =>
-      nativeClipImmediateNoteOffCommands(playbackModel, {
-        clipId: clip.id,
-        beat: state.beat,
-        atSample,
-        timeMs: nowMs()
-      })
-    )
-
-    if (commands.length === 0) return
-
-    this.setNativeRuntimeStatus(
-      action,
-      commands.map((command) => command.type)
-    )
-    this.runtimeController.sendCommands(commands)
   }
 
   private async sendNativeClipStop(

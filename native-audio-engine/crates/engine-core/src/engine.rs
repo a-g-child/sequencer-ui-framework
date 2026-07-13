@@ -5,7 +5,7 @@ use engine_protocol::{
     AudioTelemetry, CommandDiagnostics, CommandRejection, EngineCommand, EngineEvent,
     EventEndpoint, FutureEventLifetime, FutureEventOwner, FutureEventRequest, NativeExecutionPlan,
     RuntimePlanStatus, ScheduledBeatEvent, ScheduledEngineEvent, ScheduledEventLifetime,
-    ScheduledEventOwner, TempoMapSnapshot, TransportLoop,
+    ScheduledEventOwner, SchedulerDiagnostics, TempoMapSnapshot, TransportLoop,
 };
 
 use crate::{
@@ -206,6 +206,10 @@ impl ScheduledEventSet {
         self.entries.iter().all(Option::is_none)
     }
 
+    fn len(&self) -> usize {
+        self.entries.iter().filter(|entry| entry.is_some()).count()
+    }
+
     fn retime_beat_events_outside_horizon(&mut self, tempo: TempoMapSnapshot, horizon_sample: u64) {
         for entry in self.entries.iter_mut().filter_map(Option::as_mut) {
             if entry.event.at_sample() < horizon_sample {
@@ -368,6 +372,37 @@ fn event_endpoint_for_event(event: ScheduledEngineEvent) -> EventEndpoint {
     }
 }
 
+fn normalize_sample_to_loop_window(sample: u64, loop_start: u64, loop_length: u64) -> u64 {
+    if loop_length == 0 {
+        return loop_start;
+    }
+
+    let offset = if sample >= loop_start {
+        (sample - loop_start) % loop_length
+    } else {
+        let distance = (loop_start - sample) % loop_length;
+
+        if distance == 0 {
+            0
+        } else {
+            loop_length - distance
+        }
+    };
+
+    loop_start.saturating_add(offset)
+}
+
+fn next_loop_iteration_after(loop_origin: u64, current_sample: u64, loop_length: u64) -> u64 {
+    if loop_length == 0 || current_sample < loop_origin {
+        return 0;
+    }
+
+    current_sample
+        .saturating_sub(loop_origin)
+        .saturating_div(loop_length)
+        .saturating_add(1)
+}
+
 fn drain_future_event_requests_from(
     scheduled_events: &mut ScheduledEventSet,
     plan: &mut PreparedExecutionPlan,
@@ -403,6 +438,7 @@ pub struct AudioEngine {
     successful_plan_swaps: u64,
     rejected_plan_swaps: u64,
     command_diagnostics: CommandDiagnostics,
+    scheduler_diagnostics: SchedulerDiagnostics,
     pending_commands: Vec<EngineCommand>,
     processing_commands: Vec<EngineCommand>,
     block_commands: Vec<EngineCommand>,
@@ -447,6 +483,7 @@ impl AudioEngine {
             successful_plan_swaps: 0,
             rejected_plan_swaps: 0,
             command_diagnostics: CommandDiagnostics::default(),
+            scheduler_diagnostics: SchedulerDiagnostics::default(),
             pending_commands: Vec::with_capacity(PENDING_COMMAND_CAPACITY),
             processing_commands: Vec::with_capacity(PENDING_COMMAND_CAPACITY),
             block_commands: Vec::with_capacity(PENDING_COMMAND_CAPACITY),
@@ -591,6 +628,7 @@ impl AudioEngine {
                 .map(EngineCommand::at_sample),
             command_diagnostics: self.current_command_diagnostics(),
             runtime_plan_status: self.runtime_plan_status(),
+            scheduler_diagnostics: self.current_scheduler_diagnostics(),
             event_graph_diagnostics: self.current_event_graph_diagnostics(),
         }
     }
@@ -1230,7 +1268,27 @@ impl AudioEngine {
         }
 
         if !self.future_event_owner_is_active(entry.future_owner) {
+            self.scheduler_diagnostics.events_discarded_future_owner = self
+                .scheduler_diagnostics
+                .events_discarded_future_owner
+                .saturating_add(1);
             return false;
+        }
+
+        match entry.event {
+            ScheduledEngineEvent::NoteOn { .. } => {
+                self.scheduler_diagnostics.note_ons_dispatched = self
+                    .scheduler_diagnostics
+                    .note_ons_dispatched
+                    .saturating_add(1);
+            }
+            ScheduledEngineEvent::NoteOff { .. } => {
+                self.scheduler_diagnostics.note_offs_dispatched = self
+                    .scheduler_diagnostics
+                    .note_offs_dispatched
+                    .saturating_add(1);
+            }
+            ScheduledEngineEvent::ArpeggiatorTick { .. } => {}
         }
 
         if self.dispatch_event_to_execution_plan(entry.source, entry.event) {
@@ -1264,6 +1322,10 @@ impl AudioEngine {
             .generation_is_current(owner.owner_id, owner.generation);
 
         if !current {
+            self.scheduler_diagnostics.events_discarded_owner = self
+                .scheduler_diagnostics
+                .events_discarded_owner
+                .saturating_add(1);
             self.record_future_generation_discard();
         }
 
@@ -1436,12 +1498,10 @@ impl AudioEngine {
         if !self.transport_loop.enabled
             || self.transport_loop.end_sample <= self.transport_loop.start_sample
         {
-            return;
-        }
-
-        if entry.original_sample < self.transport_loop.start_sample
-            || entry.original_sample >= self.transport_loop.end_sample
-        {
+            self.scheduler_diagnostics.loop_reschedule_skipped_disabled = self
+                .scheduler_diagnostics
+                .loop_reschedule_skipped_disabled
+                .saturating_add(1);
             return;
         }
 
@@ -1449,14 +1509,36 @@ impl AudioEngine {
             .transport_loop
             .end_sample
             .saturating_sub(self.transport_loop.start_sample);
-        let next_iteration = entry.loop_iteration.saturating_add(1);
-        let next_sample = entry
-            .original_sample
-            .saturating_add(loop_length.saturating_mul(next_iteration));
+        let mut loop_origin = entry.original_sample;
 
+        if loop_origin < self.transport_loop.start_sample
+            || loop_origin >= self.transport_loop.end_sample
+        {
+            loop_origin = normalize_sample_to_loop_window(
+                loop_origin,
+                self.transport_loop.start_sample,
+                loop_length,
+            );
+        }
+
+        let next_iteration =
+            next_loop_iteration_after(loop_origin, entry.effective_sample(), loop_length);
+        let next_sample = loop_origin.saturating_add(loop_length.saturating_mul(next_iteration));
+
+        entry.original_sample = loop_origin;
         entry.loop_iteration = next_iteration;
         entry.event = set_scheduled_event_sample(entry.event, next_sample);
-        let _ = self.scheduled_events.insert_entry(entry);
+        if self.scheduled_events.insert_entry(entry).is_ok() {
+            self.scheduler_diagnostics.loop_reschedules = self
+                .scheduler_diagnostics
+                .loop_reschedules
+                .saturating_add(1);
+        } else {
+            self.scheduler_diagnostics.events_dropped_capacity = self
+                .scheduler_diagnostics
+                .events_dropped_capacity
+                .saturating_add(1);
+        }
     }
 
     fn retain_future_commands(&mut self, command_index: usize, block_end: u64) {
@@ -1524,6 +1606,10 @@ impl AudioEngine {
             }
             EngineCommand::TransportStop { .. } => {
                 self.playing = false;
+                self.scheduler_diagnostics.events_cleared = self
+                    .scheduler_diagnostics
+                    .events_cleared
+                    .saturating_add(self.scheduled_events.len() as u64);
                 self.scheduled_events.clear();
                 self.scheduled_event_owners.clear();
                 self.scheduled_test_voice.note_off();
@@ -1539,6 +1625,10 @@ impl AudioEngine {
                 self.playing = false;
                 self.diagnostic_signal.panic_muted = true;
                 self.diagnostic_signal.oscillator.reset();
+                self.scheduler_diagnostics.events_cleared = self
+                    .scheduler_diagnostics
+                    .events_cleared
+                    .saturating_add(self.scheduled_events.len() as u64);
                 self.scheduled_events.clear();
                 self.scheduled_event_owners.clear();
                 self.scheduled_test_voice.panic();
@@ -1592,32 +1682,71 @@ impl AudioEngine {
                     self.reject_command(command.id(), CommandRejection::SchedulerFull);
                     return;
                 }
+                self.scheduler_diagnostics.owner_generations_set = self
+                    .scheduler_diagnostics
+                    .owner_generations_set
+                    .saturating_add(1);
             }
             EngineCommand::ScheduleEvent { event, .. } => {
                 if !self.playing {
+                    self.scheduler_diagnostics.events_dropped_not_playing = self
+                        .scheduler_diagnostics
+                        .events_dropped_not_playing
+                        .saturating_add(1);
                     return;
                 }
 
                 if self.scheduled_events.insert(event, None, None).is_err() {
+                    self.scheduler_diagnostics.events_dropped_capacity = self
+                        .scheduler_diagnostics
+                        .events_dropped_capacity
+                        .saturating_add(1);
                     self.reject_command(command.id(), CommandRejection::SchedulerFull);
                     return;
                 }
+                self.scheduler_diagnostics.sample_events_inserted = self
+                    .scheduler_diagnostics
+                    .sample_events_inserted
+                    .saturating_add(1);
             }
             EngineCommand::ScheduleBeatEvent { event, owner, .. } => {
                 if !self.playing && owner.is_none() {
+                    self.scheduler_diagnostics.events_dropped_not_playing = self
+                        .scheduler_diagnostics
+                        .events_dropped_not_playing
+                        .saturating_add(1);
                     return;
                 }
 
                 let sample_event = event.to_sample_event(self.tempo_map);
+                let sample = sample_event.at_sample();
 
                 if self
                     .scheduled_events
                     .insert(sample_event, Some(event), owner)
                     .is_err()
                 {
+                    self.scheduler_diagnostics.events_dropped_capacity = self
+                        .scheduler_diagnostics
+                        .events_dropped_capacity
+                        .saturating_add(1);
                     self.reject_command(command.id(), CommandRejection::SchedulerFull);
                     return;
                 }
+                self.scheduler_diagnostics.beat_events_inserted = self
+                    .scheduler_diagnostics
+                    .beat_events_inserted
+                    .saturating_add(1);
+                self.scheduler_diagnostics.beat_event_min_sample = Some(
+                    self.scheduler_diagnostics
+                        .beat_event_min_sample
+                        .map_or(sample, |current| current.min(sample)),
+                );
+                self.scheduler_diagnostics.beat_event_max_sample = Some(
+                    self.scheduler_diagnostics
+                        .beat_event_max_sample
+                        .map_or(sample, |current| current.max(sample)),
+                );
             }
             EngineCommand::SwapExecutionPlan { id, .. } => {
                 self.reject_swap_command(id, CommandRejection::MissingPreparedPlan);
@@ -1769,6 +1898,15 @@ impl AudioEngine {
         }
 
         diagnostics
+    }
+
+    fn current_scheduler_diagnostics(&self) -> SchedulerDiagnostics {
+        SchedulerDiagnostics {
+            transport_loop_enabled: self.transport_loop.enabled,
+            transport_loop_start_sample: self.transport_loop.start_sample,
+            transport_loop_end_sample: self.transport_loop.end_sample,
+            ..self.scheduler_diagnostics
+        }
     }
 }
 
@@ -4502,6 +4640,36 @@ mod tests {
         assert!(engine.scheduled_test_voice.active);
         engine.apply_scheduled_events_until(96);
         assert!(engine.scheduled_test_voice.active);
+    }
+
+    #[test]
+    fn loop_rescheduler_normalizes_original_sample_into_loop_window() {
+        let mut engine = AudioEngine::new().with_scheduled_test_voice();
+
+        engine.playing = true;
+        engine.transport_loop = TransportLoop {
+            enabled: true,
+            start_sample: 64,
+            end_sample: 96,
+        };
+        engine
+            .scheduled_events
+            .insert(scheduled_note_on(128), None, None)
+            .unwrap();
+
+        engine.apply_scheduled_events_until(128);
+
+        assert!(engine.scheduled_test_voice.active);
+        assert_eq!(engine.scheduler_diagnostics.loop_reschedule_skipped_outside, 0);
+        assert_eq!(engine.scheduler_diagnostics.loop_reschedules, 1);
+        assert!(matches!(
+            engine.scheduled_events.take_due_before(159).map(|entry| entry.event),
+            None
+        ));
+        assert!(matches!(
+            engine.scheduled_events.take_due_before(160).map(|entry| entry.event),
+            Some(ScheduledEngineEvent::NoteOn { at_sample: 160, .. })
+        ));
     }
 
     #[test]

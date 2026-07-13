@@ -142,9 +142,10 @@ export function compileNativeClipSchedule(
 ): NativeClipSchedule {
   const targetNode = options.targetNode ?? NATIVE_EVENT_INPUT_NODE_ID
   const timing = options.timing ?? { swing: 0 }
+  const clip = model.clips.find((candidate) => candidate.id === options.clipId)
   const events = model.notes
     .filter((note) => note.clipId === options.clipId)
-    .flatMap((note) => noteToNativeBeatEvents(note, targetNode, timing))
+    .flatMap((note) => noteToNativeBeatEvents(note, targetNode, timing, clip))
     .sort(compareNativeBeatEvents)
 
   return {
@@ -290,11 +291,15 @@ export function createNativeTransportLoopCommand(
 function noteToNativeBeatEvents(
   note: PlaybackNote,
   targetNode: number,
-  timing: ClipTimingSettings
+  timing: ClipTimingSettings,
+  clip: PlaybackClip | undefined
 ): NativeScheduledBeatEvent[] {
   const pitch = clampMidiNote(note.pitch)
-  const noteOnBeat = applyClipTiming(note.beat, timing)
-  const noteOffBeat = applyClipTiming(note.beat + Math.max(0, note.duration), timing)
+  const [noteOnBeat, noteOffBeat] = canonicalClipNoteBeats(
+    applyClipTiming(note.beat, timing),
+    applyClipTiming(note.beat + Math.max(0, note.duration), timing),
+    clip
+  )
 
   return [
     {
@@ -311,6 +316,24 @@ function noteToNativeBeatEvents(
       atBeat: noteOffBeat
     }
   ]
+}
+
+function canonicalClipNoteBeats(
+  noteOnBeat: number,
+  noteOffBeat: number,
+  clip: PlaybackClip | undefined
+): [number, number] {
+  if (!clip?.loop || clip.loopLength <= 0) return [noteOnBeat, noteOffBeat]
+
+  const loopStartBeat = clip.start + clip.loopStart
+  const loopLength = clip.loopLength
+  const loopEndBeat = loopStartBeat + loopLength
+  const canonicalNoteOnBeat =
+    loopStartBeat + positiveModulo(noteOnBeat - loopStartBeat, loopLength)
+  const duration = Math.max(0, noteOffBeat - noteOnBeat)
+  const canonicalNoteOffBeat = Math.min(loopEndBeat, canonicalNoteOnBeat + duration)
+
+  return [canonicalNoteOnBeat, canonicalNoteOffBeat]
 }
 
 function compareNativeBeatEvents(

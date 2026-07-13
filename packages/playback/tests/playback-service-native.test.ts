@@ -100,6 +100,37 @@ describe('PlaybackService native startup', () => {
     assert.ok((start?.atSample ?? 0) >= 12_000)
   })
 
+  it('aligns armed clip origins to the native playback start beat', () => {
+    const controller = new PlaybackRuntimeController(new FakeRuntimeBackend(), {
+      autoPoll: false
+    })
+    const service = new PlaybackService(undefined, controller)
+
+    service.requestClipLaunch('track-1', 'clip-1', 'bar')
+
+    assert.equal(
+      service['liveClips'].state.activeClipByTrackId['track-1']?.launchedAtBeat,
+      0
+    )
+
+    service['handleServiceEvent']({
+      type: 'clock:started',
+      serviceId: 'clock',
+      payload: {
+        bpm: 120,
+        beat: 36,
+        currentStep: 144,
+        running: true,
+        timeMs: 10_000
+      }
+    })
+
+    assert.equal(
+      service['liveClips'].state.activeClipByTrackId['track-1']?.launchedAtBeat,
+      36
+    )
+  })
+
   it('submits the active clip schedule instead of the first model clip', async () => {
     const backend = new FakeRuntimeBackend()
     const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
@@ -320,7 +351,7 @@ describe('PlaybackService native startup', () => {
     )
   })
 
-  it('releases active old-generation notes before live schedule replacement', async () => {
+  it('defers native clip schedule replacement for live document edits during playback', async () => {
     const backend = new FakeRuntimeBackend()
     const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
     const service = new PlaybackService(undefined, controller)
@@ -354,8 +385,9 @@ describe('PlaybackService native startup', () => {
 
     assert.deepEqual(
       backend.commands.map((command) => command.type),
-      ['event:schedule-sample', 'event-owner:generation:set']
+      []
     )
+    assert.equal(controller.status.failure, undefined)
   })
 
   it('does not panic native transport for schedule-only MIDI edits', () => {

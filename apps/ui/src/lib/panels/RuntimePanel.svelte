@@ -22,6 +22,30 @@
   export let runtimePendingTransfers: number | undefined = undefined;
   export let runtimeXruns: number | undefined = undefined;
   export let runtimeQueueOverflows: number | undefined = undefined;
+  export let runtimeOwnerGenerationsSet: number | undefined = undefined;
+  export let runtimeBeatEventsInserted: number | undefined = undefined;
+  export let runtimeBeatEventMinSample: number | null | undefined = undefined;
+  export let runtimeBeatEventMaxSample: number | null | undefined = undefined;
+  export let runtimeSampleEventsInserted: number | undefined = undefined;
+  export let runtimeNoteOnsDispatched: number | undefined = undefined;
+  export let runtimeNoteOffsDispatched: number | undefined = undefined;
+  export let runtimeEventsDiscardedOwner: number | undefined = undefined;
+  export let runtimeEventsDiscardedFutureOwner: number | undefined = undefined;
+  export let runtimeEventsDroppedNotPlaying: number | undefined = undefined;
+  export let runtimeEventsDroppedCapacity: number | undefined = undefined;
+  export let runtimeLoopReschedules: number | undefined = undefined;
+  export let runtimeLoopRescheduleSkippedDisabled: number | undefined = undefined;
+  export let runtimeLoopRescheduleSkippedOutside: number | undefined = undefined;
+  export let runtimeEventsCleared: number | undefined = undefined;
+  export let runtimeTransportLoopEnabled: boolean | undefined = undefined;
+  export let runtimeTransportLoopStartSample: number | undefined = undefined;
+  export let runtimeTransportLoopEndSample: number | undefined = undefined;
+  export let runtimeEventGraphEventsReceived: number | undefined = undefined;
+  export let runtimeEventGraphRouteDispatches: number | undefined = undefined;
+  export let runtimeEventGraphEventsEmitted: number | undefined = undefined;
+  export let runtimeEventGraphEventsDroppedCapacity: number | undefined = undefined;
+  export let runtimeEventGraphEventsDroppedDepth: number | undefined = undefined;
+  export let runtimeEventGraphEventsDroppedBudget: number | undefined = undefined;
   export let nativeRuntimeAction = 'idle';
   export let nativeRuntimeCommands = '';
   export let nativeRuntimeError: string | undefined = undefined;
@@ -47,6 +71,15 @@
   export let missedEventCount = 0;
   export let playbackModelRebuildMs = 0;
   export let renderModelRebuildMs = 0;
+
+  function formatSampleRange(
+    start: number | null | undefined,
+    end: number | null | undefined
+  ): string {
+    return start === undefined || start === null || end === undefined || end === null
+      ? 'n/a'
+      : `${start}-${end}`;
+  }
 </script>
 
 <section class="runtime-status" aria-label="Runtime service status">
@@ -137,6 +170,50 @@
   <div>
     <span>Runtime Queues</span>
     <strong>{runtimeQueueOverflows ?? 0}</strong>
+  </div>
+  <div>
+    <span>Runtime Owners</span>
+    <strong>{runtimeOwnerGenerationsSet ?? 0}</strong>
+  </div>
+  <div>
+    <span>Runtime Inserts</span>
+    <strong>{runtimeBeatEventsInserted ?? 0} beat, {runtimeSampleEventsInserted ?? 0} sample</strong>
+  </div>
+  <div>
+    <span>Runtime Beat Range</span>
+    <strong>{formatSampleRange(runtimeBeatEventMinSample, runtimeBeatEventMaxSample)}</strong>
+  </div>
+  <div>
+    <span>Runtime Notes</span>
+    <strong>{runtimeNoteOnsDispatched ?? 0} on, {runtimeNoteOffsDispatched ?? 0} off</strong>
+  </div>
+  <div>
+    <span>Runtime Drops</span>
+    <strong>{runtimeEventsDiscardedOwner ?? 0} owner, {runtimeEventsDiscardedFutureOwner ?? 0} future</strong>
+  </div>
+  <div>
+    <span>Runtime Rejects</span>
+    <strong>{runtimeEventsDroppedCapacity ?? 0} full, {runtimeEventsDroppedNotPlaying ?? 0} stopped</strong>
+  </div>
+  <div>
+    <span>Runtime Loops</span>
+    <strong>{runtimeLoopReschedules ?? 0} loops, {runtimeEventsCleared ?? 0} cleared</strong>
+  </div>
+  <div>
+    <span>Runtime Loop Skips</span>
+    <strong>{runtimeLoopRescheduleSkippedDisabled ?? 0} off, {runtimeLoopRescheduleSkippedOutside ?? 0} outside</strong>
+  </div>
+  <div>
+    <span>Runtime Loop Window</span>
+    <strong>{runtimeTransportLoopEnabled ? 'on' : 'off'} {runtimeTransportLoopStartSample ?? 0}-{runtimeTransportLoopEndSample ?? 0}</strong>
+  </div>
+  <div>
+    <span>Runtime Event Graph</span>
+    <strong>{runtimeEventGraphEventsReceived ?? 0} in, {runtimeEventGraphRouteDispatches ?? 0} routes, {runtimeEventGraphEventsEmitted ?? 0} out</strong>
+  </div>
+  <div>
+    <span>Runtime Event Drops</span>
+    <strong>{runtimeEventGraphEventsDroppedCapacity ?? 0} full, {runtimeEventGraphEventsDroppedDepth ?? 0} depth, {runtimeEventGraphEventsDroppedBudget ?? 0} budget</strong>
   </div>
   <div>
     <span>Native Action</span>

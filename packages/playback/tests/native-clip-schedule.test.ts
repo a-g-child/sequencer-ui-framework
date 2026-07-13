@@ -80,6 +80,61 @@ describe('NativeClipSchedule', () => {
     ])
   })
 
+  it('canonicalizes stale note beats into the active clip loop window', () => {
+    const model = createFourQuarterNoteFixture()
+    const schedule = compileNativeClipSchedule(
+      freezePlaybackModel({
+        ...model,
+        clips: [
+          {
+            ...model.clips[0],
+            start: 36
+          }
+        ]
+      }),
+      {
+        clipId: 'clip-1',
+        generation: 3
+      }
+    )
+
+    assert.deepEqual(
+      schedule.events.map((event) => event.atBeat),
+      [36, 36.5, 37, 37.5, 38, 38.5, 39, 39.5]
+    )
+  })
+
+  it('keeps loop-boundary note-offs at the active clip loop end', () => {
+    const model = createFourQuarterNoteFixture()
+    const schedule = compileNativeClipSchedule(
+      freezePlaybackModel({
+        ...model,
+        clips: [
+          {
+            ...model.clips[0],
+            start: 36
+          }
+        ],
+        notes: [
+          {
+            ...model.notes[0],
+            beat: 3,
+            duration: 1
+          }
+        ]
+      }),
+      {
+        clipId: 'clip-1',
+        generation: 3
+      }
+    )
+
+    assert.deepEqual(
+      schedule.events.map((event) => event.atBeat),
+      [39, 40]
+    )
+  })
+
   it('turns a clip schedule into generic engine scheduling commands', () => {
     const model = createFourQuarterNoteFixture()
     const schedule = compileNativeClipSchedule(model, {
