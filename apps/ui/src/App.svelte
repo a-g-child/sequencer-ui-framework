@@ -105,6 +105,7 @@
     beatPosition: number
     samplePosition: number
     sampleRate: number
+    bpm: number
     observedAtMs: number
     playing: boolean
   }
@@ -309,8 +310,7 @@
 	      ? transportBeat
 	      : interpolatedRuntimeBeat(
 	          runtimePlayheadAnchor,
-	          runtimeVisualNowMs,
-	          transportBpm
+	          runtimeVisualNowMs
 	        )
 	  $: activePatternPlayheadBeat = localPlayheadBeat(
 	    effectiveTransportPlaying,
@@ -515,6 +515,7 @@
 	      beatPosition: snapshot.transport.beatPosition,
 	      samplePosition: snapshot.transport.samplePosition,
 	      sampleRate: snapshot.stream.sampleRate,
+	      bpm: transportBpm,
 	      observedAtMs: nowMs(),
 	      playing: snapshot.transport.playing
 	    }
@@ -593,13 +594,12 @@
 
 	  function interpolatedRuntimeBeat(
 	    anchor: RuntimePlayheadAnchor,
-	    now: number,
-	    bpm: number
+	    now: number
 	  ): number {
 	    if (!anchor.playing) return anchor.beatPosition
 
 	    const elapsedSeconds = Math.max(0, now - anchor.observedAtMs) / 1000
-	    const beatsPerSecond = Math.max(1, bpm) / 60
+	    const beatsPerSecond = Math.max(1, anchor.bpm) / 60
 
 	    return anchor.beatPosition + elapsedSeconds * beatsPerSecond
 	  }

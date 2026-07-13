@@ -24,6 +24,7 @@ export type EngineCommand =
   | SetTempoMapCommand
   | SetTransportLoopCommand
   | SetScheduledEventOwnerGenerationCommand
+  | ScheduleSampleEventCommand
   | ScheduleBeatEventCommand
   | ScheduleBeatEventBatchCommand
   | LaunchClipCommand
@@ -136,12 +137,17 @@ export type NativeScheduledBeatEvent =
   | NativeScheduledBeatNoteOnEvent
   | NativeScheduledBeatNoteOffEvent
 
+export type NativeScheduledSampleEvent =
+  | NativeScheduledSampleNoteOnEvent
+  | NativeScheduledSampleNoteOffEvent
+
 export interface NativeScheduledBeatNoteOnEvent {
   readonly kind: 'note-on'
   readonly targetNode: number
   readonly note: number
   readonly velocity: number
   readonly atBeat: number
+  readonly ownerLifetime?: ScheduledEventOwnerLifetime
 }
 
 export interface NativeScheduledBeatNoteOffEvent {
@@ -149,6 +155,31 @@ export interface NativeScheduledBeatNoteOffEvent {
   readonly targetNode: number
   readonly note: number
   readonly atBeat: number
+  readonly ownerLifetime?: ScheduledEventOwnerLifetime
+}
+
+export type ScheduledEventOwnerLifetime =
+  | 'generation-bound'
+  | 'completion-required'
+
+export interface NativeScheduledSampleNoteOnEvent {
+  readonly kind: 'note-on'
+  readonly targetNode: number
+  readonly note: number
+  readonly velocity: number
+  readonly atSample: number
+}
+
+export interface NativeScheduledSampleNoteOffEvent {
+  readonly kind: 'note-off'
+  readonly targetNode: number
+  readonly note: number
+  readonly atSample: number
+}
+
+export interface ScheduleSampleEventCommand extends DeviceCommandBase {
+  readonly type: 'event:schedule-sample'
+  readonly event: NativeScheduledSampleEvent
 }
 
 export interface ScheduleBeatEventCommand extends DeviceCommandBase {

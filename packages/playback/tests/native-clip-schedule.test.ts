@@ -7,6 +7,7 @@ import {
   createNativeTransportLoopCommand,
   nativeClipScheduleBatchCommand,
   nativeClipScheduleCommands,
+  nativeClipImmediateNoteOffCommands,
   nativeScheduledEventOwnerGenerationCommand,
   NativeClipScheduleSubmissionState,
   NATIVE_EVENT_INPUT_NODE_ID
@@ -126,6 +127,46 @@ describe('NativeClipSchedule', () => {
         atSample: 512,
         timeMs: 250
       }
+    )
+  })
+
+  it('creates one-shot sample note-offs for notes active when a clip stops', () => {
+    const model = createFourQuarterNoteFixture()
+
+    assert.deepEqual(
+      nativeClipImmediateNoteOffCommands(model, {
+        clipId: 'clip-1',
+        beat: 1.25,
+        atSample: 12_345,
+        timeMs: 500
+      }),
+      [
+        {
+          id: 'clip-1:clip-stop:0',
+          type: 'event:schedule-sample',
+          event: {
+            kind: 'note-off',
+            targetNode: NATIVE_EVENT_INPUT_NODE_ID,
+            note: 62,
+            atSample: 12_345
+          },
+          timeMs: 500
+        }
+      ]
+    )
+  })
+
+  it('uses loop phase when creating clip-stop sample note-offs', () => {
+    const model = createFourQuarterNoteFixture()
+
+    assert.deepEqual(
+      nativeClipImmediateNoteOffCommands(model, {
+        clipId: 'clip-1',
+        beat: 5.25,
+        atSample: 24_000,
+        timeMs: 750
+      }).map((command) => command.event.note),
+      [62]
     )
   })
 

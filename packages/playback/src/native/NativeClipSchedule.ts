@@ -1,6 +1,7 @@
 import type { PlaybackClip, PlaybackModel, PlaybackNote } from '../model.ts'
 import type {
   NativeScheduledBeatEvent,
+  ScheduleSampleEventCommand,
   ScheduleBeatEventBatchCommand,
   ScheduleBeatEventCommand,
   SetScheduledEventOwnerGenerationCommand,
@@ -46,6 +47,7 @@ export interface NativeClipScheduleSubmission {
 
 export interface NativeTempoMapCommandOptions {
   readonly sampleRate: number
+  readonly bpm?: number
   readonly originSample?: number
   readonly originBeat?: number
   readonly atSample?: number
@@ -198,18 +200,54 @@ export function nativeScheduledEventOwnerGenerationCommand(
   }
 }
 
+export function nativeClipImmediateNoteOffCommands(
+  model: PlaybackModel,
+  options: {
+    readonly clipId: string
+    readonly beat: number
+    readonly atSample: number
+    readonly timeMs: number
+    readonly targetNode?: number
+  }
+): ScheduleSampleEventCommand[] {
+  const clip = model.clips.find((candidate) => candidate.id === options.clipId)
+
+  if (!clip) return []
+
+  const targetNode = options.targetNode ?? NATIVE_EVENT_INPUT_NODE_ID
+  const activeNotes = model.notes.filter(
+    (note) =>
+      note.clipId === options.clipId &&
+      noteIsActiveAtBeat(note, clip, options.beat)
+  )
+  const notes = [...new Set(activeNotes.map((note) => clampMidiNote(note.pitch)))]
+
+  return notes.map((note, index) => ({
+    id: `${options.clipId}:clip-stop:${index}`,
+    type: 'event:schedule-sample',
+    event: {
+      kind: 'note-off',
+      targetNode,
+      note,
+      atSample: options.atSample
+    },
+    timeMs: options.timeMs
+  }))
+}
+
 export function createNativeTempoMapCommand(
   model: PlaybackModel,
   options: NativeTempoMapCommandOptions
 ): SetTempoMapCommand {
   const firstChange = model.tempoMap.changes[0]
+  const bpm = options.bpm ?? firstChange?.bpm ?? model.tempoMap.defaultBpm
 
   return {
     id: `${model.id}:tempo-map:set`,
     type: 'tempo-map:set',
     originSample: options.originSample ?? 0,
     originBeat: options.originBeat ?? firstChange?.beat ?? 0,
-    bpm: firstChange?.bpm ?? model.tempoMap.defaultBpm,
+    bpm,
     sampleRate: options.sampleRate,
     atSample: options.atSample ?? 0,
     timeMs: options.timeMs
@@ -298,6 +336,41 @@ function normalizeVelocity(value: number): number {
   const normalized = value > 1 ? value / 127 : value
 
   return Math.max(0, Math.min(1, normalized))
+}
+
+function noteIsActiveAtBeat(
+  note: PlaybackNote,
+  clip: PlaybackClip,
+  beat: number
+): boolean {
+  const duration = Math.max(0, note.duration)
+
+  if (duration <= 0) return false
+
+  const noteOnBeat = note.beat
+  const noteOffBeat = note.beat + duration
+
+  if (!clip.loop || clip.loopLength <= 0) {
+    return beat >= noteOnBeat && beat < noteOffBeat
+  }
+
+  const loopStartBeat = clip.start + clip.loopStart
+  const loopEndBeat = loopStartBeat + clip.loopLength
+  const loopBeat = loopStartBeat + positiveModulo(beat - loopStartBeat, clip.loopLength)
+  const noteOnInLoop = loopStartBeat + positiveModulo(noteOnBeat - loopStartBeat, clip.loopLength)
+  const noteOffInLoop = loopStartBeat + positiveModulo(noteOffBeat - loopStartBeat, clip.loopLength)
+
+  if (duration >= clip.loopLength) return true
+
+  if (noteOffBeat <= loopEndBeat && noteOnInLoop < noteOffInLoop) {
+    return loopBeat >= noteOnInLoop && loopBeat < noteOffInLoop
+  }
+
+  return loopBeat >= noteOnInLoop || loopBeat < noteOffInLoop
+}
+
+function positiveModulo(value: number, modulus: number): number {
+  return ((value % modulus) + modulus) % modulus
 }
 
 function beatToSample(

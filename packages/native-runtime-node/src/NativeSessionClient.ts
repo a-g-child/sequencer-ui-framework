@@ -545,6 +545,11 @@ function nativeEngineCommandPayload(command: EngineCommand): Record<string, unkn
         generation: command.generation,
         atSample: command.atSample
       }
+    case 'event:schedule-sample':
+      return {
+        type: command.type,
+        event: command.event
+      }
     case 'event:schedule-beat':
       return {
         type: command.type,

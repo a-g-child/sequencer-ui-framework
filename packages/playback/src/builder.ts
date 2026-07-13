@@ -205,12 +205,17 @@ function addPatternPlaybackEvents(context: PatternPlaybackEventContext): void {
         continue
       }
 
-      const beat = grooveBeat(clip.start + effectiveBeat, document.groove)
       const maximumDuration =
         loop && effectiveBeat >= loopStart && effectiveBeat < loopStart + loopLength
           ? loopStart + loopLength - effectiveBeat
           : clipLength - effectiveBeat
-      const duration = Math.max(0, Math.min(event.duration, maximumDuration))
+      const sourceDuration = Math.max(0, Math.min(event.duration, maximumDuration))
+      const beat = grooveBeat(clip.start + effectiveBeat, document.groove)
+      const noteOffBeat = grooveBeat(
+        clip.start + effectiveBeat + sourceDuration,
+        document.groove
+      )
+      const duration = Math.max(0, noteOffBeat - beat)
 
       notes.push({
         id: `${clip.id}:${event.id}`,

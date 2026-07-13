@@ -18,9 +18,9 @@ use engine_protocol::{
     diagnostic_tone_plan, event_endpoint, AudioBufferSlot, AudioTelemetry, CommandRejection,
     EngineCommand, EngineEvent, EventInputNodePlan, EventRoute, EventRouteMask, GainNodePlan,
     InstrumentNodePlan, NativeExecutionPlan, OutputNodePlan, ParameterSlot, PlanNode, PlanNodeKind,
-    ScheduledBeatEvent, ScheduledEventOwner, TempoMapSnapshot, TransportLoop,
-    NATIVE_EXECUTION_PLAN_VERSION, NODE_EVENT_INPUT, NODE_GAIN, NODE_INSTRUMENT, NODE_OUTPUT,
-    PARAM_GAIN_GAIN,
+    ScheduledBeatEvent, ScheduledEngineEvent, ScheduledEventLifetime, ScheduledEventOwner,
+    TempoMapSnapshot, TransportLoop, NATIVE_EXECUTION_PLAN_VERSION, NODE_EVENT_INPUT, NODE_GAIN,
+    NODE_INSTRUMENT, NODE_OUTPUT, PARAM_GAIN_GAIN,
 };
 
 use crate::DriverKind;
@@ -81,6 +81,7 @@ struct Session<W: Write> {
     active_plan_metadata: Option<PreparedExecutionPlanMetadata>,
     transport_playing: bool,
     transport_changed_at_sample: u64,
+    tempo_map: TempoMapSnapshot,
     next_transfer_id: u64,
     next_command_id: u64,
     last_telemetry: Option<AudioTelemetry>,
@@ -116,6 +117,7 @@ impl<W: Write> Session<W> {
             active_plan_metadata: None,
             transport_playing: false,
             transport_changed_at_sample: 0,
+            tempo_map: TempoMapSnapshot::default(),
             next_transfer_id: 1,
             next_command_id: 1,
             last_telemetry: None,
@@ -362,6 +364,8 @@ impl<W: Write> Session<W> {
         self.next_command_id = self.next_command_id.saturating_add(commands.len() as u64);
 
         for command in commands {
+            self.observe_engine_command(command);
+
             if self
                 .command_sender
                 .as_ref()
@@ -387,6 +391,18 @@ impl<W: Write> Session<W> {
         self.write_ok_prefix(request, "engine:command")?;
         writeln!(self.writer, ",\"commandId\":{first_command_id}}}")?;
         Ok(())
+    }
+
+    fn observe_engine_command(&mut self, command: EngineCommand) {
+        match command {
+            EngineCommand::SetTempoMap { tempo, .. } => {
+                self.tempo_map = tempo;
+            }
+            EngineCommand::TransportStop { .. } | EngineCommand::Panic { .. } => {
+                self.transport_playing = false;
+            }
+            _ => {}
+        }
     }
 
     fn prepare_plan(&mut self, request: &SessionRequest) -> Result<(), SessionError> {
@@ -600,12 +616,7 @@ impl<W: Write> Session<W> {
         if let Some(telemetry) = self.last_telemetry {
             let plan_status = telemetry.runtime_plan_status;
             let beat_position = if self.transport_playing {
-                sample_to_default_beat(
-                    telemetry
-                        .sample_position
-                        .saturating_sub(self.transport_changed_at_sample),
-                    telemetry.sample_rate.max(1),
-                )
+                self.tempo_map.sample_to_beat(telemetry.sample_position)
             } else {
                 0.0
             };
@@ -1407,6 +1418,14 @@ fn parse_session_engine_commands(
                 at_sample,
             }
         }
+        Some("event:schedule-sample") => {
+            let event = parse_scheduled_sample_event(&command_json)?;
+
+            EngineCommand::ScheduleEvent {
+                id: first_command_id,
+                event,
+            }
+        }
         Some("event:schedule-beat-batch") => {
             return parse_scheduled_beat_event_batch(&command_json, first_command_id, at_sample);
         }
@@ -1453,6 +1472,12 @@ fn parse_scheduled_beat_event(command_json: &str) -> Result<ScheduledBeatEvent, 
     }
 }
 
+fn parse_scheduled_sample_event(command_json: &str) -> Result<ScheduledEngineEvent, SessionError> {
+    let event_json = extract_json_value(command_json, "event")
+        .ok_or_else(|| SessionError::new("command.event is required"))?;
+    parse_scheduled_sample_event_object(&event_json)
+}
+
 fn parse_scheduled_beat_event_batch(
     command_json: &str,
     first_command_id: u64,
@@ -1491,11 +1516,11 @@ fn parse_scheduled_beat_event_batch(
 
     for (index, event_json) in event_objects.iter().enumerate() {
         let event = parse_scheduled_beat_event_object(event_json)?;
-        let owner = match event {
-            ScheduledBeatEvent::NoteOn { .. } => {
+        let owner = match parse_scheduled_event_owner_lifetime(event_json)? {
+            ScheduledEventLifetime::GenerationBound => {
                 ScheduledEventOwner::generation_bound(owner_id, generation)
             }
-            ScheduledBeatEvent::NoteOff { .. } => {
+            ScheduledEventLifetime::CompletionRequired => {
                 ScheduledEventOwner::completion_required(owner_id, generation)
             }
         };
@@ -1509,6 +1534,26 @@ fn parse_scheduled_beat_event_batch(
     }
 
     Ok(commands)
+}
+
+fn parse_scheduled_event_owner_lifetime(
+    event_json: &str,
+) -> Result<ScheduledEventLifetime, SessionError> {
+    let fields = parse_flat_json_object(event_json);
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+
+    match field("ownerLifetime") {
+        Some("completion-required") => Ok(ScheduledEventLifetime::CompletionRequired),
+        Some("generation-bound") | None => Ok(ScheduledEventLifetime::GenerationBound),
+        Some(lifetime) => Err(SessionError::new(format!(
+            "unsupported scheduled event owner lifetime: {lifetime}"
+        ))),
+    }
 }
 
 fn parse_scheduled_beat_event_object(event_json: &str) -> Result<ScheduledBeatEvent, SessionError> {
@@ -1538,6 +1583,40 @@ fn parse_scheduled_beat_event_object(event_json: &str) -> Result<ScheduledBeatEv
         }),
         Some(kind) => Err(SessionError::new(format!(
             "unsupported scheduled beat event kind: {kind}"
+        ))),
+        None => Err(SessionError::new("command.event.kind is required")),
+    }
+}
+
+fn parse_scheduled_sample_event_object(
+    event_json: &str,
+) -> Result<ScheduledEngineEvent, SessionError> {
+    let fields = parse_flat_json_object(event_json);
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+
+    let target_node = parse_required_u32(field("targetNode"), "command.event.targetNode")?;
+    let note = parse_required_u8(field("note"), "command.event.note")?;
+    let at_sample = parse_required_u64(field("atSample"), "command.event.atSample")?;
+
+    match field("kind") {
+        Some("note-on") => Ok(ScheduledEngineEvent::NoteOn {
+            target_node,
+            note,
+            velocity: parse_required_f32(field("velocity"), "command.event.velocity")?,
+            at_sample,
+        }),
+        Some("note-off") => Ok(ScheduledEngineEvent::NoteOff {
+            target_node,
+            note,
+            at_sample,
+        }),
+        Some(kind) => Err(SessionError::new(format!(
+            "unsupported scheduled sample event kind: {kind}"
         ))),
         None => Err(SessionError::new("command.event.kind is required")),
     }
@@ -1747,12 +1826,6 @@ fn extract_json_value(line: &str, key: &str) -> Option<String> {
             Some(line[start..index].trim().to_string())
         }
     }
-}
-
-fn sample_to_default_beat(sample_position: u64, sample_rate: u32) -> f64 {
-    let seconds = sample_position as f64 / sample_rate.max(1) as f64;
-
-    seconds * 120.0 / 60.0
 }
 
 fn session_capabilities_json() -> String {
@@ -2156,7 +2229,8 @@ mod tests {
              {\"requestId\":4,\"type\":\"engine:command\",\"command\":{\"type\":\"event:schedule-beat\",\"atSample\":0,\"event\":{\"kind\":\"note-on\",\"targetNode\":5,\"note\":60,\"velocity\":0.75,\"atBeat\":1}}}\n\
              {\"requestId\":5,\"type\":\"engine:command\",\"command\":{\"type\":\"event:schedule-beat\",\"atSample\":0,\"event\":{\"kind\":\"note-off\",\"targetNode\":5,\"note\":60,\"atBeat\":1.5}}}\n\
              {\"requestId\":6,\"type\":\"engine:command\",\"command\":{\"type\":\"event:schedule-beat-batch\",\"clipId\":\"clip-1\",\"generation\":2,\"atSample\":0,\"events\":[{\"kind\":\"note-on\",\"targetNode\":5,\"note\":62,\"velocity\":0.8,\"atBeat\":2},{\"kind\":\"note-off\",\"targetNode\":5,\"note\":62,\"atBeat\":2.5}]}}\n\
-             {\"requestId\":7,\"type\":\"session:shutdown\"}\n",
+             {\"requestId\":7,\"type\":\"engine:command\",\"command\":{\"type\":\"event:schedule-sample\",\"event\":{\"kind\":\"note-off\",\"targetNode\":5,\"note\":62,\"atSample\":12000}}}\n\
+             {\"requestId\":8,\"type\":\"session:shutdown\"}\n",
         );
 
         assert!(output.contains("\"requestId\":2,\"type\":\"engine:command\""));
@@ -2164,7 +2238,39 @@ mod tests {
         assert!(output.contains("\"requestId\":4,\"type\":\"engine:command\""));
         assert!(output.contains("\"requestId\":5,\"type\":\"engine:command\""));
         assert!(output.contains("\"requestId\":6,\"type\":\"engine:command\""));
+        assert!(output.contains("\"requestId\":7,\"type\":\"engine:command\""));
         assert!(!output.contains("\"ok\":false"));
+    }
+
+    #[test]
+    fn batch_note_off_owner_lifetime_defaults_to_generation_bound() {
+        let commands = parse_scheduled_beat_event_batch(
+            "{\"type\":\"event:schedule-beat-batch\",\"clipId\":\"clip-1\",\"generation\":2,\"atSample\":0,\"events\":[{\"kind\":\"note-off\",\"targetNode\":5,\"note\":62,\"atBeat\":2.5},{\"kind\":\"note-off\",\"targetNode\":5,\"note\":64,\"atBeat\":3.5,\"ownerLifetime\":\"completion-required\"}]}",
+            10,
+            0,
+        )
+        .expect("batch should parse");
+
+        assert!(matches!(
+            commands[1],
+            EngineCommand::ScheduleBeatEvent {
+                owner: Some(ScheduledEventOwner {
+                    lifetime: ScheduledEventLifetime::GenerationBound,
+                    ..
+                }),
+                ..
+            }
+        ));
+        assert!(matches!(
+            commands[2],
+            EngineCommand::ScheduleBeatEvent {
+                owner: Some(ScheduledEventOwner {
+                    lifetime: ScheduledEventLifetime::CompletionRequired,
+                    ..
+                }),
+                ..
+            }
+        ));
     }
 
     #[test]

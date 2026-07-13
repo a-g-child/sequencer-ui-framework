@@ -50,6 +50,7 @@ describe('PlaybackService native startup', () => {
     assert.deepEqual(
       backend.commands.map((command) => command.type),
       [
+        'event-owner:generation:set',
         'tempo-map:set',
         'transport-loop:set',
         'event:schedule-beat-batch',
@@ -79,11 +80,77 @@ describe('PlaybackService native startup', () => {
     assert.deepEqual(
       backend.commands.map((command) => command.type),
       [
+        'event-owner:generation:set',
         'tempo-map:set',
         'transport-loop:set',
         'event:schedule-beat-batch',
         'transport:start'
       ]
+    )
+
+    const batch = backend.commands.find(
+      (command) => command.type === 'event:schedule-beat-batch'
+    ) as { events?: readonly unknown[]; atSample?: number } | undefined
+    const start = backend.commands.find(
+      (command) => command.type === 'transport:start'
+    ) as { atSample?: number } | undefined
+
+    assert.ok((batch?.events?.length ?? 0) > 0)
+    assert.equal(start?.atSample, batch?.atSample)
+    assert.ok((start?.atSample ?? 0) >= 12_000)
+  })
+
+  it('submits the active clip schedule instead of the first model clip', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    service['model'] = createTwoClipPlaybackModelFixture()
+    service['runtimeBpm'] = 120
+    service.requestClipLaunch('track-1', 'clip-b', 'bar')
+
+    assert.equal(service['nativeScheduleClip']()?.id, 'clip-b:active')
+  })
+
+  it('updates native tempo without recompiling the execution plan', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    service['model'] = createPlaybackModelFixture()
+    service['runtimeBpm'] = 120
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    backend.commands = []
+    service['handleServiceEvent']({
+      type: 'clock:tempo-changed',
+      serviceId: 'clock',
+      payload: {
+        bpm: 135,
+        beat: 2,
+        currentStep: 8,
+        running: true,
+        timeMs: 1_000
+      }
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    assert.equal(backend.compileCalls.length, 1)
+    assert.equal(backend.activateCalls, 1)
+    assert.deepEqual(
+      backend.commands.map((command) => command.type),
+      ['tempo-map:set']
+    )
+    assert.equal(
+      (backend.commands[0] as { bpm?: number } | undefined)?.bpm,
+      135
     )
   })
 
@@ -139,6 +206,7 @@ describe('PlaybackService native startup', () => {
     assert.deepEqual(
       backend.commands.map((command) => command.type),
       [
+        'event-owner:generation:set',
         'tempo-map:set',
         'transport-loop:set',
         'event:schedule-beat-batch',
@@ -167,9 +235,9 @@ describe('PlaybackService native startup', () => {
     assert.deepEqual(
       backend.commands.map((command) => command.type),
       [
+        'event-owner:generation:set',
         'tempo-map:set',
         'transport-loop:set',
-        'event-owner:generation:set',
         'transport:start'
       ]
     )
@@ -182,6 +250,7 @@ describe('PlaybackService native startup', () => {
 
     service['model'] = createPlaybackModelFixture()
     service['runtimeBpm'] = 120
+    service.requestClipLaunch('track-1', 'clip-1', 'none')
 
     await service['prepareAndStartNativeRuntime']({
       bpm: 120,
@@ -213,6 +282,79 @@ describe('PlaybackService native startup', () => {
     assert.equal(
       (backend.commands[0] as { clipId?: string } | undefined)?.clipId,
       'clip-1'
+    )
+  })
+
+  it('sends one-shot native note-offs when stopping an active clip during playback', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    service['model'] = createPlaybackModelFixture()
+    service['runtimeBpm'] = 120
+    service.requestClipLaunch('track-1', 'clip-1', 'none')
+
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    backend.commands = []
+    service['latestClockState'] = {
+      bpm: 120,
+      beat: 0.25,
+      currentStep: 1,
+      running: true,
+      timeMs: 125
+    }
+
+    service.clearActiveClipForTrack('track-1')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    assert.ok(
+      backend.commands.some((command) => command.type === 'event:schedule-sample')
+    )
+  })
+
+  it('releases active old-generation notes before live schedule replacement', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    service['model'] = createPlaybackModelFixture()
+    service['runtimeBpm'] = 120
+    service.requestClipLaunch('track-1', 'clip-1', 'none')
+
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    backend.commands = []
+    service['latestClockState'] = {
+      bpm: 120,
+      beat: 0.25,
+      currentStep: 1,
+      running: true,
+      timeMs: 125
+    }
+    service['rebuildModel'] = () => {
+      service['model'] = createPlaybackGraphFixture()
+    }
+
+    service['handlePlaybackModelOperation']()
+    await waitForNativeServiceTasks()
+
+    assert.deepEqual(
+      backend.commands.map((command) => command.type),
+      ['event:schedule-sample', 'event-owner:generation:set']
     )
   })
 
@@ -530,9 +672,74 @@ function createPlaybackGraphFixture(): PlaybackModel {
   })
 }
 
+function createTwoClipPlaybackModelFixture(): PlaybackModel {
+  return freezePlaybackModel({
+    ...createPlaybackModelFixture(),
+    clips: [
+      {
+        id: 'clip-a:active',
+        trackId: 'track-1',
+        patternId: 'pattern-a',
+        name: 'A',
+        start: 0,
+        length: 4,
+        loop: true,
+        loopStart: 0,
+        loopLength: 4,
+        sourceStart: 0,
+        sourceLength: 4,
+        loopIndex: 0
+      },
+      {
+        id: 'clip-b:active',
+        trackId: 'track-1',
+        patternId: 'pattern-b',
+        name: 'B',
+        start: 0,
+        length: 4,
+        loop: true,
+        loopStart: 0,
+        loopLength: 4,
+        sourceStart: 0,
+        sourceLength: 4,
+        loopIndex: 0
+      }
+    ],
+    notes: [
+      {
+        id: 'clip-a:active:note-1',
+        sourceNoteId: 'note-a',
+        trackId: 'track-1',
+        clipId: 'clip-a:active',
+        patternId: 'pattern-a',
+        pitch: 60,
+        velocity: 0.8,
+        beat: 0,
+        duration: 1
+      },
+      {
+        id: 'clip-b:active:note-1',
+        sourceNoteId: 'note-b',
+        trackId: 'track-1',
+        clipId: 'clip-b:active',
+        patternId: 'pattern-b',
+        pitch: 72,
+        velocity: 0.8,
+        beat: 0,
+        duration: 1
+      }
+    ]
+  })
+}
+
 function createEmptyClipPlaybackModelFixture(): PlaybackModel {
   return freezePlaybackModel({
     ...createPlaybackModelFixture(),
     notes: []
   })
+}
+
+async function waitForNativeServiceTasks(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  await Promise.resolve()
 }

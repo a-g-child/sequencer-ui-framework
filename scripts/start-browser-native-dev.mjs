@@ -21,6 +21,7 @@ runtimeProcess = spawn(
     cwd: resolve(root, 'packages/native-runtime-server'),
     env: {
       ...process.env,
+      NATIVE_RUNTIME_PORT: process.env.NATIVE_RUNTIME_PORT ?? '0',
       NATIVE_RUNTIME_UI_PORT: uiPort
     },
     detached: true,

@@ -7,8 +7,9 @@ export * from './protocolValidation.ts'
 
 export async function startNativeRuntimeServer(): Promise<NativeRuntimeServer> {
   const token = randomBytes(16).toString('hex')
+  const port = numberFromEnv(process.env.NATIVE_RUNTIME_PORT, 0)
   const uiPort = numberFromEnv(process.env.NATIVE_RUNTIME_UI_PORT, 5173)
-  const server = new NativeRuntimeServer({ token, uiPort })
+  const server = new NativeRuntimeServer({ port, token, uiPort })
 
   const handle = await server.listen()
 
@@ -63,5 +64,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 function numberFromEnv(value: string | undefined, fallback: number): number {
   const parsed = Number(value)
 
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback
 }

@@ -38,6 +38,7 @@ import {
   compileNativeClipSchedule,
   createNativeTempoMapCommand,
   createNativeTransportLoopCommand,
+  nativeClipImmediateNoteOffCommands,
   nativeClipScheduleBatchCommand,
   nativeScheduledEventOwnerGenerationCommand,
   NativeClipScheduleSubmissionState,
@@ -45,7 +46,10 @@ import {
 import {
   PlaybackRuntimeController,
 } from './native/PlaybackRuntimeController.ts'
-import type { PlaybackRuntimeControllerStatus } from './native/RuntimeTypes.ts'
+import type {
+  PlaybackRuntimeControllerStatus,
+  RuntimeSnapshot
+} from './native/RuntimeTypes.ts'
 import type { EngineCommand } from './native/schemas.ts'
 import { createPanicDeviceCommand } from './native/voice-action-commands.ts'
 import {
@@ -72,6 +76,9 @@ import {
   type Scheduler,
   type SchedulerStatus
 } from './scheduler.ts'
+
+const MIN_NATIVE_SCHEDULE_LEAD_SAMPLES = 4096
+const NATIVE_SCHEDULE_LEAD_SECONDS = 0.25
 
 export interface PlaybackServiceStatus extends SchedulerStatus {
   readonly modelId: string
@@ -311,9 +318,27 @@ export class PlaybackService implements Service, DocumentObserver {
   private handlePlaybackModelOperation(): void {
     if (!this.runtimeController) {
       this.panicRuntimeVoices()
+      this.rebuildModel()
+      return
     }
 
-    this.rebuildModel()
+    const previousModel = this.model
+    const previousClockState = this.latestClockState
+
+    this.rebuildModel({ submitNativeClipSchedule: false })
+
+    if (previousModel && previousClockState?.running) {
+      void this.releaseAndReplaceNativeClipSchedule(
+        previousModel,
+        previousClockState
+      ).catch((error) => {
+        this.setNativeRuntimeStatus('clip-schedule-replace-failed', [], error)
+        this.runtimeController?.fail(error)
+      })
+      return
+    }
+
+    this.submitNativeClipScheduleReplacement()
   }
 
   private applyRuntimeDeviceParameterOperation(operation: Operation): boolean {
@@ -430,6 +455,9 @@ export class PlaybackService implements Service, DocumentObserver {
   clearActiveClipForTrack(trackId: string): void {
     const previousClipId = this.liveClips.state.activeClipByTrackId[trackId]?.clipId
 
+    if (previousClipId) {
+      this.submitNativeClipStop(previousClipId)
+    }
     this.liveClips.clearActiveClip(trackId)
     if (previousClipId) {
       this.panicTrackRuntimeVoices(trackId, 'clip-stop')
@@ -502,7 +530,10 @@ export class PlaybackService implements Service, DocumentObserver {
   }
 
   private rebuildModel(
-    options: { readonly prepareNativeRuntimePlan?: boolean } = {}
+    options: {
+      readonly prepareNativeRuntimePlan?: boolean
+      readonly submitNativeClipSchedule?: boolean
+    } = {}
   ): void {
     if (!this.context) return
 
@@ -522,7 +553,9 @@ export class PlaybackService implements Service, DocumentObserver {
         this.runtimeController?.fail(error)
       })
     }
-    this.submitNativeClipScheduleReplacement()
+    if (options.submitNativeClipSchedule !== false) {
+      this.submitNativeClipScheduleReplacement()
+    }
     this.emitStatus()
   }
 
@@ -608,7 +641,15 @@ export class PlaybackService implements Service, DocumentObserver {
       const state = event.payload as ClockState
       this.latestClockState = state
       this.runtimeBpm = state.bpm
-      this.rebuildModel()
+      if (this.runtimeController) {
+        this.rebuildModel({
+          prepareNativeRuntimePlan: false,
+          submitNativeClipSchedule: false
+        })
+        this.submitNativeTempoMapUpdate(state)
+      } else {
+        this.rebuildModel()
+      }
     }
 
     if (event.type === 'clock:tick') {
@@ -667,9 +708,11 @@ export class PlaybackService implements Service, DocumentObserver {
     this.setNativeRuntimeStatus('prepare-start')
     await this.prepareNativeRuntimePlan(this.model)
     this.setNativeRuntimeStatus('schedule-start')
-    await this.submitNativeClipSchedule(state, 'begin')
+    const startSample = await this.submitNativeClipSchedule(state, 'begin')
     this.setNativeRuntimeStatus('transport-start-requested')
-    await this.runtimeController.play()
+    await this.runtimeController.play(
+      startSample === undefined ? undefined : { atSample: startSample }
+    )
     this.setNativeRuntimeStatus('transport-start-confirmed')
   }
 
@@ -791,17 +834,119 @@ export class PlaybackService implements Service, DocumentObserver {
     })
   }
 
-  private async submitNativeClipSchedule(
+  private submitNativeTempoMapUpdate(state: ClockState): void {
+    if (!this.runtimeController || !this.model) return
+    if (!this.runtimeController.status.snapshot?.transport.playing) return
+
+    void this.sendNativeTempoMapUpdate(state).catch((error) => {
+      this.setNativeRuntimeStatus('tempo-map-update-failed', [], error)
+      this.runtimeController?.fail(error)
+    })
+  }
+
+  private submitNativeClipStop(clipId: string): void {
+    if (!this.runtimeController || !this.model || !this.latestClockState?.running) return
+    if (!this.runtimeController.status.snapshot?.transport.playing) return
+
+    void this.sendNativeClipStop(clipId, this.latestClockState).catch((error) => {
+      this.setNativeRuntimeStatus('clip-stop-failed', [], error)
+      this.runtimeController?.fail(error)
+    })
+  }
+
+  private async releaseAndReplaceNativeClipSchedule(
+    previousModel: PlaybackModel,
+    state: ClockState
+  ): Promise<void> {
+    await this.sendNativeActiveClipReleases(previousModel, state, 'clip-edit-release')
+    await this.submitNativeClipSchedule(state, 'replace')
+  }
+
+  private async sendNativeActiveClipReleases(
+    playbackModel: PlaybackModel,
     state: ClockState,
-    mode: 'begin' | 'replace'
+    action: string
+  ): Promise<void> {
+    if (!this.runtimeController) return
+    if (!this.runtimeController.status.snapshot?.transport.playing) return
+
+    const snapshot = await this.runtimeController.refreshSnapshot()
+    const atSample = snapshot?.transport.samplePosition ?? 0
+    const commands = this.nativeActiveClips(playbackModel).flatMap((clip) =>
+      nativeClipImmediateNoteOffCommands(playbackModel, {
+        clipId: clip.id,
+        beat: state.beat,
+        atSample,
+        timeMs: nowMs()
+      })
+    )
+
+    if (commands.length === 0) return
+
+    this.setNativeRuntimeStatus(
+      action,
+      commands.map((command) => command.type)
+    )
+    this.runtimeController.sendCommands(commands)
+  }
+
+  private async sendNativeClipStop(
+    clipId: string,
+    state: ClockState
   ): Promise<void> {
     if (!this.runtimeController || !this.model) return
 
     const snapshot = await this.runtimeController.refreshSnapshot()
-    const sampleRate = snapshot?.stream.sampleRate || snapshot?.sampleRate || 48_000
     const atSample = snapshot?.transport.samplePosition ?? 0
+    const commands = nativeClipImmediateNoteOffCommands(this.model, {
+      clipId,
+      beat: state.beat,
+      atSample,
+      timeMs: nowMs()
+    })
+
+    if (commands.length === 0) return
+
+    this.setNativeRuntimeStatus(
+      'clip-stop-release',
+      commands.map((command) => command.type)
+    )
+    this.runtimeController.sendCommands(commands)
+  }
+
+  private async sendNativeTempoMapUpdate(state: ClockState): Promise<void> {
+    if (!this.runtimeController || !this.model) return
+
+    const snapshot = await this.runtimeController.refreshSnapshot()
+    const sampleRate = snapshot?.stream.sampleRate || snapshot?.sampleRate || 48_000
+    const currentSample = snapshot?.transport.samplePosition ?? 0
+    const atSample = currentSample + nativeScheduleLeadSamples(sampleRate)
+    const command = createNativeTempoMapCommand(this.model, {
+      sampleRate,
+      bpm: state.bpm,
+      originSample: atSample,
+      originBeat: this.nativeOriginBeatAtScheduledSample(snapshot, state, atSample),
+      atSample,
+      timeMs: nowMs()
+    })
+
+    this.setNativeRuntimeStatus('tempo-map-update', [command.type])
+    this.runtimeController.sendCommands([command])
+  }
+
+  private async submitNativeClipSchedule(
+    state: ClockState,
+    mode: 'begin' | 'replace'
+  ): Promise<number | undefined> {
+    if (!this.runtimeController || !this.model) return
+
+    const snapshot = await this.runtimeController.refreshSnapshot()
+    const sampleRate = snapshot?.stream.sampleRate || snapshot?.sampleRate || 48_000
+    const currentSample = snapshot?.transport.samplePosition ?? 0
+    const atSample = currentSample + nativeScheduleLeadSamples(sampleRate)
+    const originBeat = this.nativeOriginBeatAtScheduledSample(snapshot, state, atSample)
     const timeMs = nowMs()
-    const clip = this.model.clips[0]
+    const clip = this.nativeScheduleClip()
     const submission = clip
       ? mode === 'replace'
         ? this.nativeClipScheduleSubmissions.replace(clip.id)
@@ -810,7 +955,7 @@ export class PlaybackService implements Service, DocumentObserver {
         ? this.nativeClipScheduleSubmissions.clear()
         : undefined
 
-    if (submission === undefined) return
+    if (submission === undefined) return undefined
 
     const commands: EngineCommand[] = submission.invalidations.map((generation) =>
       nativeScheduledEventOwnerGenerationCommand(generation, {
@@ -826,10 +971,15 @@ export class PlaybackService implements Service, DocumentObserver {
       })
 
       commands.push(
+        nativeScheduledEventOwnerGenerationCommand(submission.active, {
+          atSample,
+          timeMs
+        }),
         createNativeTempoMapCommand(this.model, {
           sampleRate,
+          bpm: state.bpm,
           originSample: atSample,
-          originBeat: state.beat,
+          originBeat,
           atSample,
           timeMs
         }),
@@ -838,7 +988,7 @@ export class PlaybackService implements Service, DocumentObserver {
           bpm: state.bpm,
           sampleRate,
           originSample: atSample,
-          originBeat: state.beat,
+          originBeat,
           atSample,
           timeMs
         })
@@ -851,23 +1001,74 @@ export class PlaybackService implements Service, DocumentObserver {
             timeMs
           })
         )
-      } else {
-        commands.push(
-          nativeScheduledEventOwnerGenerationCommand(submission.active, {
-            atSample,
-            timeMs
-          })
-        )
       }
     }
 
-    if (commands.length === 0) return
+    if (commands.length === 0) return atSample
 
     this.setNativeRuntimeStatus(
       `clip-schedule-${mode}`,
       commands.map((command) => command.type)
     )
     this.runtimeController.sendCommands(commands)
+    return atSample
+  }
+
+  private nativeOriginBeatAtScheduledSample(
+    snapshot: RuntimeSnapshot | undefined,
+    state: ClockState,
+    atSample: number
+  ): number {
+    const currentBeat = snapshot?.transport.beatPosition ?? state.beat
+
+    if (!snapshot?.transport.playing) {
+      return currentBeat
+    }
+
+    const sampleRate = snapshot.stream.sampleRate || snapshot.sampleRate || 48_000
+    const leadSamples = atSample - snapshot.transport.samplePosition
+
+    return currentBeat + (Math.max(0, leadSamples) * Math.max(1, state.bpm)) / (60 * Math.max(1, sampleRate))
+  }
+
+  private nativeScheduleClip(): PlaybackModel['clips'][number] | undefined {
+    if (!this.model) return undefined
+
+    const activeLaunches = Object.values(this.liveClips.state.activeClipByTrackId)
+
+    if (activeLaunches.length > 0) {
+      for (const launch of activeLaunches) {
+        const clip = this.model.clips.find(
+          (candidate) =>
+            candidate.trackId === launch.trackId &&
+            playbackClipMatchesLaunch(candidate.id, launch.clipId)
+        )
+
+        if (clip) return clip
+      }
+
+      return undefined
+    }
+
+    return this.model.clips[0]
+  }
+
+  private nativeActiveClips(
+    playbackModel: PlaybackModel
+  ): PlaybackModel['clips'][number][] {
+    const activeLaunches = Object.values(this.liveClips.state.activeClipByTrackId)
+
+    if (activeLaunches.length > 0) {
+      return activeLaunches.flatMap((launch) =>
+        playbackModel.clips.filter(
+          (candidate) =>
+            candidate.trackId === launch.trackId &&
+            playbackClipMatchesLaunch(candidate.id, launch.clipId)
+        )
+      )
+    }
+
+    return playbackModel.clips.slice(0, 1)
   }
 
   private setNativeRuntimeStatus(
@@ -1332,6 +1533,24 @@ function isPlaybackModelOperation(operation: Operation): boolean {
     'Set Note Humanise Offsets',
     'Quantise Notes'
   ].includes(operation.name)
+}
+
+function playbackClipMatchesLaunch(
+  playbackClipId: string,
+  launchedClipId: string
+): boolean {
+  return (
+    playbackClipId === launchedClipId ||
+    playbackClipId === `${launchedClipId}:active` ||
+    playbackClipId.startsWith(`${launchedClipId}:`)
+  )
+}
+
+function nativeScheduleLeadSamples(sampleRate: number): number {
+  return Math.max(
+    MIN_NATIVE_SCHEDULE_LEAD_SAMPLES,
+    Math.round(Math.max(1, sampleRate) * NATIVE_SCHEDULE_LEAD_SECONDS)
+  )
 }
 
 function voiceStatsFromDiagnostics(
