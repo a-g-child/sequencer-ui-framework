@@ -154,6 +154,18 @@ export class NativeRuntimeSocketSession {
   }
 
   private sendFailure(requestId: number, error: unknown): void {
+    if (shouldPublishRuntimeFailureStatus(error)) {
+      this.sendEvent({
+        type: 'runtime:status',
+        payload: {
+          state: 'failed',
+          code: errorCode(error),
+          message: errorMessage(error),
+          details: errorDetails(error)
+        }
+      })
+    }
+
     const response: NativeRuntimeSocketFailure = {
       requestId,
       ok: false,
@@ -198,6 +210,20 @@ export class NativeRuntimeSocketSession {
       case 'runtime:dispose':
         return this.manager.dispose().then(() => undefined)
     }
+  }
+}
+
+function shouldPublishRuntimeFailureStatus(error: unknown): boolean {
+  if (error instanceof ProtocolValidationError) {
+    return false
+  }
+
+  switch (errorCode(error)) {
+    case 'runtime:already-owned':
+    case 'runtime:not-started':
+      return false
+    default:
+      return true
   }
 }
 

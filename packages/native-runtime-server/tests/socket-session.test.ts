@@ -107,6 +107,52 @@ describe('NativeRuntimeSocketSession', () => {
     assert.equal(failure.ok, false)
     assert.equal(failure.error.code, 'protocol:too-many-pending-requests')
   })
+
+  it('publishes runtime failed status when a runtime request fails', async () => {
+    const socket = new FakeSocket()
+    const session = new NativeRuntimeSocketSession({
+      connectionId: 'c4',
+      socket,
+      manager: {
+        ...createFakeManager(),
+        async getSnapshot() {
+          throw Object.assign(new Error('engine child exited'), {
+            code: 'runtime:engine-crashed'
+          })
+        }
+      },
+      token: 'test-token'
+    })
+
+    await session.onMessage(
+      JSON.stringify({
+        type: 'handshake',
+        protocolVersion: NATIVE_RUNTIME_SOCKET_PROTOCOL_VERSION,
+        token: 'test-token'
+      })
+    )
+
+    await session.onMessage(
+      JSON.stringify({
+        requestId: 12,
+        method: 'engine:snapshot'
+      })
+    )
+
+    const status = socket.sentJsonAt(-2) as {
+      type: 'runtime:status'
+      payload: { state: string; code: string; message: string }
+    }
+    const failure = socket.lastJson() as NativeRuntimeSocketFailure
+
+    assert.equal(status.type, 'runtime:status')
+    assert.equal(status.payload.state, 'failed')
+    assert.equal(status.payload.code, 'runtime:engine-crashed')
+    assert.equal(status.payload.message, 'engine child exited')
+    assert.equal(failure.requestId, 12)
+    assert.equal(failure.ok, false)
+    assert.equal(failure.error.code, 'runtime:engine-crashed')
+  })
 })
 
 class FakeSocket {
@@ -122,14 +168,20 @@ class FakeSocket {
   }
 
   lastJson(): unknown {
-    const last = this.sent.at(-1)
+    return this.sentJsonAt(-1)
+  }
 
-    if (!last) {
-      throw new Error('No sent messages.')
+  sentJsonAt(index: number): unknown {
+    const normalizedIndex = index < 0 ? this.sent.length + index : index
+    const value = this.sent[normalizedIndex]
+
+    if (!value) {
+      throw new Error('No sent message at index.')
     }
 
-    return JSON.parse(last)
+    return JSON.parse(value)
   }
+
 }
 
 function createFakeManager(): FakeManager {

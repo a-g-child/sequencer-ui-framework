@@ -458,6 +458,8 @@ Acceptance checks:
 
 ## Task 11 - Add a CPAL development smoke
 
+Status: complete.
+
 Make it opt-in:
 
 ```text
@@ -477,9 +479,17 @@ It should:
 
 Do not make CPAL hardware availability mandatory for the normal test suite.
 
+Implemented as `npm run smoke:browser-native`, which delegates to the
+native-runtime-server smoke. The normal server test suite includes the file but
+skips CPAL unless `NATIVE_BROWSER_SMOKE=1` is set. `NATIVE_BROWSER_SMOKE_DRIVER`
+can be set to `cpal` for hardware validation or `null` for deterministic
+verification of the same browser/socket/native-host path.
+
 ---
 
 ## Task 12 - Add reconnect and crash behavior
+
+Status: complete for the initial browser bridge policy.
 
 Define these policies explicitly.
 
@@ -521,9 +531,17 @@ socket disconnect
 
 A grace period avoids restarting the audio engine on every Vite hot reload.
 
+The server now keeps the owner-disconnect grace policy and publishes a
+`runtime:status` failed event before the correlated request failure when an
+owned runtime request fails unexpectedly. Expected control-plane rejections,
+such as protocol validation, not-started, or already-owned errors, remain
+structured request failures without marking the runtime failed.
+
 ---
 
 ## Task 13 - Add service-level health endpoint
+
+Status: complete.
 
 Expose:
 
@@ -550,6 +568,9 @@ startup scripts
 kiosk launch ordering
 diagnostics
 ```
+
+`GET /health` is served independently from the static UI directory, so startup
+checks can run before the browser bundle is present.
 
 ---
 

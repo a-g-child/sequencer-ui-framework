@@ -13,6 +13,7 @@ import type {
   EngineCommand,
   NativeRuntimeStartOptions
 } from '@sequencer/playback'
+import { NATIVE_RUNTIME_SOCKET_PROTOCOL_VERSION } from '@sequencer/playback'
 import { WebSocketServer, type RawData, type WebSocket } from 'ws'
 import {
   NativeRuntimeSocketSession,
@@ -25,7 +26,7 @@ export interface NativeRuntimeServerOptions {
   readonly wsPath?: string
   readonly uiDirectory?: string
   readonly token?: string
-  readonly managerFactory?: () => NativeRuntimeManager
+  readonly managerFactory?: () => NativeRuntimeRequestHandler
   readonly ownerDisconnectGraceMs?: number
   readonly uiPort?: number
   readonly allowedOrigins?: readonly string[]
@@ -40,7 +41,7 @@ export interface NativeRuntimeServerHandle {
 
 export interface RuntimeServerState {
   ownerConnectionId?: string
-  manager?: NativeRuntimeManager
+  manager?: NativeRuntimeRequestHandler
 }
 
 export class NativeRuntimeServer {
@@ -49,7 +50,7 @@ export class NativeRuntimeServer {
   private readonly wsPath: string
   private readonly uiDirectory?: string
   private readonly token?: string
-  private readonly managerFactory: () => NativeRuntimeManager
+  private readonly managerFactory: () => NativeRuntimeRequestHandler
   private readonly ownerDisconnectGraceMs: number
   private readonly uiPort?: number
   private readonly allowedOrigins: Set<string>
@@ -218,7 +219,7 @@ export class NativeRuntimeServer {
     }
   }
 
-  private acquireOwnerManager(connectionId: string): NativeRuntimeManager {
+  private acquireOwnerManager(connectionId: string): NativeRuntimeRequestHandler {
     if (
       this.state.ownerConnectionId &&
       this.state.ownerConnectionId !== connectionId
@@ -240,7 +241,7 @@ export class NativeRuntimeServer {
     return this.state.manager
   }
 
-  private requireOwnerManager(connectionId: string): NativeRuntimeManager {
+  private requireOwnerManager(connectionId: string): NativeRuntimeRequestHandler {
     if (!this.state.ownerConnectionId || this.state.ownerConnectionId !== connectionId) {
       if (this.state.ownerConnectionId) {
         throw runtimeAlreadyOwnedError(this.state.ownerConnectionId)
@@ -296,13 +297,19 @@ export class NativeRuntimeServer {
       return
     }
 
+    const requestedPath = new URL(req.url ?? '/', `http://${this.host}`).pathname
+
+    if (requestedPath === '/health') {
+      this.writeHealthResponse(req, res)
+      return
+    }
+
     if (!this.uiDirectory) {
       res.statusCode = 404
       res.end('Not Found')
       return
     }
 
-    const requestedPath = new URL(req.url ?? '/', `http://${this.host}`).pathname
     const normalizedPath = requestedPath === '/' ? '/index.html' : requestedPath
 
     try {
@@ -345,6 +352,28 @@ export class NativeRuntimeServer {
       res.statusCode = 404
       res.end('Not Found')
     }
+  }
+
+  private writeHealthResponse(req: IncomingMessage, res: ServerResponse): void {
+    const runtimeOwned = Boolean(this.state.ownerConnectionId)
+    const engineRunning = Boolean(this.state.manager)
+
+    res.statusCode = 200
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+
+    if (req.method === 'HEAD') {
+      res.end()
+      return
+    }
+
+    res.end(
+      JSON.stringify({
+        ok: true,
+        protocolVersion: NATIVE_RUNTIME_SOCKET_PROTOCOL_VERSION,
+        runtimeOwned,
+        engineRunning
+      })
+    )
   }
 }
 

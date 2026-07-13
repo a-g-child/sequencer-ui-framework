@@ -102,6 +102,17 @@ class FakeManager {
     }
   }
 
+  async startAudio(): Promise<unknown> {
+    return {
+      driver: 'null',
+      deviceId: 'null',
+      deviceName: 'Null',
+      sampleRate: 48_000,
+      channels: 2,
+      sampleFormat: 'f32'
+    }
+  }
+
   async preparePlan(plan: unknown): Promise<unknown> {
     return { transferId: 1, planId: 1, revision: 1, plan }
   }
@@ -177,7 +188,9 @@ function readMessage(socket: WebSocket): Promise<any> {
   return new Promise((resolve, reject) => {
     socket.once('message', (payload) => {
       const text =
-        typeof payload === 'string' ? payload : Buffer.from(payload).toString('utf8')
+        typeof payload === 'string'
+          ? payload
+          : Buffer.from(payload as Buffer).toString('utf8')
 
       resolve(JSON.parse(text))
     })

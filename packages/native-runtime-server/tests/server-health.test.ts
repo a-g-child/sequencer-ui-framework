@@ -4,67 +4,58 @@ import WebSocket from 'ws'
 import { NATIVE_RUNTIME_SOCKET_PROTOCOL_VERSION } from '@sequencer/playback'
 import { NativeRuntimeServer } from '../src/server.ts'
 
-describe('NativeRuntimeServer security', () => {
-  it('rejects non-loopback host binding', () => {
-    assert.throws(
-      () =>
-        new NativeRuntimeServer({
-          host: '0.0.0.0',
-          port: 43127,
-          token: 'test-token'
-        }),
-      /loopback only/
-    )
-  })
-
-  it('rejects disallowed origin', async () => {
+describe('NativeRuntimeServer health', () => {
+  it('reports idle runtime health without requiring a UI directory', async () => {
     const server = new NativeRuntimeServer({
       host: '127.0.0.1',
-      port: 0,
-      token: 'test-token',
-      uiPort: 5173,
-      managerFactory: () => new FakeManager()
+      port: 0
     })
 
     const handle = await server.listen()
-    const url = `ws://${handle.host}:${handle.port}${handle.wsPath}`
+    const response = await fetch(`http://${handle.host}:${handle.port}/health`)
+    const body = await response.json()
 
-    await assert.rejects(
-      () => connectClient(url, 'http://evil.example:5173'),
-      /Unexpected server response: 403/
-    )
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('content-type'), 'application/json; charset=utf-8')
+    assert.deepEqual(body, {
+      ok: true,
+      protocolVersion: NATIVE_RUNTIME_SOCKET_PROTOCOL_VERSION,
+      runtimeOwned: false,
+      engineRunning: false
+    })
 
     await server.close()
   })
 
-  it('allows localhost ui origin and enforces handshake token', async () => {
+  it('reports ownership once a browser client starts the runtime', async () => {
     const server = new NativeRuntimeServer({
       host: '127.0.0.1',
       port: 0,
-      token: 'expected-token',
-      uiPort: 5173,
+      token: 'test-token',
       managerFactory: () => new FakeManager()
     })
 
     const handle = await server.listen()
     const url = `ws://${handle.host}:${handle.port}${handle.wsPath}`
+    const origin = `http://${handle.host}:${handle.port}`
+    const socket = await connectClient(url, origin)
 
-    const socket = await connectClient(url, 'http://localhost:5173')
+    await performHandshake(socket, 'test-token')
+    const startResponse = await sendRequest(socket, {
+      requestId: 1,
+      method: 'runtime:start',
+      params: { driver: 'null' }
+    })
 
-    socket.send(
-      JSON.stringify({
-        type: 'handshake',
-        protocolVersion: NATIVE_RUNTIME_SOCKET_PROTOCOL_VERSION,
-        token: 'wrong-token'
-      })
-    )
+    assert.equal(startResponse.ok, true)
 
-    const failure = await readMessage(socket)
+    const response = await fetch(`http://${handle.host}:${handle.port}/health`)
+    const body = await response.json()
 
-    assert.equal(failure.type, 'handshake:error')
-    assert.equal(failure.error?.code, 'auth:invalid-token')
+    assert.equal(body.runtimeOwned, true)
+    assert.equal(body.engineRunning, true)
 
-    await onceClose(socket)
+    socket.close()
     await server.close()
   })
 })
@@ -112,13 +103,9 @@ class FakeManager {
     return { stream: null, telemetry: null }
   }
 
-  async stopAudio(): Promise<void> {
-    return undefined
-  }
+  async stopAudio(): Promise<void> {}
 
-  async dispose(): Promise<void> {
-    return undefined
-  }
+  async dispose(): Promise<void> {}
 }
 
 function connectClient(url: string, origin: string): Promise<WebSocket> {
@@ -135,6 +122,37 @@ function connectClient(url: string, origin: string): Promise<WebSocket> {
   })
 }
 
+async function performHandshake(socket: WebSocket, token: string): Promise<void> {
+  socket.send(
+    JSON.stringify({
+      type: 'handshake',
+      protocolVersion: NATIVE_RUNTIME_SOCKET_PROTOCOL_VERSION,
+      token
+    })
+  )
+
+  const message = await readMessage(socket)
+
+  assert.equal(message.type, 'handshake:ok')
+}
+
+async function sendRequest(
+  socket: WebSocket,
+  request: {
+    requestId: number
+    method: string
+    params?: unknown
+  }
+): Promise<{
+  requestId: number
+  ok: boolean
+  result?: unknown
+  error?: { code?: string; message?: string }
+}> {
+  socket.send(JSON.stringify(request))
+  return readMessage(socket)
+}
+
 function readMessage(socket: WebSocket): Promise<any> {
   return new Promise((resolve, reject) => {
     socket.once('message', (payload) => {
@@ -142,19 +160,12 @@ function readMessage(socket: WebSocket): Promise<any> {
         typeof payload === 'string'
           ? payload
           : Buffer.from(payload as Buffer).toString('utf8')
+
       resolve(JSON.parse(text))
     })
 
     socket.once('error', (error) => {
       reject(error)
-    })
-  })
-}
-
-function onceClose(socket: WebSocket): Promise<void> {
-  return new Promise((resolve) => {
-    socket.once('close', () => {
-      resolve()
     })
   })
 }

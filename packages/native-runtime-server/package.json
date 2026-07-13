@@ -8,7 +8,8 @@
     "dev": "node --experimental-transform-types src/index.ts",
     "start": "node dist/index.js",
     "check": "tsc -p tsconfig.json",
-    "test": "node --experimental-transform-types --experimental-specifier-resolution=node --test tests/*.test.ts"
+    "test": "node --experimental-transform-types --experimental-specifier-resolution=node --test tests/*.test.ts",
+    "smoke:browser-native": "NATIVE_BROWSER_SMOKE=1 node --experimental-transform-types --experimental-specifier-resolution=node --test tests/browser-cpal-smoke.test.ts"
   },
   "dependencies": {
     "@sequencer/native-runtime-node": "file:../native-runtime-node",
