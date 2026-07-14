@@ -2384,27 +2384,43 @@ mod tests {
     }
 
     #[test]
-    fn batch_note_off_owner_lifetime_defaults_to_generation_bound() {
+    fn batch_decode_preserves_startup_note_traces_and_owner_lifetimes() {
         let commands = parse_scheduled_beat_event_batch(
-            "{\"type\":\"event:schedule-beat-batch\",\"clipId\":\"clip-1\",\"generation\":2,\"atSample\":0,\"events\":[{\"kind\":\"note-off\",\"targetNode\":5,\"note\":62,\"atBeat\":2.5,\"traceId\":{\"clipOwnerId\":101,\"generation\":2,\"noteId\":1001,\"role\":\"note-off\"}},{\"kind\":\"note-off\",\"targetNode\":5,\"note\":64,\"atBeat\":3.5,\"ownerLifetime\":\"completion-required\",\"traceId\":{\"clipOwnerId\":101,\"generation\":2,\"noteId\":1002,\"role\":\"note-off\"}}]}",
+            "{\"type\":\"event:schedule-beat-batch\",\"clipId\":\"clip-1:active\",\"generation\":2,\"atSample\":0,\"events\":[{\"kind\":\"note-on\",\"targetNode\":5,\"note\":60,\"velocity\":0.8,\"atBeat\":0,\"traceId\":{\"clipOwnerId\":101,\"generation\":2,\"noteId\":1001,\"role\":\"note-on\"}},{\"kind\":\"note-off\",\"targetNode\":5,\"note\":60,\"atBeat\":0.25,\"ownerLifetime\":\"completion-required\",\"traceId\":{\"clipOwnerId\":101,\"generation\":2,\"noteId\":1001,\"role\":\"note-off\"}},{\"kind\":\"note-on\",\"targetNode\":5,\"note\":72,\"velocity\":0.8,\"atBeat\":3.75,\"traceId\":{\"clipOwnerId\":101,\"generation\":2,\"noteId\":1002,\"role\":\"note-on\"}},{\"kind\":\"note-off\",\"targetNode\":5,\"note\":72,\"atBeat\":4,\"ownerLifetime\":\"completion-required\",\"traceId\":{\"clipOwnerId\":101,\"generation\":2,\"noteId\":1002,\"role\":\"note-off\"}}]}",
             10,
             0,
         )
         .expect("batch should parse");
 
+        assert_eq!(commands.len(), 5);
         assert!(matches!(
             commands[1],
             EngineCommand::ScheduleBeatEvent {
-                owner: Some(ScheduledEventOwner {
-                    lifetime: ScheduledEventLifetime::GenerationBound,
+                event: ScheduledBeatEvent::NoteOn {
+                    note: 60,
+                    at_beat: 0.0,
+                    ..
+                },
+                owner: Some(ScheduledEventOwner { generation: 2, .. }),
+                trace_id: Some(ScheduledEventTraceId {
+                    role: ScheduledEventTraceRole::NoteOn,
                     ..
                 }),
                 ..
             }
         ));
         assert!(matches!(
-            commands[1],
+            commands[2],
             EngineCommand::ScheduleBeatEvent {
+                event: ScheduledBeatEvent::NoteOff {
+                    note: 60,
+                    at_beat: 0.25,
+                    ..
+                },
+                owner: Some(ScheduledEventOwner {
+                    lifetime: ScheduledEventLifetime::CompletionRequired,
+                    ..
+                }),
                 trace_id: Some(ScheduledEventTraceId {
                     clip_owner_id: 101,
                     generation: 2,
@@ -2415,23 +2431,37 @@ mod tests {
             }
         ));
         assert!(matches!(
-            commands[2],
+            commands[3],
             EngineCommand::ScheduleBeatEvent {
-                owner: Some(ScheduledEventOwner {
-                    lifetime: ScheduledEventLifetime::CompletionRequired,
+                event: ScheduledBeatEvent::NoteOn {
+                    note: 72,
+                    at_beat: 3.75,
+                    ..
+                },
+                trace_id: Some(ScheduledEventTraceId {
+                    note_id: 1002,
+                    role: ScheduledEventTraceRole::NoteOn,
                     ..
                 }),
                 ..
             }
         ));
         assert!(matches!(
-            commands[2],
+            commands[4],
             EngineCommand::ScheduleBeatEvent {
+                event: ScheduledBeatEvent::NoteOff {
+                    note: 72,
+                    at_beat: 4.0,
+                    ..
+                },
+                owner: Some(ScheduledEventOwner {
+                    lifetime: ScheduledEventLifetime::CompletionRequired,
+                    ..
+                }),
                 trace_id: Some(ScheduledEventTraceId {
-                    clip_owner_id: 101,
-                    generation: 2,
                     note_id: 1002,
                     role: ScheduledEventTraceRole::NoteOff,
+                    ..
                 }),
                 ..
             }

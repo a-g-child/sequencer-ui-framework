@@ -194,6 +194,104 @@ describe('PlaybackService native startup', () => {
     )
   })
 
+  it('submits one production startup batch for a stopped stream with an armed clip', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    service['model'] = createStartupBatchPlaybackModelFixture('clip-1:active')
+    service['runtimeBpm'] = 120
+    service.requestClipLaunch('track-1', 'clip-1', 'none')
+    await controller.start()
+
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    const ownerCommands = backend.commands.filter(
+      (command) => command.type === 'event-owner:generation:set'
+    )
+    const tempo = backend.commands.find((command) => command.type === 'tempo-map:set')
+    const loop = backend.commands.find((command) => command.type === 'transport-loop:set')
+    const batch = backend.commands.find(
+      (command) => command.type === 'event:schedule-beat-batch'
+    )
+    const start = backend.commands.find((command) => command.type === 'transport:start')
+
+    assert.equal(ownerCommands.length, 1)
+    assert.equal(tempo?.type, 'tempo-map:set')
+    assert.equal(loop?.type, 'transport-loop:set')
+    assert.equal(batch?.type, 'event:schedule-beat-batch')
+    assert.equal(start?.type, 'transport:start')
+    assert.equal(tempo.atSample, batch.atSample)
+    assert.equal(loop.atSample, batch.atSample)
+    assert.equal(start.atSample, tempo.originSample)
+    assert.equal(loop.startSample, tempo.originSample)
+    assert.equal(tempo.originBeat, 0)
+    assert.equal(ownerCommands[0]?.clipId, batch.clipId)
+    assert.equal(batch.generation, ownerCommands[0]?.generation)
+    assert.equal(batch.clipId, 'clip-1:active')
+
+    const traceOwner = batch.events[0]?.traceId?.clipOwnerId
+    assert.equal(typeof traceOwner, 'number')
+
+    const events = batch.events.map((event) => ({
+      kind: event.kind,
+      atBeat: event.atBeat,
+      note: event.note,
+      ownerLifetime: event.ownerLifetime,
+      traceRole: event.traceId?.role,
+      traceGeneration: event.traceId?.generation,
+      traceOwner: event.traceId?.clipOwnerId
+    }))
+
+    assert.deepEqual(
+      uniqueEventShapes(events),
+      [
+        {
+          kind: 'note-on',
+          atBeat: 128 / 24_000,
+          note: 60,
+          ownerLifetime: undefined,
+          traceRole: 'note-on',
+          traceGeneration: batch.generation,
+          traceOwner
+        },
+        {
+          kind: 'note-off',
+          atBeat: 0.25,
+          note: 60,
+          ownerLifetime: 'completion-required',
+          traceRole: 'note-off',
+          traceGeneration: batch.generation,
+          traceOwner
+        },
+        {
+          kind: 'note-on',
+          atBeat: 3.75,
+          note: 72,
+          ownerLifetime: undefined,
+          traceRole: 'note-on',
+          traceGeneration: batch.generation,
+          traceOwner
+        },
+        {
+          kind: 'note-off',
+          atBeat: 4,
+          note: 72,
+          ownerLifetime: 'completion-required',
+          traceRole: 'note-off',
+          traceGeneration: batch.generation,
+          traceOwner
+        }
+      ]
+    )
+  })
+
   it('queues native transport start without waiting for scheduler telemetry', async () => {
     const backend = new ScheduleApplyRuntimeBackend()
     const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
@@ -1393,6 +1491,52 @@ function createFirstBeatPlaybackModelFixture(): PlaybackModel {
       beat,
       duration: 0.125
     }))
+  })
+}
+
+function createStartupBatchPlaybackModelFixture(clipId = 'clip-1'): PlaybackModel {
+  return freezePlaybackModel({
+    ...createPlaybackModelFixture(),
+    clips: [
+      {
+        id: clipId,
+        trackId: 'track-1',
+        patternId: 'pattern-1',
+        name: 'Main',
+        start: 0,
+        length: 4,
+        loop: true,
+        loopStart: 0,
+        loopLength: 4,
+        sourceStart: 0,
+        sourceLength: 4,
+        loopIndex: 0
+      }
+    ],
+    notes: [
+      {
+        id: 'beat-zero',
+        sourceNoteId: 'beat-zero',
+        trackId: 'track-1',
+        clipId,
+        patternId: 'pattern-1',
+        pitch: 60,
+        velocity: 0.8,
+        beat: 0,
+        duration: 0.25
+      },
+      {
+        id: 'final-sixteenth',
+        sourceNoteId: 'final-sixteenth',
+        trackId: 'track-1',
+        clipId,
+        patternId: 'pattern-1',
+        pitch: 72,
+        velocity: 0.8,
+        beat: 3.75,
+        duration: 0.25
+      }
+    ]
   })
 }
 

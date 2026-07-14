@@ -16,11 +16,11 @@
 - [x] Add explicit scheduled-event drop reasons.
 
 ## Phase 2: Prove The Production Startup Batch
-- [ ] Add an integration test for an already-running audio stream with stopped transport and armed clip.
-- [ ] Assert startup commands share one activation sample and activation beat.
-- [ ] Assert exactly one schedule generation is submitted.
-- [ ] Assert serialized host-decoded batch contains beat-zero and final-sixteenth note-on/off events.
-- [ ] Assert owner and generation match the activation command.
+- [x] Add an integration test for an already-running audio stream with stopped transport and armed clip.
+- [x] Assert startup commands share one activation sample and activation beat.
+- [x] Assert exactly one schedule generation is submitted.
+- [x] Assert serialized host-decoded batch contains beat-zero and final-sixteenth note-on/off events.
+- [x] Assert owner and generation match the activation command.
 
 ## Phase 3: Atomic Transport Start Transaction
 - [ ] Add a prepared transport-start request on the control side.
