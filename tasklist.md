@@ -29,11 +29,11 @@
 - [x] Dispatch events due exactly at the activation sample after transaction activation.
 
 ## Phase 4: Separate Device Time From Transport Time
-- [ ] Formalise device clock and transport timeline structures.
-- [ ] Freeze transport beat while stopped.
-- [ ] Anchor transport beat explicitly on start.
+- [x] Formalise device clock and transport timeline structures.
+- [x] Freeze transport beat while stopped.
+- [x] Anchor transport beat explicitly on start.
 - [ ] Audit raw sample-to-beat conversions against the transport timeline.
-- [ ] Ensure runtime snapshots report transport timeline beat.
+- [x] Ensure runtime snapshots report transport timeline beat.
 
 ## Phase 5: Atomic Clip Schedule Activation
 - [ ] Prepare complete scheduled event sets off the audio thread.

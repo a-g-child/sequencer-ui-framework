@@ -80,9 +80,9 @@ struct Session<W: Write> {
     retired_plan_receiver: Option<RetiredPlanReceiver>,
     prepared_plans: Vec<SessionPreparedPlan>,
     active_plan_metadata: Option<PreparedExecutionPlanMetadata>,
-    transport_playing: bool,
-    transport_changed_at_sample: u64,
+    transport_timeline: TransportTimeline,
     tempo_map: TempoMapSnapshot,
+    pending_tempo_maps: Vec<PendingTempoMap>,
     next_transfer_id: u64,
     next_command_id: u64,
     last_telemetry: Option<AudioTelemetry>,
@@ -104,6 +104,73 @@ struct PlanActivation {
     applied_sample: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DeviceClockSnapshot {
+    sample_position: u64,
+}
+
+impl From<AudioTelemetry> for DeviceClockSnapshot {
+    fn from(telemetry: AudioTelemetry) -> Self {
+        Self {
+            sample_position: telemetry.sample_position,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TransportTimeline {
+    playing: bool,
+    anchor_sample: u64,
+    anchor_beat: f64,
+    stopped_beat: f64,
+}
+
+impl Default for TransportTimeline {
+    fn default() -> Self {
+        Self {
+            playing: false,
+            anchor_sample: 0,
+            anchor_beat: 0.0,
+            stopped_beat: 0.0,
+        }
+    }
+}
+
+impl TransportTimeline {
+    fn start(&mut self, at_sample: u64, tempo_map: TempoMapSnapshot) {
+        self.playing = true;
+        self.anchor_sample = at_sample;
+        self.anchor_beat = tempo_map.sample_to_beat(at_sample);
+        self.stopped_beat = self.anchor_beat;
+    }
+
+    fn stop(&mut self, at_sample: u64, tempo_map: TempoMapSnapshot) {
+        self.stopped_beat = self.beat_at(
+            DeviceClockSnapshot {
+                sample_position: at_sample,
+            },
+            tempo_map,
+        );
+        self.playing = false;
+        self.anchor_sample = at_sample;
+        self.anchor_beat = self.stopped_beat;
+    }
+
+    fn beat_at(&self, clock: DeviceClockSnapshot, tempo_map: TempoMapSnapshot) -> f64 {
+        if self.playing {
+            tempo_map.sample_to_beat(clock.sample_position)
+        } else {
+            self.stopped_beat
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PendingTempoMap {
+    at_sample: u64,
+    tempo: TempoMapSnapshot,
+}
+
 impl<W: Write> Session<W> {
     fn new(writer: W) -> Self {
         Self {
@@ -116,9 +183,9 @@ impl<W: Write> Session<W> {
             retired_plan_receiver: None,
             prepared_plans: Vec::new(),
             active_plan_metadata: None,
-            transport_playing: false,
-            transport_changed_at_sample: 0,
+            transport_timeline: TransportTimeline::default(),
             tempo_map: TempoMapSnapshot::default(),
+            pending_tempo_maps: Vec::new(),
             next_transfer_id: 1,
             next_command_id: 1,
             last_telemetry: None,
@@ -293,6 +360,8 @@ impl<W: Write> Session<W> {
             optional_u32_json(stream.requested_buffer_frames)
         )?;
 
+        let stream_sample_rate = stream.sample_rate;
+
         self.driver = Some(driver);
         self.stream = Some(stream);
         self.command_sender = Some(command_sender);
@@ -303,6 +372,12 @@ impl<W: Write> Session<W> {
         self.null_driver_frame_accumulator = 0.0;
         self.prepared_plans.clear();
         self.active_plan_metadata = None;
+        self.transport_timeline = TransportTimeline::default();
+        self.tempo_map = TempoMapSnapshot {
+            sample_rate: stream_sample_rate as f64,
+            ..TempoMapSnapshot::default()
+        };
+        self.pending_tempo_maps.clear();
         self.drain_runtime_events()?;
         Ok(())
     }
@@ -331,7 +406,8 @@ impl<W: Write> Session<W> {
         self.null_driver_frame_accumulator = 0.0;
         self.prepared_plans.clear();
         self.active_plan_metadata = None;
-        self.transport_playing = false;
+        self.transport_timeline = TransportTimeline::default();
+        self.pending_tempo_maps.clear();
         self.write_ok_prefix(request, "audio:stopped")?;
         writeln!(self.writer, "}}")?;
         Ok(())
@@ -396,21 +472,39 @@ impl<W: Write> Session<W> {
 
     fn observe_engine_command(&mut self, command: &EngineCommand) {
         match command {
-            EngineCommand::SetTempoMap { tempo, .. } => {
-                self.tempo_map = *tempo;
+            EngineCommand::SetTempoMap {
+                tempo, at_sample, ..
+            } => {
+                self.queue_tempo_map(*at_sample, *tempo);
             }
-            EngineCommand::PreparedTransportStart { tempo, .. } => {
-                self.tempo_map = *tempo;
-                self.transport_playing = true;
-            }
-            EngineCommand::TransportStart { .. } => {
-                self.transport_playing = true;
-            }
-            EngineCommand::TransportStop { .. } | EngineCommand::Panic { .. } => {
-                self.transport_playing = false;
+            EngineCommand::PreparedTransportStart {
+                tempo, at_sample, ..
+            } => {
+                self.queue_tempo_map(*at_sample, *tempo);
             }
             _ => {}
         }
+    }
+
+    fn queue_tempo_map(&mut self, at_sample: u64, tempo: TempoMapSnapshot) {
+        self.pending_tempo_maps
+            .push(PendingTempoMap { at_sample, tempo });
+        self.pending_tempo_maps
+            .sort_by_key(|pending| pending.at_sample);
+    }
+
+    fn apply_pending_tempo_maps_until(&mut self, sample_position: u64) {
+        let mut remaining = Vec::with_capacity(self.pending_tempo_maps.len());
+
+        for pending in self.pending_tempo_maps.drain(..) {
+            if pending.at_sample <= sample_position {
+                self.tempo_map = pending.tempo;
+            } else {
+                remaining.push(pending);
+            }
+        }
+
+        self.pending_tempo_maps = remaining;
     }
 
     fn prepare_plan(&mut self, request: &SessionRequest) -> Result<(), SessionError> {
@@ -622,12 +716,10 @@ impl<W: Write> Session<W> {
         }
 
         if let Some(telemetry) = self.last_telemetry {
+            self.apply_pending_tempo_maps_until(telemetry.sample_position);
             let plan_status = telemetry.runtime_plan_status;
-            let beat_position = if self.transport_playing {
-                self.tempo_map.sample_to_beat(telemetry.sample_position)
-            } else {
-                0.0
-            };
+            let clock = DeviceClockSnapshot::from(telemetry);
+            let beat_position = self.transport_timeline.beat_at(clock, self.tempo_map);
             let command_diagnostics = telemetry.command_diagnostics;
             let scheduler_diagnostics = telemetry.scheduler_diagnostics;
             let scheduler_diagnostics_json = scheduler_diagnostics_json(scheduler_diagnostics);
@@ -637,7 +729,7 @@ impl<W: Write> Session<W> {
             write!(
                 self.writer,
                 ",\"transport\":{{\"playing\":{},\"samplePosition\":{},\"beatPosition\":{},\"loopIteration\":0}},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"planMaximumFrames\":{},\"pendingTransfers\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}},\"diagnostics\":{{\"xruns\":{},\"queueOverflows\":{},\"streamErrors\":{},\"callbackFrames\":{},\"maximumCallbackFrames\":{},\"commandQueueDepth\":{},\"pendingCommandCount\":{},\"nextPendingCommandSample\":{},\"commandReceived\":{},\"commandApplied\":{},\"commandLate\":{},\"commandRejected\":{},\"commandOutOfOrder\":{},\"lastCommandRejection\":{},\"scheduler\":{},\"eventGraph\":{},\"recentEventTraces\":{}}},\"telemetry\":{{\"samplePosition\":{},\"callbackCount\":{},\"sampleRate\":{},\"callbackFrames\":{},\"maximumCallbackFrames\":{},\"outputChannels\":{},\"commandQueueDepth\":{},\"pendingCommandCount\":{},\"nextPendingCommandSample\":{},\"commandDiagnostics\":{{\"received\":{},\"applied\":{},\"late\":{},\"rejected\":{},\"outOfOrder\":{},\"commandQueueOverflows\":{},\"telemetryQueueOverflows\":{}}},\"schedulerDiagnostics\":{},\"eventGraphDiagnostics\":{},\"recentEventTraces\":{},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"planMaximumFrames\":{},\"pendingPlanCount\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}}}}",
-                self.transport_playing,
+                self.transport_timeline.playing,
                 telemetry.sample_position,
                 beat_position,
                 optional_u64_json(plan_status.active_plan_id),
@@ -895,8 +987,12 @@ impl<W: Write> Session<W> {
                 )?;
             }
             EngineEvent::TransportStateChanged { playing, at_sample } => {
-                self.transport_playing = playing;
-                self.transport_changed_at_sample = at_sample;
+                self.apply_pending_tempo_maps_until(at_sample);
+                if playing {
+                    self.transport_timeline.start(at_sample, self.tempo_map);
+                } else {
+                    self.transport_timeline.stop(at_sample, self.tempo_map);
+                }
                 writeln!(
                     self.writer,
                     "{{\"type\":\"engine:event\",\"event\":\"transport-state\",\"playing\":{playing},\"atSample\":{at_sample}}}"
@@ -2335,8 +2431,55 @@ mod tests {
              session:shutdown\n",
         );
 
-        assert!(output.contains("\"samplePosition\":256"));
+        assert!(output.contains("\"samplePosition\":"));
         assert_eq!(output.matches("\"beatPosition\":0").count(), 2);
+    }
+
+    #[test]
+    fn transport_timeline_freezes_stopped_beat() {
+        let tempo = TempoMapSnapshot {
+            origin_sample: 0,
+            origin_beat: 0.0,
+            bpm: 120.0,
+            sample_rate: 48_000.0,
+        };
+        let mut timeline = TransportTimeline::default();
+
+        timeline.start(0, tempo);
+        assert_eq!(
+            timeline.beat_at(
+                DeviceClockSnapshot {
+                    sample_position: 24_000
+                },
+                tempo
+            ),
+            1.0
+        );
+
+        timeline.stop(36_000, tempo);
+        assert_eq!(
+            timeline.beat_at(
+                DeviceClockSnapshot {
+                    sample_position: 96_000
+                },
+                tempo
+            ),
+            1.5
+        );
+    }
+
+    #[test]
+    fn future_transport_start_does_not_advance_snapshot_timeline_early() {
+        let output = run_session(
+            "audio:start driver=null sample_rate=48000 buffer_frames=128 channels=2\n\
+             {\"requestId\":1,\"type\":\"engine:command\",\"command\":{\"type\":\"tempo-map:set\",\"originSample\":1024,\"originBeat\":8,\"bpm\":120,\"sampleRate\":48000,\"atSample\":1024}}\n\
+             {\"requestId\":2,\"type\":\"engine:command\",\"command\":{\"type\":\"transport:start\",\"atSample\":1024}}\n\
+             engine:snapshot\n\
+             session:shutdown\n",
+        );
+
+        assert!(output.contains("\"transport\":{\"playing\":false"));
+        assert!(output.contains("\"beatPosition\":0"));
     }
 
     #[test]
