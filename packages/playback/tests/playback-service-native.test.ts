@@ -135,6 +135,65 @@ describe('PlaybackService native startup', () => {
     )
   })
 
+  it('includes loop-end note-offs for final-sixteenth notes in the initial native batch', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    service['model'] = freezePlaybackModel({
+      ...createPlaybackModelFixture(),
+      notes: [
+        {
+          id: 'final-sixteenth',
+          sourceNoteId: 'final-sixteenth',
+          trackId: 'track-1',
+          clipId: 'clip-1',
+          patternId: 'pattern-1',
+          pitch: 76,
+          velocity: 0.8,
+          beat: 3.75,
+          duration: 0.25
+        }
+      ]
+    })
+    service['runtimeBpm'] = 120
+    service.requestClipLaunch('track-1', 'clip-1', 'bar')
+
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    const batch = backend.commands.find(
+      (command) => command.type === 'event:schedule-beat-batch'
+    ) as {
+      events?: readonly {
+        kind?: string
+        atBeat?: number
+        ownerLifetime?: string
+      }[]
+    } | undefined
+
+    assert.deepEqual(
+      uniqueEventShapes(batch?.events?.map((event) => ({
+        kind: event.kind,
+        atBeat: event.atBeat,
+        ownerLifetime: event.ownerLifetime
+      })) ?? []),
+      [
+        { kind: 'note-on', atBeat: 3.75, ownerLifetime: undefined },
+        {
+          kind: 'note-off',
+          atBeat: 4,
+          ownerLifetime: 'completion-required'
+        }
+      ]
+    )
+  })
+
   it('queues native transport start without waiting for scheduler telemetry', async () => {
     const backend = new ScheduleApplyRuntimeBackend()
     const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
@@ -313,6 +372,83 @@ describe('PlaybackService native startup', () => {
       service['liveClips'].state.activeClipByTrackId['track-1']?.launchedAtBeat,
       36
     )
+  })
+
+  it('does not clear previous clip voices when applying pending launches at native startup', () => {
+    const controller = new PlaybackRuntimeController(new FakeRuntimeBackend(), {
+      autoPoll: false
+    })
+    const service = new PlaybackService(undefined, controller)
+    const cleanups: Array<{ trackId: string; reason: string }> = []
+
+    service.requestClipLaunch('track-1', 'clip-1', 'none')
+    service['liveClips'].requestLaunch(
+      'track-1',
+      'clip-2',
+      {
+        bpm: 120,
+        beat: 35.5,
+        running: true,
+        timeMs: 9_900,
+        sourceId: 'test'
+      },
+      'bar'
+    )
+    service['panicTrackRuntimeVoices'] = (trackId: string, reason: string) => {
+      cleanups.push({ trackId, reason })
+    }
+
+    service['handleServiceEvent']({
+      type: 'clock:started',
+      serviceId: 'clock',
+      payload: {
+        bpm: 120,
+        beat: 36,
+        currentStep: 144,
+        running: true,
+        timeMs: 10_000
+      }
+    })
+
+    assert.deepEqual(cleanups, [])
+    assert.equal(
+      service['liveClips'].state.activeClipByTrackId['track-1']?.clipId,
+      'clip-2'
+    )
+    assert.equal(
+      service['liveClips'].state.activeClipByTrackId['track-1']?.launchedAtBeat,
+      36
+    )
+  })
+
+  it('does not submit an implicit native schedule during clock-start rebuild', () => {
+    const controller = new PlaybackRuntimeController(new FakeRuntimeBackend(), {
+      autoPoll: false
+    })
+    const service = new PlaybackService(undefined, controller)
+    const rebuildOptions: unknown[] = []
+
+    service['rebuildModel'] = (options = {}) => {
+      rebuildOptions.push(options)
+    }
+    service.requestClipLaunch('track-1', 'clip-1', 'bar')
+
+    service['handleServiceEvent']({
+      type: 'clock:started',
+      serviceId: 'clock',
+      payload: {
+        bpm: 120,
+        beat: 0,
+        currentStep: 0,
+        running: true,
+        timeMs: 0
+      }
+    })
+
+    assert.deepEqual(rebuildOptions.at(-1), {
+      prepareNativeRuntimePlan: false,
+      submitNativeClipSchedule: false
+    })
   })
 
   it('quantizes native clip launches from the observed runtime beat', async () => {
@@ -674,7 +810,7 @@ describe('PlaybackService native startup', () => {
     assert.deepEqual(backend.commands, [])
   })
 
-  it('schedules immediate native clip re-cues from the clip start beat', async () => {
+  it('schedules immediate native clip re-cues from one activation beat/sample pair', async () => {
     const backend = new FakeRuntimeBackend()
     const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
     const service = new PlaybackService(undefined, controller)
@@ -712,13 +848,13 @@ describe('PlaybackService native startup', () => {
     assert.equal(tempo?.type, 'tempo-map:set')
     assert.equal(loop?.type, 'transport-loop:set')
     assert.equal(batch?.type, 'event:schedule-beat-batch')
-    assert.equal(tempo.originBeat, 2.375)
+    assert.equal(tempo.originBeat, 2.875)
     assert.equal(loop.startSample, tempo.originSample)
     assert.deepEqual(
       batch.events
         .filter((event) => event.kind === 'note-on')
         .map((event) => event.atBeat),
-      [2.375]
+      [2.875]
     )
   })
 
@@ -1224,8 +1360,11 @@ function createSchedulerDiagnostics(
     beatEventsInserted,
     beatEventMinSample: null,
     beatEventMaxSample: null,
+    firstScheduledEventVisitedSample: null,
+    firstScheduledEventDispatchedSample: null,
     eventsDroppedCapacity: 0,
     eventsDroppedNotPlaying: 0,
+    eventsSuppressedWhileStopped: 0,
     eventsDiscardedOwner: 0,
     eventsDiscardedFutureOwner: 0,
     noteOnsDispatched: 0,
@@ -1396,6 +1535,10 @@ function createEditedPlaybackModelFixture(): PlaybackModel {
       }
     ]
   })
+}
+
+function uniqueEventShapes<T>(events: readonly T[]): T[] {
+  return [...new Map(events.map((event) => [JSON.stringify(event), event])).values()]
 }
 
 async function waitForNativeServiceTasks(): Promise<void> {

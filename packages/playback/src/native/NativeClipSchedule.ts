@@ -27,6 +27,7 @@ export interface NativeClipSchedule {
 export interface NativeClipScheduleOptions {
   readonly clipId: string
   readonly generation: number
+  readonly launchAtBeat?: number
   readonly targetNode?: number
   readonly targetNodes?: readonly number[]
   readonly timing?: ClipTimingSettings
@@ -157,7 +158,9 @@ export function compileNativeClipSchedule(
   const clip = model.clips.find((candidate) => candidate.id === options.clipId)
   const events = model.notes
     .filter((note) => note.clipId === options.clipId)
-    .flatMap((note) => noteToNativeBeatEvents(note, targetNode, timing, clip))
+    .flatMap((note) =>
+      noteToNativeBeatEvents(note, targetNode, timing, clip, options.launchAtBeat)
+    )
     .sort(compareNativeBeatEvents)
 
   return {
@@ -339,7 +342,8 @@ function noteToNativeBeatEvents(
   note: PlaybackNote,
   targetNode: number,
   timing: ClipTimingSettings,
-  clip: PlaybackClip | undefined
+  clip: PlaybackClip | undefined,
+  launchAtBeat: number | undefined
 ): NativeScheduledBeatEvent[] {
   const pitch = clampMidiNote(note.pitch)
   const [noteOnBeat, noteOffBeat] = canonicalClipNoteBeats(
@@ -347,6 +351,8 @@ function noteToNativeBeatEvents(
     applyClipTiming(note.beat + Math.max(0, note.duration), timing),
     clip
   )
+  const scheduledNoteOnBeat = launchClipBeat(noteOnBeat, clip, launchAtBeat)
+  const scheduledNoteOffBeat = launchClipBeat(noteOffBeat, clip, launchAtBeat)
 
   return [
     {
@@ -354,13 +360,13 @@ function noteToNativeBeatEvents(
       targetNode,
       note: pitch,
       velocity: normalizeVelocity(note.velocity),
-      atBeat: noteOnBeat
+      atBeat: scheduledNoteOnBeat
     },
     {
       kind: 'note-off',
       targetNode,
       note: pitch,
-      atBeat: noteOffBeat
+      atBeat: scheduledNoteOffBeat
     }
   ]
 }
@@ -409,9 +415,24 @@ function canonicalClipNoteBeats(
   const canonicalNoteOnBeat =
     loopStartBeat + positiveModulo(noteOnBeat - loopStartBeat, loopLength)
   const duration = Math.max(0, noteOffBeat - noteOnBeat)
-  const canonicalNoteOffBeat = Math.min(loopEndBeat, canonicalNoteOnBeat + duration)
+  const canonicalNoteOffBeat = canonicalNoteOnBeat + duration
 
   return [canonicalNoteOnBeat, canonicalNoteOffBeat]
+}
+
+function launchClipBeat(
+  beat: number,
+  clip: PlaybackClip | undefined,
+  launchAtBeat: number | undefined
+): number {
+  if (launchAtBeat === undefined || !clip?.loop || clip.loopLength <= 0) {
+    return beat
+  }
+
+  const loopStartBeat = clip.start + clip.loopStart
+  const phase = beat - loopStartBeat
+
+  return launchAtBeat + phase
 }
 
 function compareNativeBeatEvents(

@@ -10,6 +10,7 @@ export interface ActiveClipLaunch {
 }
 
 export interface PendingClipLaunch {
+  readonly launchId: string
   readonly trackId: EntityId
   readonly clipId: EntityId
   readonly requestedAtBeat: BeatTime
@@ -17,6 +18,7 @@ export interface PendingClipLaunch {
 }
 
 export interface AppliedClipLaunch {
+  readonly launchId: string
   readonly trackId: EntityId
   readonly clipId: EntityId
   readonly previousClipId?: EntityId
@@ -33,6 +35,7 @@ export interface LiveClipState {
 export class LiveClipService {
   private activeClipByTrackId: Record<EntityId, ActiveClipLaunch> = {}
   private pendingLaunchByTrackId: Record<EntityId, PendingClipLaunch> = {}
+  private nextLaunchId = 1
   private launchQuantize: ClipLaunchQuantize
   private launchQuantizeBeats: BeatTime
 
@@ -69,6 +72,7 @@ export class LiveClipService {
     const requestedAtBeat = Math.max(0, clockState.beat)
     const launchAtBeat = getNextQuantizedBeat(requestedAtBeat, quantizeBeats)
     const launch: PendingClipLaunch = {
+      launchId: `launch-${this.nextLaunchId++}`,
       trackId,
       clipId,
       requestedAtBeat,
@@ -129,6 +133,40 @@ export class LiveClipService {
     this.pendingLaunchByTrackId = {}
   }
 
+  activateArmedLaunchesAtTransportStart(beat: BeatTime): AppliedClipLaunch[] {
+    const nextActiveClipByTrackId: Record<EntityId, ActiveClipLaunch> = {}
+    const appliedLaunches: AppliedClipLaunch[] = []
+
+    for (const [trackId, launch] of Object.entries(this.activeClipByTrackId)) {
+      nextActiveClipByTrackId[trackId] = {
+        ...launch,
+        launchedAtBeat: beat
+      }
+    }
+
+    for (const launch of Object.values(this.pendingLaunchByTrackId)) {
+      const previousClipId = nextActiveClipByTrackId[launch.trackId]?.clipId
+
+      nextActiveClipByTrackId[launch.trackId] = {
+        trackId: launch.trackId,
+        clipId: launch.clipId,
+        launchedAtBeat: beat
+      }
+      appliedLaunches.push({
+        launchId: launch.launchId,
+        trackId: launch.trackId,
+        clipId: launch.clipId,
+        previousClipId,
+        launchAtBeat: beat
+      })
+    }
+
+    this.activeClipByTrackId = nextActiveClipByTrackId
+    this.pendingLaunchByTrackId = {}
+
+    return appliedLaunches
+  }
+
   applyDueLaunches(clockState: ClockState): AppliedClipLaunch[] {
     const dueLaunches = Object.values(this.pendingLaunchByTrackId).filter(
       (launch) => launch.launchAtBeat <= clockState.beat
@@ -150,6 +188,7 @@ export class LiveClipService {
       }
       delete nextPendingLaunchByTrackId[launch.trackId]
       appliedLaunches.push({
+        launchId: launch.launchId,
         trackId: launch.trackId,
         clipId: launch.clipId,
         previousClipId,

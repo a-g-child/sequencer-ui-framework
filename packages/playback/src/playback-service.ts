@@ -173,7 +173,12 @@ export class PlaybackService implements Service, DocumentObserver {
   private readonly nativeScheduledClipModels = new Map<string, PlaybackModel>()
   private readonly nativePreScheduledLaunches = new Map<
     string,
-    { readonly clipId: string; readonly launchAtBeat: number }
+    {
+      readonly launchId: string
+      readonly clipId: string
+      readonly activationBeat: number
+      readonly activationSample: number
+    }
   >()
   private nativeRuntimeStatus: PlaybackNativeRuntimeStatus = {
     lastAction: 'idle',
@@ -418,6 +423,7 @@ export class PlaybackService implements Service, DocumentObserver {
     const nativeLaunchScheduled = this.submitNativePendingClipLaunch(
       trackId,
       clipId,
+      launch.launchId,
       launch.launchAtBeat,
       clockState
     )
@@ -457,6 +463,7 @@ export class PlaybackService implements Service, DocumentObserver {
         this.submitNativePendingClipLaunch(
           trackId,
           clipId,
+          launch.launchId,
           launch.launchAtBeat,
           clockState
         ) && nativeLaunchesScheduled
@@ -639,8 +646,8 @@ export class PlaybackService implements Service, DocumentObserver {
     for (const launch of launches) {
       const preScheduled = this.nativePreScheduledLaunches.get(launch.trackId)
       const matches =
-        preScheduled?.clipId === launch.clipId &&
-        preScheduled.launchAtBeat === launch.launchAtBeat
+        preScheduled?.launchId === launch.launchId &&
+        preScheduled.clipId === launch.clipId
 
       if (matches) {
         this.nativePreScheduledLaunches.delete(launch.trackId)
@@ -659,9 +666,11 @@ export class PlaybackService implements Service, DocumentObserver {
       const state = event.payload as ClockState
       this.latestClockState = state
       this.runtimeBpm = state.bpm
-      this.liveClips.resetLaunchOrigins(state.beat)
-      this.clearTrackVoicesForAppliedLaunches(this.liveClips.applyDueLaunches(state))
-      this.rebuildModel({ prepareNativeRuntimePlan: false })
+      this.liveClips.activateArmedLaunchesAtTransportStart(state.beat)
+      this.rebuildModel({
+        prepareNativeRuntimePlan: false,
+        submitNativeClipSchedule: false
+      })
       if (this.runtimeController) {
         this.scheduler.start(state.beat)
         void this.prepareAndStartNativeRuntime(state).catch((error) => {
@@ -1005,6 +1014,7 @@ export class PlaybackService implements Service, DocumentObserver {
   private submitNativePendingClipLaunch(
     trackId: string,
     clipId: string,
+    launchId: string,
     launchAtBeat: number,
     state: ClockState
   ): boolean {
@@ -1014,6 +1024,7 @@ export class PlaybackService implements Service, DocumentObserver {
     void this.sendNativePendingClipLaunch(
       trackId,
       clipId,
+      launchId,
       launchAtBeat,
       state
     ).catch((error) => {
@@ -1026,6 +1037,7 @@ export class PlaybackService implements Service, DocumentObserver {
   private async sendNativePendingClipLaunch(
     trackId: string,
     clipId: string,
+    launchId: string,
     launchAtBeat: number,
     state: ClockState
   ): Promise<void> {
@@ -1040,17 +1052,24 @@ export class PlaybackService implements Service, DocumentObserver {
       state.bpm,
       sampleRate
     )
-    const atSample = Math.max(
+    const activationSample = Math.max(
       currentSample + nativeScheduleLeadSamples(sampleRate),
       launchSample
     )
+    const activationBeat =
+      currentBeat +
+      samplesToBeatDelta(
+        activationSample - currentSample,
+        state.bpm,
+        sampleRate
+      )
     const launchModel = this.builder.build(
       this.context.documentStore.document,
       this.runtimeBpm ?? state.bpm,
       {
         activeClipsByTrackId: {
           ...this.liveClips.state.activeClipByTrackId,
-          [trackId]: { trackId, clipId, launchedAtBeat: launchAtBeat }
+          [trackId]: { trackId, clipId, launchedAtBeat: activationBeat }
         }
       }
     )
@@ -1067,14 +1086,20 @@ export class PlaybackService implements Service, DocumentObserver {
       clip,
       this.nativeClipScheduleSubmissions.replace(clip.id),
       {
-        atSample,
-        originBeat: launchAtBeat,
+        atSample: activationSample,
+        originSample: activationSample,
+        originBeat: activationBeat,
         bpm: state.bpm,
         sampleRate
       },
       'clip-launch-schedule'
     )
-    this.nativePreScheduledLaunches.set(trackId, { clipId, launchAtBeat })
+    this.nativePreScheduledLaunches.set(trackId, {
+      launchId,
+      clipId,
+      activationBeat,
+      activationSample
+    })
   }
 
   private async sendNativeClipStop(
@@ -1957,6 +1982,17 @@ function beatDeltaToSamples(
   return Math.max(
     0,
     Math.round((Math.max(0, beatDelta) * 60 * Math.max(1, sampleRate)) / Math.max(1, bpm))
+  )
+}
+
+function samplesToBeatDelta(
+  sampleDelta: number,
+  bpm: number,
+  sampleRate: number
+): number {
+  return (
+    (Math.max(0, sampleDelta) * Math.max(1, bpm)) /
+    (60 * Math.max(1, sampleRate))
   )
 }
 

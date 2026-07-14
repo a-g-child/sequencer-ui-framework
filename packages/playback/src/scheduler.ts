@@ -238,7 +238,7 @@ export class TypeScriptScheduler implements Scheduler {
       })
     }
 
-    if (noteOffBeat >= fromBeat && noteOffBeat < toBeat) {
+    if (noteOffBeat >= fromBeat && noteOffBeat <= toBeat) {
       events.push({
         id: `${note.id}${repeatSuffix}:off`,
         type: 'note:off',

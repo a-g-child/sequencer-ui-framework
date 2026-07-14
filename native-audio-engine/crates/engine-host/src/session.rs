@@ -1199,14 +1199,17 @@ fn scheduler_diagnostics_json(
     diagnostics: engine_protocol::SchedulerDiagnostics,
 ) -> String {
     format!(
-        "{{\"ownerGenerationsSet\":{},\"sampleEventsInserted\":{},\"beatEventsInserted\":{},\"beatEventMinSample\":{},\"beatEventMaxSample\":{},\"eventsDroppedCapacity\":{},\"eventsDroppedNotPlaying\":{},\"eventsDiscardedOwner\":{},\"eventsDiscardedFutureOwner\":{},\"noteOnsDispatched\":{},\"noteOffsDispatched\":{},\"loopReschedules\":{},\"loopRescheduleSkippedDisabled\":{},\"loopRescheduleSkippedOutside\":{},\"eventsCleared\":{},\"transportLoopEnabled\":{},\"transportLoopStartSample\":{},\"transportLoopEndSample\":{}}}",
+        "{{\"ownerGenerationsSet\":{},\"sampleEventsInserted\":{},\"beatEventsInserted\":{},\"beatEventMinSample\":{},\"beatEventMaxSample\":{},\"firstScheduledEventVisitedSample\":{},\"firstScheduledEventDispatchedSample\":{},\"eventsDroppedCapacity\":{},\"eventsDroppedNotPlaying\":{},\"eventsSuppressedWhileStopped\":{},\"eventsDiscardedOwner\":{},\"eventsDiscardedFutureOwner\":{},\"noteOnsDispatched\":{},\"noteOffsDispatched\":{},\"loopReschedules\":{},\"loopRescheduleSkippedDisabled\":{},\"loopRescheduleSkippedOutside\":{},\"eventsCleared\":{},\"transportLoopEnabled\":{},\"transportLoopStartSample\":{},\"transportLoopEndSample\":{}}}",
         diagnostics.owner_generations_set,
         diagnostics.sample_events_inserted,
         diagnostics.beat_events_inserted,
         optional_u64_json(diagnostics.beat_event_min_sample),
         optional_u64_json(diagnostics.beat_event_max_sample),
+        optional_u64_json(diagnostics.first_scheduled_event_visited_sample),
+        optional_u64_json(diagnostics.first_scheduled_event_dispatched_sample),
         diagnostics.events_dropped_capacity,
         diagnostics.events_dropped_not_playing,
+        diagnostics.events_suppressed_while_stopped,
         diagnostics.events_discarded_owner,
         diagnostics.events_discarded_future_owner,
         diagnostics.note_ons_dispatched,

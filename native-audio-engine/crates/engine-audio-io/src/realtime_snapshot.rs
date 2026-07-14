@@ -30,8 +30,11 @@ pub struct RealtimeSnapshotAtomics {
     scheduler_beat_events_inserted: AtomicU64,
     scheduler_beat_event_min_sample: AtomicU64,
     scheduler_beat_event_max_sample: AtomicU64,
+    scheduler_first_scheduled_event_visited_sample: AtomicU64,
+    scheduler_first_scheduled_event_dispatched_sample: AtomicU64,
     scheduler_events_dropped_capacity: AtomicU64,
     scheduler_events_dropped_not_playing: AtomicU64,
+    scheduler_events_suppressed_while_stopped: AtomicU64,
     scheduler_events_discarded_owner: AtomicU64,
     scheduler_events_discarded_future_owner: AtomicU64,
     scheduler_note_ons_dispatched: AtomicU64,
@@ -121,12 +124,32 @@ impl RealtimeSnapshotAtomics {
                 .unwrap_or(u64::MAX),
             Ordering::Relaxed,
         );
+        self.scheduler_first_scheduled_event_visited_sample.store(
+            telemetry
+                .scheduler_diagnostics
+                .first_scheduled_event_visited_sample
+                .unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        self.scheduler_first_scheduled_event_dispatched_sample.store(
+            telemetry
+                .scheduler_diagnostics
+                .first_scheduled_event_dispatched_sample
+                .unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
         self.scheduler_events_dropped_capacity.store(
             telemetry.scheduler_diagnostics.events_dropped_capacity,
             Ordering::Relaxed,
         );
         self.scheduler_events_dropped_not_playing.store(
             telemetry.scheduler_diagnostics.events_dropped_not_playing,
+            Ordering::Relaxed,
+        );
+        self.scheduler_events_suppressed_while_stopped.store(
+            telemetry
+                .scheduler_diagnostics
+                .events_suppressed_while_stopped,
             Ordering::Relaxed,
         );
         self.scheduler_events_discarded_owner.store(
@@ -232,11 +255,29 @@ impl RealtimeSnapshotAtomics {
                     self.scheduler_beat_events_inserted.load(Ordering::Relaxed),
                     self.scheduler_beat_event_max_sample.load(Ordering::Relaxed),
                 ),
+                first_scheduled_event_visited_sample: scheduler_optional_sample(
+                    self.scheduler_beat_events_inserted.load(Ordering::Relaxed),
+                    self.scheduler_first_scheduled_event_visited_sample
+                        .load(Ordering::Relaxed),
+                ),
+                first_scheduled_event_dispatched_sample: scheduler_optional_sample(
+                    self.scheduler_note_ons_dispatched
+                        .load(Ordering::Relaxed)
+                        .saturating_add(
+                            self.scheduler_note_offs_dispatched
+                                .load(Ordering::Relaxed),
+                        ),
+                    self.scheduler_first_scheduled_event_dispatched_sample
+                        .load(Ordering::Relaxed),
+                ),
                 events_dropped_capacity: self
                     .scheduler_events_dropped_capacity
                     .load(Ordering::Relaxed),
                 events_dropped_not_playing: self
                     .scheduler_events_dropped_not_playing
+                    .load(Ordering::Relaxed),
+                events_suppressed_while_stopped: self
+                    .scheduler_events_suppressed_while_stopped
                     .load(Ordering::Relaxed),
                 events_discarded_owner: self
                     .scheduler_events_discarded_owner

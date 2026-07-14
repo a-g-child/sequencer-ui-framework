@@ -135,6 +135,51 @@ describe('NativeClipSchedule', () => {
     )
   })
 
+  it('allows loop-crossing note-offs to complete after the loop end', () => {
+    const model = createFourQuarterNoteFixture()
+    const schedule = compileNativeClipSchedule(
+      freezePlaybackModel({
+        ...model,
+        clips: [
+          {
+            ...model.clips[0],
+            start: 36
+          }
+        ],
+        notes: [
+          {
+            ...model.notes[0],
+            beat: 3.75,
+            duration: 0.5
+          }
+        ]
+      }),
+      {
+        clipId: 'clip-1',
+        generation: 3
+      }
+    )
+
+    assert.deepEqual(
+      schedule.events.map((event) => event.atBeat),
+      [39.75, 40.25]
+    )
+  })
+
+  it('maps clip-local loop phase onto an explicit launch beat', () => {
+    const model = createFourQuarterNoteFixture()
+    const schedule = compileNativeClipSchedule(model, {
+      clipId: 'clip-1',
+      generation: 3,
+      launchAtBeat: 4
+    })
+
+    assert.deepEqual(
+      schedule.events.map((event) => event.atBeat),
+      [4, 4.5, 5, 5.5, 6, 6.5, 7, 7.5]
+    )
+  })
+
   it('turns a clip schedule into generic engine scheduling commands', () => {
     const model = createFourQuarterNoteFixture()
     const schedule = compileNativeClipSchedule(model, {

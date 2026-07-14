@@ -47,8 +47,11 @@ export interface NativeSchedulerDiagnostics {
   readonly beatEventsInserted: number
   readonly beatEventMinSample?: number | null
   readonly beatEventMaxSample?: number | null
+  readonly firstScheduledEventVisitedSample?: number | null
+  readonly firstScheduledEventDispatchedSample?: number | null
   readonly eventsDroppedCapacity: number
   readonly eventsDroppedNotPlaying: number
+  readonly eventsSuppressedWhileStopped: number
   readonly eventsDiscardedOwner: number
   readonly eventsDiscardedFutureOwner: number
   readonly noteOnsDispatched: number
