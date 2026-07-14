@@ -1029,6 +1029,19 @@ impl PreparedExecutionPlan {
         }
     }
 
+    pub fn first_instrument_diagnostics(&self) -> Option<InstrumentDiagnostics> {
+        let node_index = self
+            .node_metadata
+            .iter()
+            .find(|node| node.instrument.is_some())?
+            .runtime_index as usize;
+
+        match self.nodes.get(node_index)? {
+            RuntimeNode::Instrument(node) => Some(node.diagnostics()),
+            _ => None,
+        }
+    }
+
     pub fn apply_state_transfer_from(
         &mut self,
         old_plan: &PreparedExecutionPlan,
@@ -4084,12 +4097,7 @@ mod tests {
         let mut prepared =
             PreparedExecutionPlan::prepare(&instrument_plan_with_voice_count(4), 128).unwrap();
 
-        assert!(prepared.dispatch_event(note_on(
-            UNKNOWN_BRIDGE_SOURCE_NODE,
-            60,
-            0.5,
-            0,
-        )));
+        assert!(prepared.dispatch_event(note_on(UNKNOWN_BRIDGE_SOURCE_NODE, 60, 0.5, 0,)));
         assert_eq!(instrument_diagnostics(&prepared).active_voices, 1);
         assert_eq!(
             prepared.event_graph_diagnostics(),

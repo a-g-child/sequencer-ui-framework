@@ -24,8 +24,11 @@ export interface RuntimeSnapshot {
       readonly beatEventsInserted: number
       readonly beatEventMinSample?: number | null
       readonly beatEventMaxSample?: number | null
+      readonly firstScheduledEventVisitedSample?: number | null
+      readonly firstScheduledEventDispatchedSample?: number | null
       readonly eventsDroppedCapacity: number
       readonly eventsDroppedNotPlaying: number
+      readonly eventsSuppressedWhileStopped: number
       readonly eventsDiscardedOwner: number
       readonly eventsDiscardedFutureOwner: number
       readonly noteOnsDispatched: number
@@ -53,11 +56,37 @@ export interface RuntimeSnapshot {
       readonly futureEventsDiscardedPlanRevision: number
       readonly futureEventsDiscardedGeneration: number
     }
+    readonly recentEventTraces?: readonly RuntimeEventTrace[]
   }
   readonly samplePosition: number
   readonly sampleRate: number
   readonly running: boolean
   readonly native?: unknown
+}
+
+export interface RuntimeEventTrace {
+  readonly traceId: {
+    readonly clipOwnerId: number
+    readonly generation: number
+    readonly noteId: number
+    readonly role: 'note-on' | 'note-off'
+  }
+  readonly receivedBeat: number
+  readonly resolvedSample: number
+  readonly loopIteration: number
+  readonly visitedSample?: number | null
+  readonly dispatchedSample?: number | null
+  readonly dropReason?:
+    | 'stale-generation'
+    | 'stale-plan-revision'
+    | 'transport-stopped'
+    | 'scheduler-capacity'
+    | null
+  readonly noteOnReceivedSample?: number | null
+  readonly noteOffReceivedSample?: number | null
+  readonly voiceAllocatedSample?: number | null
+  readonly voiceReleasedSample?: number | null
+  readonly activeVoiceCount?: number | null
 }
 
 export type PlaybackRuntimeControllerState =

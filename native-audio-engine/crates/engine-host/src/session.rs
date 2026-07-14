@@ -18,10 +18,10 @@ use engine_protocol::{
     diagnostic_tone_plan, event_endpoint, AudioBufferSlot, AudioTelemetry, CommandRejection,
     EngineCommand, EngineEvent, EventInputNodePlan, EventRoute, EventRouteMask, GainNodePlan,
     InstrumentNodePlan, NativeExecutionPlan, OutputNodePlan, ParameterSlot, PlanNode, PlanNodeKind,
-    ScheduledBeatEvent, ScheduledEngineEvent, ScheduledEventLifetime, ScheduledEventOwner,
-    ScheduledEventTraceId, ScheduledEventTraceRole, TempoMapSnapshot, TransportLoop,
-    NATIVE_EXECUTION_PLAN_VERSION, NODE_EVENT_INPUT, NODE_GAIN, NODE_INSTRUMENT, NODE_OUTPUT,
-    PARAM_GAIN_GAIN,
+    RecentEventTrace, ScheduledBeatEvent, ScheduledEngineEvent, ScheduledEventDropReason,
+    ScheduledEventLifetime, ScheduledEventOwner, ScheduledEventTraceId, ScheduledEventTraceRole,
+    TempoMapSnapshot, TransportLoop, NATIVE_EXECUTION_PLAN_VERSION, NODE_EVENT_INPUT, NODE_GAIN,
+    NODE_INSTRUMENT, NODE_OUTPUT, PARAM_GAIN_GAIN,
 };
 
 use crate::DriverKind;
@@ -626,9 +626,10 @@ impl<W: Write> Session<W> {
             let scheduler_diagnostics_json = scheduler_diagnostics_json(scheduler_diagnostics);
             let event_graph_diagnostics_json =
                 event_graph_diagnostics_json(telemetry.event_graph_diagnostics);
+            let recent_event_traces_json = recent_event_traces_json(&telemetry.recent_event_traces);
             write!(
                 self.writer,
-                ",\"transport\":{{\"playing\":{},\"samplePosition\":{},\"beatPosition\":{},\"loopIteration\":0}},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"planMaximumFrames\":{},\"pendingTransfers\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}},\"diagnostics\":{{\"xruns\":{},\"queueOverflows\":{},\"streamErrors\":{},\"callbackFrames\":{},\"maximumCallbackFrames\":{},\"commandQueueDepth\":{},\"pendingCommandCount\":{},\"nextPendingCommandSample\":{},\"commandReceived\":{},\"commandApplied\":{},\"commandLate\":{},\"commandRejected\":{},\"commandOutOfOrder\":{},\"lastCommandRejection\":{},\"scheduler\":{},\"eventGraph\":{}}},\"telemetry\":{{\"samplePosition\":{},\"callbackCount\":{},\"sampleRate\":{},\"callbackFrames\":{},\"maximumCallbackFrames\":{},\"outputChannels\":{},\"commandQueueDepth\":{},\"pendingCommandCount\":{},\"nextPendingCommandSample\":{},\"commandDiagnostics\":{{\"received\":{},\"applied\":{},\"late\":{},\"rejected\":{},\"outOfOrder\":{},\"commandQueueOverflows\":{},\"telemetryQueueOverflows\":{}}},\"schedulerDiagnostics\":{},\"eventGraphDiagnostics\":{},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"planMaximumFrames\":{},\"pendingPlanCount\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}}}}",
+                ",\"transport\":{{\"playing\":{},\"samplePosition\":{},\"beatPosition\":{},\"loopIteration\":0}},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"planMaximumFrames\":{},\"pendingTransfers\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}},\"diagnostics\":{{\"xruns\":{},\"queueOverflows\":{},\"streamErrors\":{},\"callbackFrames\":{},\"maximumCallbackFrames\":{},\"commandQueueDepth\":{},\"pendingCommandCount\":{},\"nextPendingCommandSample\":{},\"commandReceived\":{},\"commandApplied\":{},\"commandLate\":{},\"commandRejected\":{},\"commandOutOfOrder\":{},\"lastCommandRejection\":{},\"scheduler\":{},\"eventGraph\":{},\"recentEventTraces\":{}}},\"telemetry\":{{\"samplePosition\":{},\"callbackCount\":{},\"sampleRate\":{},\"callbackFrames\":{},\"maximumCallbackFrames\":{},\"outputChannels\":{},\"commandQueueDepth\":{},\"pendingCommandCount\":{},\"nextPendingCommandSample\":{},\"commandDiagnostics\":{{\"received\":{},\"applied\":{},\"late\":{},\"rejected\":{},\"outOfOrder\":{},\"commandQueueOverflows\":{},\"telemetryQueueOverflows\":{}}},\"schedulerDiagnostics\":{},\"eventGraphDiagnostics\":{},\"recentEventTraces\":{},\"plan\":{{\"activePlanId\":{},\"activeRevision\":{},\"planMaximumFrames\":{},\"pendingPlanCount\":{},\"successfulSwaps\":{},\"rejectedSwaps\":{}}}}}",
                 self.transport_playing,
                 telemetry.sample_position,
                 beat_position,
@@ -657,6 +658,7 @@ impl<W: Write> Session<W> {
                 last_command_rejection_json(self.last_command_rejection),
                 scheduler_diagnostics_json,
                 event_graph_diagnostics_json,
+                recent_event_traces_json,
                 telemetry.sample_position,
                 telemetry.callback_count,
                 telemetry.sample_rate,
@@ -675,6 +677,7 @@ impl<W: Write> Session<W> {
                 command_diagnostics.telemetry_queue_overflows,
                 scheduler_diagnostics_json,
                 event_graph_diagnostics_json,
+                recent_event_traces_json,
                 optional_u64_json(plan_status.active_plan_id),
                 optional_u64_json(plan_status.active_plan_revision),
                 optional_u32_json(plan_status.active_plan_maximum_frames),
@@ -1241,6 +1244,63 @@ fn event_graph_diagnostics_json(diagnostics: engine_protocol::EventGraphDiagnost
     )
 }
 
+fn recent_event_traces_json(traces: &[Option<RecentEventTrace>]) -> String {
+    let entries = traces
+        .iter()
+        .flatten()
+        .map(recent_event_trace_json)
+        .collect::<Vec<_>>()
+        .join(",");
+
+    format!("[{entries}]")
+}
+
+fn recent_event_trace_json(trace: &RecentEventTrace) -> String {
+    format!(
+        "{{\"traceId\":{{\"clipOwnerId\":{},\"generation\":{},\"noteId\":{},\"role\":\"{}\"}},\"receivedBeat\":{},\"resolvedSample\":{},\"loopIteration\":{},\"visitedSample\":{},\"dispatchedSample\":{},\"dropReason\":{},\"noteOnReceivedSample\":{},\"noteOffReceivedSample\":{},\"voiceAllocatedSample\":{},\"voiceReleasedSample\":{},\"activeVoiceCount\":{}}}",
+        trace.trace_id.clip_owner_id,
+        trace.trace_id.generation,
+        trace.trace_id.note_id,
+        scheduled_event_trace_role_json(trace.trace_id.role),
+        trace.received_beat,
+        trace.resolved_sample,
+        trace.loop_iteration,
+        optional_u64_json(trace.visited_sample),
+        optional_u64_json(trace.dispatched_sample),
+        scheduled_event_drop_reason_json(trace.drop_reason),
+        optional_u64_json(trace.note_on_received_sample),
+        optional_u64_json(trace.note_off_received_sample),
+        optional_u64_json(trace.voice_allocated_sample),
+        optional_u64_json(trace.voice_released_sample),
+        trace
+            .active_voice_count
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "null".to_string()),
+    )
+}
+
+fn scheduled_event_trace_role_json(role: ScheduledEventTraceRole) -> &'static str {
+    match role {
+        ScheduledEventTraceRole::NoteOn => "note-on",
+        ScheduledEventTraceRole::NoteOff => "note-off",
+    }
+}
+
+fn scheduled_event_drop_reason_json(reason: Option<ScheduledEventDropReason>) -> String {
+    let Some(reason) = reason else {
+        return "null".to_string();
+    };
+
+    let reason = match reason {
+        ScheduledEventDropReason::StaleGeneration => "stale-generation",
+        ScheduledEventDropReason::StalePlanRevision => "stale-plan-revision",
+        ScheduledEventDropReason::TransportStopped => "transport-stopped",
+        ScheduledEventDropReason::SchedulerCapacity => "scheduler-capacity",
+    };
+
+    format!("\"{reason}\"")
+}
+
 fn merge_driver_telemetry(
     previous: Option<AudioTelemetry>,
     driver: AudioTelemetry,
@@ -1277,6 +1337,11 @@ fn merge_driver_telemetry(
             previous.event_graph_diagnostics
         } else {
             driver.event_graph_diagnostics
+        },
+        recent_event_traces: if driver.recent_event_traces.iter().all(Option::is_none) {
+            previous.recent_event_traces
+        } else {
+            driver.recent_event_traces
         },
         ..driver
     }

@@ -1,3 +1,7 @@
+use crate::command::ScheduledEventTraceId;
+
+pub const RECENT_EVENT_TRACE_CAPACITY: usize = 32;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AudioTelemetry {
     pub sample_position: u64,
@@ -18,6 +22,7 @@ pub struct AudioTelemetry {
     pub runtime_plan_status: RuntimePlanStatus,
     pub scheduler_diagnostics: SchedulerDiagnostics,
     pub event_graph_diagnostics: EventGraphDiagnostics,
+    pub recent_event_traces: [Option<RecentEventTrace>; RECENT_EVENT_TRACE_CAPACITY],
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -81,4 +86,28 @@ pub struct EventGraphDiagnostics {
     pub future_events_dropped_scheduler_full: u64,
     pub future_events_discarded_plan_revision: u64,
     pub future_events_discarded_generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RecentEventTrace {
+    pub trace_id: ScheduledEventTraceId,
+    pub received_beat: f64,
+    pub resolved_sample: u64,
+    pub loop_iteration: u64,
+    pub visited_sample: Option<u64>,
+    pub dispatched_sample: Option<u64>,
+    pub drop_reason: Option<ScheduledEventDropReason>,
+    pub note_on_received_sample: Option<u64>,
+    pub note_off_received_sample: Option<u64>,
+    pub voice_allocated_sample: Option<u64>,
+    pub voice_released_sample: Option<u64>,
+    pub active_voice_count: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScheduledEventDropReason {
+    StaleGeneration,
+    StalePlanRevision,
+    TransportStopped,
+    SchedulerCapacity,
 }

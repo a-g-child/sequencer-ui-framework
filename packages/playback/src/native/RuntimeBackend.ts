@@ -320,7 +320,10 @@ export class NativeBackend implements RuntimeBackend {
           snapshot.telemetry?.schedulerDiagnostics,
         eventGraph:
           snapshot.diagnostics?.eventGraph ??
-          snapshot.telemetry?.eventGraphDiagnostics
+          snapshot.telemetry?.eventGraphDiagnostics,
+        recentEventTraces:
+          snapshot.diagnostics?.recentEventTraces ??
+          snapshot.telemetry?.recentEventTraces
       },
       samplePosition:
         snapshot.transport?.samplePosition ?? snapshot.telemetry?.samplePosition ?? 0,

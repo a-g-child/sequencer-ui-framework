@@ -9,10 +9,11 @@
 - [x] Add a trace identity to every compiled clip note event.
 - [x] Carry trace identity through TypeScript native schedule compilation and socket JSON.
 - [x] Carry trace identity through host decoding into Rust engine commands.
-- [ ] Record scheduler trace fields: received beat, tempo revision, resolved sample, loop iteration, visited sample, dispatched sample, drop reason.
-- [ ] Record instrument trace fields: note-on/off received sample, voice allocation/release, active voice count.
-- [ ] Expose a bounded recent-event trace in runtime snapshots.
-- [ ] Add explicit scheduled-event drop reasons.
+- [x] Record scheduler trace fields: received beat, resolved sample, loop iteration, visited sample, dispatched sample, drop reason.
+- [ ] Add tempo revision to scheduler trace records once tempo revisions exist.
+- [x] Record instrument trace fields: note-on/off received sample, voice allocation/release, active voice count.
+- [x] Expose a bounded recent-event trace in runtime snapshots.
+- [x] Add explicit scheduled-event drop reasons.
 
 ## Phase 2: Prove The Production Startup Batch
 - [ ] Add an integration test for an already-running audio stream with stopped transport and armed clip.

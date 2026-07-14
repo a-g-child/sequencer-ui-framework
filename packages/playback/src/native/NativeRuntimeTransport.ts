@@ -81,6 +81,31 @@ export interface NativeEventGraphDiagnostics {
   readonly futureEventsDiscardedGeneration: number
 }
 
+export interface NativeRuntimeEventTrace {
+  readonly traceId: {
+    readonly clipOwnerId: number
+    readonly generation: number
+    readonly noteId: number
+    readonly role: 'note-on' | 'note-off'
+  }
+  readonly receivedBeat: number
+  readonly resolvedSample: number
+  readonly loopIteration: number
+  readonly visitedSample?: number | null
+  readonly dispatchedSample?: number | null
+  readonly dropReason?:
+    | 'stale-generation'
+    | 'stale-plan-revision'
+    | 'transport-stopped'
+    | 'scheduler-capacity'
+    | null
+  readonly noteOnReceivedSample?: number | null
+  readonly noteOffReceivedSample?: number | null
+  readonly voiceAllocatedSample?: number | null
+  readonly voiceReleasedSample?: number | null
+  readonly activeVoiceCount?: number | null
+}
+
 export interface NativeEngineSnapshot {
   readonly stream: {
     readonly deviceId: string
@@ -121,6 +146,7 @@ export interface NativeEngineSnapshot {
     } | null
     readonly scheduler?: NativeSchedulerDiagnostics
     readonly eventGraph?: NativeEventGraphDiagnostics
+    readonly recentEventTraces?: readonly NativeRuntimeEventTrace[]
   }
   readonly telemetry: {
     readonly samplePosition: number
@@ -143,6 +169,7 @@ export interface NativeEngineSnapshot {
     }
     readonly schedulerDiagnostics?: NativeSchedulerDiagnostics
     readonly eventGraphDiagnostics?: NativeEventGraphDiagnostics
+    readonly recentEventTraces?: readonly NativeRuntimeEventTrace[]
     readonly plan?: {
       readonly activePlanId: number | null
       readonly activeRevision: number | null

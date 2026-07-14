@@ -4,8 +4,9 @@ use engine_dsp::{DiagnosticOscillator, PARAM_DIAGNOSTIC_FREQUENCY, PARAM_DIAGNOS
 use engine_protocol::{
     AudioTelemetry, CommandDiagnostics, CommandRejection, EngineCommand, EngineEvent,
     EventEndpoint, FutureEventLifetime, FutureEventOwner, FutureEventRequest, NativeExecutionPlan,
-    RuntimePlanStatus, ScheduledBeatEvent, ScheduledEngineEvent, ScheduledEventLifetime,
-    ScheduledEventOwner, SchedulerDiagnostics, TempoMapSnapshot, TransportLoop,
+    RecentEventTrace, RuntimePlanStatus, ScheduledBeatEvent, ScheduledEngineEvent,
+    ScheduledEventDropReason, ScheduledEventLifetime, ScheduledEventOwner, ScheduledEventTraceId,
+    SchedulerDiagnostics, TempoMapSnapshot, TransportLoop, RECENT_EVENT_TRACE_CAPACITY,
 };
 
 use crate::{
@@ -97,6 +98,7 @@ struct ScheduledEventEntry {
     beat_event: Option<ScheduledBeatEvent>,
     owner: Option<ScheduledEventOwner>,
     future_owner: Option<FutureEventOwner>,
+    trace_id: Option<ScheduledEventTraceId>,
 }
 
 impl ScheduledEventEntry {
@@ -131,6 +133,7 @@ impl ScheduledEventSet {
         event: ScheduledEngineEvent,
         beat_event: Option<ScheduledBeatEvent>,
         owner: Option<ScheduledEventOwner>,
+        trace_id: Option<ScheduledEventTraceId>,
     ) -> Result<(), ScheduledEngineEvent> {
         let entry = ScheduledEventEntry {
             source: event_endpoint_for_event(event),
@@ -140,6 +143,7 @@ impl ScheduledEventSet {
             beat_event,
             owner,
             future_owner: None,
+            trace_id,
         };
 
         if let Some(slot) = self.entries.iter_mut().find(|slot| slot.is_none()) {
@@ -159,6 +163,7 @@ impl ScheduledEventSet {
             beat_event: None,
             owner: None,
             future_owner: Some(request.owner),
+            trace_id: None,
         };
 
         if let Some(slot) = self.entries.iter_mut().find(|slot| slot.is_none()) {
@@ -450,6 +455,8 @@ pub struct AudioEngine {
     transport_loop: TransportLoop,
     scheduled_events: ScheduledEventSet,
     scheduled_event_owners: ScheduledEventOwnerSet,
+    recent_event_traces: [Option<RecentEventTrace>; RECENT_EVENT_TRACE_CAPACITY],
+    scheduler_trace_cursor: usize,
     execution_plan: Option<PreparedExecutionPlan>,
     crossfade: Option<ActivePlanCrossfade>,
     deferred_retirements: DeferredRetirements,
@@ -495,6 +502,8 @@ impl AudioEngine {
             },
             scheduled_events: ScheduledEventSet::default(),
             scheduled_event_owners: ScheduledEventOwnerSet::default(),
+            recent_event_traces: [None; RECENT_EVENT_TRACE_CAPACITY],
+            scheduler_trace_cursor: 0,
             execution_plan: None,
             crossfade: None,
             deferred_retirements: DeferredRetirements::default(),
@@ -651,6 +660,7 @@ impl AudioEngine {
             runtime_plan_status: self.runtime_plan_status(),
             scheduler_diagnostics: self.current_scheduler_diagnostics(),
             event_graph_diagnostics: self.current_event_graph_diagnostics(),
+            recent_event_traces: self.recent_event_traces,
         }
     }
 
@@ -1293,8 +1303,10 @@ impl AudioEngine {
         self.scheduler_diagnostics
             .first_scheduled_event_visited_sample
             .get_or_insert(entry.effective_sample());
+        self.record_scheduler_trace_visit(entry);
 
         if !self.scheduled_event_owner_is_active(entry.owner) {
+            self.record_scheduler_trace_drop(entry, ScheduledEventDropReason::StaleGeneration);
             return false;
         }
 
@@ -1303,6 +1315,7 @@ impl AudioEngine {
                 .scheduler_diagnostics
                 .events_discarded_future_owner
                 .saturating_add(1);
+            self.record_scheduler_trace_drop(entry, ScheduledEventDropReason::StalePlanRevision);
             return false;
         }
 
@@ -1324,8 +1337,15 @@ impl AudioEngine {
         self.scheduler_diagnostics
             .first_scheduled_event_dispatched_sample
             .get_or_insert(entry.effective_sample());
+        self.record_scheduler_trace_dispatch(entry);
+        let active_voice_count_before = self.instrument_active_voice_count_for_event(entry.event);
 
         if self.dispatch_event_to_execution_plan(entry.source, entry.event) {
+            self.record_instrument_trace(
+                entry,
+                active_voice_count_before,
+                self.instrument_active_voice_count_for_event(entry.event),
+            );
             return true;
         }
 
@@ -1338,8 +1358,186 @@ impl AudioEngine {
             }
             ScheduledEngineEvent::ArpeggiatorTick { .. } => {}
         }
+        self.record_instrument_trace(
+            entry,
+            active_voice_count_before,
+            self.instrument_active_voice_count_for_event(entry.event),
+        );
 
         true
+    }
+
+    fn record_scheduler_trace_for_command(
+        &mut self,
+        trace_id: Option<ScheduledEventTraceId>,
+        event: ScheduledBeatEvent,
+        resolved_sample: Option<u64>,
+        drop_reason: Option<ScheduledEventDropReason>,
+    ) {
+        let Some(trace_id) = trace_id else {
+            return;
+        };
+        let resolved_sample =
+            resolved_sample.unwrap_or_else(|| event.to_sample_event(self.tempo_map).at_sample());
+        let record = RecentEventTrace {
+            trace_id,
+            received_beat: event.at_beat(),
+            resolved_sample,
+            loop_iteration: 0,
+            visited_sample: None,
+            dispatched_sample: None,
+            drop_reason,
+            note_on_received_sample: None,
+            note_off_received_sample: None,
+            voice_allocated_sample: None,
+            voice_released_sample: None,
+            active_voice_count: None,
+        };
+
+        self.recent_event_traces[self.scheduler_trace_cursor] = Some(record);
+        self.scheduler_trace_cursor =
+            (self.scheduler_trace_cursor + 1) % RECENT_EVENT_TRACE_CAPACITY;
+    }
+
+    fn record_scheduler_trace_for_entry(&mut self, entry: &ScheduledEventEntry) {
+        let Some(trace_id) = entry.trace_id else {
+            return;
+        };
+        let received_beat = entry
+            .beat_event
+            .map(|event| event.at_beat())
+            .unwrap_or_else(|| self.tempo_map.sample_to_beat(entry.original_sample));
+        let record = RecentEventTrace {
+            trace_id,
+            received_beat,
+            resolved_sample: entry.effective_sample(),
+            loop_iteration: entry.loop_iteration,
+            visited_sample: None,
+            dispatched_sample: None,
+            drop_reason: None,
+            note_on_received_sample: None,
+            note_off_received_sample: None,
+            voice_allocated_sample: None,
+            voice_released_sample: None,
+            active_voice_count: None,
+        };
+
+        self.recent_event_traces[self.scheduler_trace_cursor] = Some(record);
+        self.scheduler_trace_cursor =
+            (self.scheduler_trace_cursor + 1) % RECENT_EVENT_TRACE_CAPACITY;
+    }
+
+    fn update_scheduler_trace(
+        &mut self,
+        entry: &ScheduledEventEntry,
+        update: impl FnOnce(&mut RecentEventTrace),
+    ) {
+        let Some(trace_id) = entry.trace_id else {
+            return;
+        };
+        let Some(record) = self
+            .recent_event_traces
+            .iter_mut()
+            .flatten()
+            .rev()
+            .find(|record| {
+                record.trace_id == trace_id
+                    && record.resolved_sample == entry.effective_sample()
+                    && record.loop_iteration == entry.loop_iteration
+            })
+        else {
+            return;
+        };
+
+        update(record);
+    }
+
+    fn record_scheduler_trace_visit(&mut self, entry: &ScheduledEventEntry) {
+        self.update_scheduler_trace(entry, |record| {
+            record
+                .visited_sample
+                .get_or_insert(entry.effective_sample());
+        });
+    }
+
+    fn record_scheduler_trace_dispatch(&mut self, entry: &ScheduledEventEntry) {
+        self.update_scheduler_trace(entry, |record| {
+            record
+                .dispatched_sample
+                .get_or_insert(entry.effective_sample());
+        });
+    }
+
+    fn record_scheduler_trace_drop(
+        &mut self,
+        entry: &ScheduledEventEntry,
+        reason: ScheduledEventDropReason,
+    ) {
+        self.update_scheduler_trace(entry, |record| {
+            record.drop_reason.get_or_insert(reason);
+        });
+    }
+
+    fn record_instrument_trace(
+        &mut self,
+        entry: &ScheduledEventEntry,
+        active_voice_count_before: Option<u32>,
+        active_voice_count_after: Option<u32>,
+    ) {
+        self.update_scheduler_trace(entry, |record| {
+            match entry.event {
+                ScheduledEngineEvent::NoteOn { .. } => {
+                    record
+                        .note_on_received_sample
+                        .get_or_insert(entry.effective_sample());
+                    if active_voice_count_after.is_some() {
+                        record
+                            .voice_allocated_sample
+                            .get_or_insert(entry.effective_sample());
+                    }
+                }
+                ScheduledEngineEvent::NoteOff { .. } => {
+                    record
+                        .note_off_received_sample
+                        .get_or_insert(entry.effective_sample());
+                    if active_voice_count_after.is_some()
+                        && active_voice_count_after <= active_voice_count_before
+                    {
+                        record
+                            .voice_released_sample
+                            .get_or_insert(entry.effective_sample());
+                    }
+                }
+                ScheduledEngineEvent::ArpeggiatorTick { .. } => {}
+            }
+
+            record.active_voice_count = active_voice_count_after;
+        });
+    }
+
+    fn instrument_active_voice_count_for_event(&self, event: ScheduledEngineEvent) -> Option<u32> {
+        let target_node = match event {
+            ScheduledEngineEvent::NoteOn { target_node, .. }
+            | ScheduledEngineEvent::NoteOff { target_node, .. } => target_node,
+            ScheduledEngineEvent::ArpeggiatorTick { .. } => return None,
+        };
+
+        self.execution_plan
+            .as_ref()
+            .and_then(|plan| {
+                plan.instrument_diagnostics(target_node)
+                    .or_else(|| plan.first_instrument_diagnostics())
+            })
+            .or_else(|| {
+                self.crossfade
+                    .as_ref()
+                    .and_then(|crossfade| crossfade.new_plan.as_ref())
+                    .and_then(|plan| {
+                        plan.instrument_diagnostics(target_node)
+                            .or_else(|| plan.first_instrument_diagnostics())
+                    })
+            })
+            .map(|diagnostics| diagnostics.active_voices)
     }
 
     fn scheduled_event_owner_is_active(&mut self, owner: Option<ScheduledEventOwner>) -> bool {
@@ -1563,6 +1761,7 @@ impl AudioEngine {
         entry.loop_iteration = next_iteration;
         entry.event = set_scheduled_event_sample(entry.event, next_sample);
         if self.scheduled_events.insert_entry(entry).is_ok() {
+            self.record_scheduler_trace_for_entry(&entry);
             self.scheduler_diagnostics.loop_reschedules = self
                 .scheduler_diagnostics
                 .loop_reschedules
@@ -1740,7 +1939,11 @@ impl AudioEngine {
                     return;
                 }
 
-                if self.scheduled_events.insert(event, None, None).is_err() {
+                if self
+                    .scheduled_events
+                    .insert(event, None, None, None)
+                    .is_err()
+                {
                     self.scheduler_diagnostics.events_dropped_capacity = self
                         .scheduler_diagnostics
                         .events_dropped_capacity
@@ -1753,12 +1956,23 @@ impl AudioEngine {
                     .sample_events_inserted
                     .saturating_add(1);
             }
-            EngineCommand::ScheduleBeatEvent { event, owner, .. } => {
+            EngineCommand::ScheduleBeatEvent {
+                event,
+                owner,
+                trace_id,
+                ..
+            } => {
                 if !self.playing && owner.is_none() {
                     self.scheduler_diagnostics.events_dropped_not_playing = self
                         .scheduler_diagnostics
                         .events_dropped_not_playing
                         .saturating_add(1);
+                    self.record_scheduler_trace_for_command(
+                        trace_id,
+                        event,
+                        None,
+                        Some(ScheduledEventDropReason::TransportStopped),
+                    );
                     return;
                 }
 
@@ -1767,7 +1981,7 @@ impl AudioEngine {
 
                 if self
                     .scheduled_events
-                    .insert(sample_event, Some(event), owner)
+                    .insert(sample_event, Some(event), owner, trace_id)
                     .is_err()
                 {
                     self.scheduler_diagnostics.events_dropped_capacity = self
@@ -1775,8 +1989,15 @@ impl AudioEngine {
                         .events_dropped_capacity
                         .saturating_add(1);
                     self.reject_command(command.id(), CommandRejection::SchedulerFull);
+                    self.record_scheduler_trace_for_command(
+                        trace_id,
+                        event,
+                        Some(sample),
+                        Some(ScheduledEventDropReason::SchedulerCapacity),
+                    );
                     return;
                 }
+                self.record_scheduler_trace_for_command(trace_id, event, Some(sample), None);
                 self.scheduler_diagnostics.beat_events_inserted = self
                     .scheduler_diagnostics
                     .beat_events_inserted
@@ -1965,10 +2186,10 @@ mod tests {
         ArpeggiatorNodePlan, AudioBufferSlot, EventDelayNodePlan, EventEndpoint,
         EventInputNodePlan, EventRoute, EventRouteMask, InstrumentNodePlan, OutputNodePlan,
         PlanNode, PlanNodeKind, ScaleNodePlan, ScheduledBeatEvent, ScheduledEngineEvent,
-        ScheduledEventOwner, TempoMapSnapshot, TransportLoop, VelocityNodePlan, VoiceNodePlan,
-        ARPEGGIATOR_PORT_NOTES, ARPEGGIATOR_PORT_TICK, ARPEGGIATOR_PORT_TICK_INPUT,
-        EVENT_DELAY_PORT_DELAYED, NODE_ARPEGGIATOR, NODE_EVENT_DELAY, NODE_EVENT_INPUT,
-        NODE_INSTRUMENT, NODE_OUTPUT, NODE_VOICE, PARAM_GAIN_GAIN,
+        ScheduledEventOwner, ScheduledEventTraceRole, TempoMapSnapshot, TransportLoop,
+        VelocityNodePlan, VoiceNodePlan, ARPEGGIATOR_PORT_NOTES, ARPEGGIATOR_PORT_TICK,
+        ARPEGGIATOR_PORT_TICK_INPUT, EVENT_DELAY_PORT_DELAYED, NODE_ARPEGGIATOR, NODE_EVENT_DELAY,
+        NODE_EVENT_INPUT, NODE_INSTRUMENT, NODE_OUTPUT, NODE_VOICE, PARAM_GAIN_GAIN,
     };
 
     fn plan_with_identity(
@@ -2649,7 +2870,8 @@ mod tests {
         let (command_sender, command_receiver) = crate::engine_command_queue();
         let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
         let mut engine = AudioEngine::new()
-            .with_scheduled_test_voice()
+            .with_execution_plan(&instrument_plan_with_identity(1, 1, 4), 512)
+            .unwrap()
             .with_realtime_queues(command_receiver, telemetry_sender);
         let tempo = TempoMapSnapshot {
             origin_sample: 12_000,
@@ -2798,6 +3020,124 @@ mod tests {
                 .events_suppressed_while_stopped,
             0
         );
+    }
+
+    #[test]
+    fn traced_beat_event_records_scheduler_lifecycle_samples() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine = AudioEngine::new()
+            .with_scheduled_test_voice()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+        let trace_id = ScheduledEventTraceId {
+            clip_owner_id: 101,
+            generation: 2,
+            note_id: 1001,
+            role: ScheduledEventTraceRole::NoteOn,
+        };
+
+        command_sender
+            .push(EngineCommand::SetTempoMap {
+                id: 1,
+                tempo: TempoMapSnapshot {
+                    origin_sample: 4_096,
+                    origin_beat: 0.0,
+                    bpm: 120.0,
+                    sample_rate: 48_000.0,
+                },
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 2,
+                at_sample: 4_096,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::ScheduleBeatEvent {
+                id: 3,
+                event: ScheduledBeatEvent::NoteOn {
+                    target_node: NODE_EVENT_INPUT,
+                    note: 69,
+                    velocity: 1.0,
+                    at_beat: 0.25,
+                },
+                owner: Some(ScheduledEventOwner::generation_bound(101, 2)),
+                trace_id: Some(trace_id),
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetScheduledEventOwnerGeneration {
+                id: 4,
+                owner_id: 101,
+                generation: 2,
+                at_sample: 0,
+            })
+            .unwrap();
+
+        process_frames(&mut engine, 10_097);
+
+        let trace = engine
+            .recent_event_traces
+            .iter()
+            .flatten()
+            .find(|record| record.trace_id == trace_id)
+            .expect("trace record should be present");
+
+        assert_eq!(trace.received_beat, 0.25);
+        assert_eq!(trace.resolved_sample, 10_096);
+        assert_eq!(trace.loop_iteration, 0);
+        assert_eq!(trace.visited_sample, Some(10_096));
+        assert_eq!(trace.dispatched_sample, Some(10_096));
+        assert_eq!(trace.drop_reason, None);
+        assert_eq!(trace.note_on_received_sample, Some(10_096));
+    }
+
+    #[test]
+    fn instrument_trace_records_voice_lifecycle_fields() {
+        let mut engine = AudioEngine::new();
+        let trace_id = ScheduledEventTraceId {
+            clip_owner_id: 101,
+            generation: 2,
+            note_id: 1001,
+            role: ScheduledEventTraceRole::NoteOn,
+        };
+        let entry = ScheduledEventEntry {
+            source: event_endpoint(NODE_EVENT_INPUT),
+            event: ScheduledEngineEvent::NoteOn {
+                target_node: NODE_EVENT_INPUT,
+                note: 69,
+                velocity: 1.0,
+                at_sample: 10_096,
+            },
+            original_sample: 10_096,
+            loop_iteration: 0,
+            beat_event: Some(ScheduledBeatEvent::NoteOn {
+                target_node: NODE_EVENT_INPUT,
+                note: 69,
+                velocity: 1.0,
+                at_beat: 0.25,
+            }),
+            owner: Some(ScheduledEventOwner::generation_bound(101, 2)),
+            future_owner: None,
+            trace_id: Some(trace_id),
+        };
+
+        engine.record_scheduler_trace_for_entry(&entry);
+        engine.record_instrument_trace(&entry, Some(0), Some(1));
+
+        let trace = engine
+            .recent_event_traces
+            .iter()
+            .flatten()
+            .find(|record| record.trace_id == trace_id)
+            .expect("trace record should be present");
+
+        assert_eq!(trace.note_on_received_sample, Some(10_096));
+        assert_eq!(trace.voice_allocated_sample, Some(10_096));
+        assert_eq!(trace.active_voice_count, Some(1));
     }
 
     #[test]
@@ -4052,6 +4392,7 @@ mod tests {
                     },
                     None,
                     None,
+                    None,
                 )
                 .unwrap();
         }
@@ -5053,8 +5394,12 @@ mod tests {
     fn due_scheduled_events_order_note_off_before_note_on_at_same_sample() {
         let mut events = ScheduledEventSet::default();
 
-        events.insert(scheduled_note_on(96), None, None).unwrap();
-        events.insert(scheduled_note_off(96), None, None).unwrap();
+        events
+            .insert(scheduled_note_on(96), None, None, None)
+            .unwrap();
+        events
+            .insert(scheduled_note_off(96), None, None, None)
+            .unwrap();
 
         assert!(matches!(
             events.take_due_before(96).map(|entry| entry.event),
@@ -5078,11 +5423,11 @@ mod tests {
         };
         engine
             .scheduled_events
-            .insert(scheduled_note_on(64), None, None)
+            .insert(scheduled_note_on(64), None, None, None)
             .unwrap();
         engine
             .scheduled_events
-            .insert(scheduled_note_off(96), None, None)
+            .insert(scheduled_note_off(96), None, None, None)
             .unwrap();
 
         engine.apply_scheduled_events_until(64);
@@ -5103,7 +5448,7 @@ mod tests {
         };
         engine
             .scheduled_events
-            .insert(scheduled_note_on(128), None, None)
+            .insert(scheduled_note_on(128), None, None, None)
             .unwrap();
 
         engine.apply_scheduled_events_until(128);
