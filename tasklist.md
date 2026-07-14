@@ -32,7 +32,7 @@
 - [x] Formalise device clock and transport timeline structures.
 - [x] Freeze transport beat while stopped.
 - [x] Anchor transport beat explicitly on start.
-- [ ] Audit raw sample-to-beat conversions against the transport timeline.
+- [x] Audit raw sample-to-beat conversions against the transport timeline.
 - [x] Ensure runtime snapshots report transport timeline beat.
 
 ## Phase 5: Atomic Clip Schedule Activation

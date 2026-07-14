@@ -384,6 +384,10 @@ fn event_endpoint_for_event(event: ScheduledEngineEvent) -> EventEndpoint {
     }
 }
 
+fn trace_beat_for_sample_event(tempo_map: TempoMapSnapshot, sample: u64) -> f64 {
+    tempo_map.sample_to_beat(sample)
+}
+
 fn normalize_sample_to_loop_window(sample: u64, loop_start: u64, loop_length: u64) -> u64 {
     if loop_length == 0 {
         return loop_start;
@@ -1406,7 +1410,7 @@ impl AudioEngine {
         let received_beat = entry
             .beat_event
             .map(|event| event.at_beat())
-            .unwrap_or_else(|| self.tempo_map.sample_to_beat(entry.original_sample));
+            .unwrap_or_else(|| trace_beat_for_sample_event(self.tempo_map, entry.original_sample));
         let record = RecentEventTrace {
             trace_id,
             received_beat,

@@ -142,6 +142,20 @@ pub struct RuntimeEventContext {
     pub transport_loop: TransportLoop,
 }
 
+impl RuntimeEventContext {
+    fn transport_beat(self) -> f64 {
+        self.transport_beat_at_sample(self.sample_position)
+    }
+
+    fn transport_beat_at_sample(self, sample_position: u64) -> f64 {
+        transport_beat_at_sample(self.tempo_map, sample_position)
+    }
+}
+
+fn transport_beat_at_sample(tempo_map: TempoMapSnapshot, sample_position: u64) -> f64 {
+    tempo_map.sample_to_beat(sample_position)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InstrumentDiagnostics {
     pub active_voices: u32,
@@ -1796,7 +1810,7 @@ impl ArpeggiatorNode {
 
                 let at_sample = context.sample_position;
                 let emitted = if let Some(note) = self.next_note(context) {
-                    let tick_beat = context.tempo_map.sample_to_beat(at_sample);
+                    let tick_beat = context.transport_beat_at_sample(at_sample);
                     let note_off_sample = context
                         .tempo_map
                         .beat_to_sample(tick_beat + self.step_beats * self.gate_ratio as f64);
@@ -1895,7 +1909,7 @@ impl ArpeggiatorNode {
     }
 
     fn restart_sequence(&mut self, context: RuntimeEventContext) {
-        self.origin_beat = context.tempo_map.sample_to_beat(context.sample_position);
+        self.origin_beat = context.transport_beat();
         self.sequence_index = 1;
     }
 
@@ -2016,8 +2030,8 @@ impl ArpeggiatorNode {
             .start_sample
             .saturating_add(loop_length_samples.saturating_mul(loop_iteration));
         let loop_end_sample = loop_start_sample.saturating_add(loop_length_samples);
-        let loop_start_beat = tempo_map.sample_to_beat(loop_start_sample);
-        let loop_end_beat = tempo_map.sample_to_beat(loop_end_sample);
+        let loop_start_beat = transport_beat_at_sample(tempo_map, loop_start_sample);
+        let loop_end_beat = transport_beat_at_sample(tempo_map, loop_end_sample);
         let loop_length_beats = loop_end_beat - loop_start_beat;
 
         if !loop_length_beats.is_finite() || loop_length_beats <= 0.0 {
@@ -2027,7 +2041,7 @@ impl ArpeggiatorNode {
         let relative_beat = if at_loop_boundary {
             loop_length_beats
         } else {
-            (tempo_map.sample_to_beat(sample_position) - loop_start_beat).max(0.0)
+            (transport_beat_at_sample(tempo_map, sample_position) - loop_start_beat).max(0.0)
         };
         let ratio = relative_beat / self.step_beats;
         let step_index = if ratio.fract().abs() < f64::EPSILON {
@@ -2267,15 +2281,15 @@ impl ArpeggiatorNode {
             .start_sample
             .saturating_add(loop_length_samples.saturating_mul(loop_iteration));
         let loop_end_sample = loop_start_sample.saturating_add(loop_length_samples);
-        let loop_start_beat = tempo_map.sample_to_beat(loop_start_sample);
-        let loop_end_beat = tempo_map.sample_to_beat(loop_end_sample);
+        let loop_start_beat = transport_beat_at_sample(tempo_map, loop_start_sample);
+        let loop_end_beat = transport_beat_at_sample(tempo_map, loop_end_sample);
         let loop_length_beats = loop_end_beat - loop_start_beat;
 
         if !loop_length_beats.is_finite() || loop_length_beats <= 0.0 {
             return self.next_tick_sample_free_running(tempo_map);
         }
 
-        let current_beat = tempo_map.sample_to_beat(current_sample);
+        let current_beat = transport_beat_at_sample(tempo_map, current_sample);
         let relative_beat = (current_beat - loop_start_beat).max(0.0);
         let next_step_index = (relative_beat / self.step_beats).floor() as u64 + 1;
         let next_relative_beat = next_step_index as f64 * self.step_beats;
