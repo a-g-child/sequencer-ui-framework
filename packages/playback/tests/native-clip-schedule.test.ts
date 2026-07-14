@@ -24,7 +24,7 @@ describe('NativeClipSchedule', () => {
 
     assert.equal(schedule.clipId, 'clip-1')
     assert.equal(schedule.generation, 3)
-    assert.deepEqual(schedule.events, [
+    assert.deepEqual(schedule.events.map(stripTraceId), [
       {
         kind: 'note-on',
         targetNode: NATIVE_EVENT_INPUT_NODE_ID,
@@ -78,6 +78,19 @@ describe('NativeClipSchedule', () => {
         atBeat: 3.5
       }
     ])
+    assert.deepEqual(
+      schedule.events.map((event) => event.traceId),
+      [
+        { clipOwnerId: 1543066351, generation: 3, noteId: 1648169833, role: 'note-on' },
+        { clipOwnerId: 1543066351, generation: 3, noteId: 1648169833, role: 'note-off' },
+        { clipOwnerId: 1543066351, generation: 3, noteId: 1648169834, role: 'note-on' },
+        { clipOwnerId: 1543066351, generation: 3, noteId: 1648169834, role: 'note-off' },
+        { clipOwnerId: 1543066351, generation: 3, noteId: 1648169835, role: 'note-on' },
+        { clipOwnerId: 1543066351, generation: 3, noteId: 1648169835, role: 'note-off' },
+        { clipOwnerId: 1543066351, generation: 3, noteId: 1648169836, role: 'note-on' },
+        { clipOwnerId: 1543066351, generation: 3, noteId: 1648169836, role: 'note-off' }
+      ]
+    )
   })
 
   it('canonicalizes stale note beats into the active clip loop window', () => {
@@ -481,4 +494,12 @@ function createFourQuarterNoteFixture(): PlaybackModel {
     })),
     automations: []
   })
+}
+
+function stripTraceId<T extends { readonly traceId?: unknown }>(
+  event: T
+): Omit<T, 'traceId'> {
+  const { traceId: _traceId, ...rest } = event
+
+  return rest
 }

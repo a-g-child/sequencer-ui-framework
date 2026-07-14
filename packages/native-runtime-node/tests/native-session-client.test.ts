@@ -102,7 +102,13 @@ describe('NativeSessionClient', () => {
           targetNode: 5,
           note: 60,
           velocity: 0.75,
-          atBeat: 1
+          atBeat: 1,
+          traceId: {
+            clipOwnerId: 101,
+            generation: 1,
+            noteId: 1001,
+            role: 'note-on'
+          }
         }
       })
 
@@ -117,7 +123,13 @@ describe('NativeSessionClient', () => {
           kind: 'note-off',
           targetNode: 5,
           note: 60,
-          atBeat: 1.5
+          atBeat: 1.5,
+          traceId: {
+            clipOwnerId: 101,
+            generation: 1,
+            noteId: 1001,
+            role: 'note-off'
+          }
         }
       })
 
@@ -134,13 +146,25 @@ describe('NativeSessionClient', () => {
             targetNode: 5,
             note: 62,
             velocity: 0.8,
-            atBeat: 2
+            atBeat: 2,
+            traceId: {
+              clipOwnerId: 101,
+              generation: 2,
+              noteId: 1002,
+              role: 'note-on'
+            }
           },
           {
             kind: 'note-off',
             targetNode: 5,
             note: 62,
-            atBeat: 2.5
+            atBeat: 2.5,
+            traceId: {
+              clipOwnerId: 101,
+              generation: 2,
+              noteId: 1002,
+              role: 'note-off'
+            }
           }
         ]
       })

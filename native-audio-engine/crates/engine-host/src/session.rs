@@ -19,8 +19,9 @@ use engine_protocol::{
     EngineCommand, EngineEvent, EventInputNodePlan, EventRoute, EventRouteMask, GainNodePlan,
     InstrumentNodePlan, NativeExecutionPlan, OutputNodePlan, ParameterSlot, PlanNode, PlanNodeKind,
     ScheduledBeatEvent, ScheduledEngineEvent, ScheduledEventLifetime, ScheduledEventOwner,
-    TempoMapSnapshot, TransportLoop, NATIVE_EXECUTION_PLAN_VERSION, NODE_EVENT_INPUT, NODE_GAIN,
-    NODE_INSTRUMENT, NODE_OUTPUT, PARAM_GAIN_GAIN,
+    ScheduledEventTraceId, ScheduledEventTraceRole, TempoMapSnapshot, TransportLoop,
+    NATIVE_EXECUTION_PLAN_VERSION, NODE_EVENT_INPUT, NODE_GAIN, NODE_INSTRUMENT, NODE_OUTPUT,
+    PARAM_GAIN_GAIN,
 };
 
 use crate::DriverKind;
@@ -622,8 +623,7 @@ impl<W: Write> Session<W> {
             };
             let command_diagnostics = telemetry.command_diagnostics;
             let scheduler_diagnostics = telemetry.scheduler_diagnostics;
-            let scheduler_diagnostics_json =
-                scheduler_diagnostics_json(scheduler_diagnostics);
+            let scheduler_diagnostics_json = scheduler_diagnostics_json(scheduler_diagnostics);
             let event_graph_diagnostics_json =
                 event_graph_diagnostics_json(telemetry.event_graph_diagnostics);
             write!(
@@ -1195,9 +1195,7 @@ fn last_command_rejection_json(value: Option<(u64, CommandRejection)>) -> String
         .unwrap_or_else(|| "null".to_string())
 }
 
-fn scheduler_diagnostics_json(
-    diagnostics: engine_protocol::SchedulerDiagnostics,
-) -> String {
+fn scheduler_diagnostics_json(diagnostics: engine_protocol::SchedulerDiagnostics) -> String {
     format!(
         "{{\"ownerGenerationsSet\":{},\"sampleEventsInserted\":{},\"beatEventsInserted\":{},\"beatEventMinSample\":{},\"beatEventMaxSample\":{},\"firstScheduledEventVisitedSample\":{},\"firstScheduledEventDispatchedSample\":{},\"eventsDroppedCapacity\":{},\"eventsDroppedNotPlaying\":{},\"eventsSuppressedWhileStopped\":{},\"eventsDiscardedOwner\":{},\"eventsDiscardedFutureOwner\":{},\"noteOnsDispatched\":{},\"noteOffsDispatched\":{},\"loopReschedules\":{},\"loopRescheduleSkippedDisabled\":{},\"loopRescheduleSkippedOutside\":{},\"eventsCleared\":{},\"transportLoopEnabled\":{},\"transportLoopStartSample\":{},\"transportLoopEndSample\":{}}}",
         diagnostics.owner_generations_set,
@@ -1224,9 +1222,7 @@ fn scheduler_diagnostics_json(
     )
 }
 
-fn event_graph_diagnostics_json(
-    diagnostics: engine_protocol::EventGraphDiagnostics,
-) -> String {
+fn event_graph_diagnostics_json(diagnostics: engine_protocol::EventGraphDiagnostics) -> String {
     format!(
         "{{\"eventsReceived\":{},\"routeDispatches\":{},\"eventsEmitted\":{},\"eventsSuppressed\":{},\"eventsDroppedCapacity\":{},\"eventsDroppedDepth\":{},\"eventsDroppedBudget\":{},\"futureEventsRequested\":{},\"futureEventsRejectedLate\":{},\"futureEventsDroppedCapacity\":{},\"futureEventsDroppedSchedulerFull\":{},\"futureEventsDiscardedPlanRevision\":{},\"futureEventsDiscardedGeneration\":{}}}",
         diagnostics.events_received,
@@ -1475,12 +1471,13 @@ fn parse_session_engine_commands(
             }
         }
         Some("event:schedule-beat") => {
-            let event = parse_scheduled_beat_event(&command_json)?;
+            let (event, trace_id) = parse_scheduled_beat_event(&command_json)?;
 
             EngineCommand::ScheduleBeatEvent {
                 id: first_command_id,
                 event,
                 owner: None,
+                trace_id,
                 at_sample,
             }
         }
@@ -1504,38 +1501,15 @@ fn parse_session_engine_commands(
     Ok(vec![command])
 }
 
-fn parse_scheduled_beat_event(command_json: &str) -> Result<ScheduledBeatEvent, SessionError> {
+fn parse_scheduled_beat_event(
+    command_json: &str,
+) -> Result<(ScheduledBeatEvent, Option<ScheduledEventTraceId>), SessionError> {
     let event_json = extract_json_value(command_json, "event")
         .ok_or_else(|| SessionError::new("command.event is required"))?;
-    let fields = parse_flat_json_object(&event_json);
-    let field = |name: &str| {
-        fields
-            .iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.as_str())
-    };
-
-    let target_node = parse_required_u32(field("targetNode"), "command.event.targetNode")?;
-    let note = parse_required_u8(field("note"), "command.event.note")?;
-    let at_beat = parse_required_f64(field("atBeat"), "command.event.atBeat")?;
-
-    match field("kind") {
-        Some("note-on") => Ok(ScheduledBeatEvent::NoteOn {
-            target_node,
-            note,
-            velocity: parse_required_f32(field("velocity"), "command.event.velocity")?,
-            at_beat,
-        }),
-        Some("note-off") => Ok(ScheduledBeatEvent::NoteOff {
-            target_node,
-            note,
-            at_beat,
-        }),
-        Some(kind) => Err(SessionError::new(format!(
-            "unsupported scheduled beat event kind: {kind}"
-        ))),
-        None => Err(SessionError::new("command.event.kind is required")),
-    }
+    Ok((
+        parse_scheduled_beat_event_object(&event_json)?,
+        parse_scheduled_event_trace_id(&event_json)?,
+    ))
 }
 
 fn parse_scheduled_sample_event(command_json: &str) -> Result<ScheduledEngineEvent, SessionError> {
@@ -1595,6 +1569,7 @@ fn parse_scheduled_beat_event_batch(
             id: first_command_id.saturating_add(index as u64 + 1),
             event,
             owner: Some(owner),
+            trace_id: parse_scheduled_event_trace_id(event_json)?,
             at_sample,
         });
     }
@@ -1620,6 +1595,41 @@ fn parse_scheduled_event_owner_lifetime(
             "unsupported scheduled event owner lifetime: {lifetime}"
         ))),
     }
+}
+
+fn parse_scheduled_event_trace_id(
+    event_json: &str,
+) -> Result<Option<ScheduledEventTraceId>, SessionError> {
+    let Some(trace_json) = extract_json_value(event_json, "traceId") else {
+        return Ok(None);
+    };
+    let fields = parse_flat_json_object(&trace_json);
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+    let role = match field("role") {
+        Some("note-on") => ScheduledEventTraceRole::NoteOn,
+        Some("note-off") => ScheduledEventTraceRole::NoteOff,
+        Some(role) => {
+            return Err(SessionError::new(format!(
+                "unsupported scheduled event trace role: {role}"
+            )))
+        }
+        None => return Err(SessionError::new("command.event.traceId.role is required")),
+    };
+
+    Ok(Some(ScheduledEventTraceId {
+        clip_owner_id: parse_required_u64(
+            field("clipOwnerId"),
+            "command.event.traceId.clipOwnerId",
+        )?,
+        generation: parse_required_u64(field("generation"), "command.event.traceId.generation")?,
+        note_id: parse_required_u64(field("noteId"), "command.event.traceId.noteId")?,
+        role,
+    }))
 }
 
 fn parse_scheduled_beat_event_object(event_json: &str) -> Result<ScheduledBeatEvent, SessionError> {
@@ -2311,7 +2321,7 @@ mod tests {
     #[test]
     fn batch_note_off_owner_lifetime_defaults_to_generation_bound() {
         let commands = parse_scheduled_beat_event_batch(
-            "{\"type\":\"event:schedule-beat-batch\",\"clipId\":\"clip-1\",\"generation\":2,\"atSample\":0,\"events\":[{\"kind\":\"note-off\",\"targetNode\":5,\"note\":62,\"atBeat\":2.5},{\"kind\":\"note-off\",\"targetNode\":5,\"note\":64,\"atBeat\":3.5,\"ownerLifetime\":\"completion-required\"}]}",
+            "{\"type\":\"event:schedule-beat-batch\",\"clipId\":\"clip-1\",\"generation\":2,\"atSample\":0,\"events\":[{\"kind\":\"note-off\",\"targetNode\":5,\"note\":62,\"atBeat\":2.5,\"traceId\":{\"clipOwnerId\":101,\"generation\":2,\"noteId\":1001,\"role\":\"note-off\"}},{\"kind\":\"note-off\",\"targetNode\":5,\"note\":64,\"atBeat\":3.5,\"ownerLifetime\":\"completion-required\",\"traceId\":{\"clipOwnerId\":101,\"generation\":2,\"noteId\":1002,\"role\":\"note-off\"}}]}",
             10,
             0,
         )
@@ -2328,11 +2338,35 @@ mod tests {
             }
         ));
         assert!(matches!(
+            commands[1],
+            EngineCommand::ScheduleBeatEvent {
+                trace_id: Some(ScheduledEventTraceId {
+                    clip_owner_id: 101,
+                    generation: 2,
+                    note_id: 1001,
+                    role: ScheduledEventTraceRole::NoteOff,
+                }),
+                ..
+            }
+        ));
+        assert!(matches!(
             commands[2],
             EngineCommand::ScheduleBeatEvent {
                 owner: Some(ScheduledEventOwner {
                     lifetime: ScheduledEventLifetime::CompletionRequired,
                     ..
+                }),
+                ..
+            }
+        ));
+        assert!(matches!(
+            commands[2],
+            EngineCommand::ScheduleBeatEvent {
+                trace_id: Some(ScheduledEventTraceId {
+                    clip_owner_id: 101,
+                    generation: 2,
+                    note_id: 1002,
+                    role: ScheduledEventTraceRole::NoteOff,
                 }),
                 ..
             }

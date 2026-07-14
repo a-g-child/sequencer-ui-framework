@@ -103,6 +103,20 @@ pub enum ScheduledBeatEvent {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScheduledEventTraceId {
+    pub clip_owner_id: u64,
+    pub generation: u64,
+    pub note_id: u64,
+    pub role: ScheduledEventTraceRole,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScheduledEventTraceRole {
+    NoteOn,
+    NoteOff,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScheduledEventOwner {
     pub owner_id: u64,
     pub generation: u64,
@@ -211,6 +225,7 @@ pub enum EngineCommand {
         id: u64,
         event: ScheduledBeatEvent,
         owner: Option<ScheduledEventOwner>,
+        trace_id: Option<ScheduledEventTraceId>,
         at_sample: u64,
     },
     SwapExecutionPlan {

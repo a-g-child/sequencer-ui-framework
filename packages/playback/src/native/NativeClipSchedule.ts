@@ -1,6 +1,7 @@
 import type { PlaybackClip, PlaybackModel, PlaybackNote } from '../model.ts'
 import type { PlaybackEvent } from '../events.ts'
 import type {
+  NativeNoteTraceId,
   NativeScheduledBeatEvent,
   ScheduleSampleEventCommand,
   ScheduleBeatEventBatchCommand,
@@ -159,7 +160,7 @@ export function compileNativeClipSchedule(
   const events = model.notes
     .filter((note) => note.clipId === options.clipId)
     .flatMap((note) =>
-      noteToNativeBeatEvents(note, targetNode, timing, clip, options.launchAtBeat)
+      noteToNativeBeatEvents(note, targetNode, timing, clip, options)
     )
     .sort(compareNativeBeatEvents)
 
@@ -178,7 +179,7 @@ export function compileNativePlaybackEventSchedule(
   const nativeEvents = events
     .flatMap((event) =>
       targetNodes.flatMap((targetNode) =>
-        playbackEventToNativeBeatEvents(event, targetNode)
+        playbackEventToNativeBeatEvents(event, targetNode, options)
       )
     )
     .sort(compareNativeBeatEvents)
@@ -343,7 +344,7 @@ function noteToNativeBeatEvents(
   targetNode: number,
   timing: ClipTimingSettings,
   clip: PlaybackClip | undefined,
-  launchAtBeat: number | undefined
+  options: NativeClipScheduleOptions
 ): NativeScheduledBeatEvent[] {
   const pitch = clampMidiNote(note.pitch)
   const [noteOnBeat, noteOffBeat] = canonicalClipNoteBeats(
@@ -351,8 +352,13 @@ function noteToNativeBeatEvents(
     applyClipTiming(note.beat + Math.max(0, note.duration), timing),
     clip
   )
-  const scheduledNoteOnBeat = launchClipBeat(noteOnBeat, clip, launchAtBeat)
-  const scheduledNoteOffBeat = launchClipBeat(noteOffBeat, clip, launchAtBeat)
+  const scheduledNoteOnBeat = launchClipBeat(noteOnBeat, clip, options.launchAtBeat)
+  const scheduledNoteOffBeat = launchClipBeat(noteOffBeat, clip, options.launchAtBeat)
+  const traceBase = nativeNoteTraceBase(
+    options.clipId,
+    note.id,
+    options.generation
+  )
 
   return [
     {
@@ -360,21 +366,36 @@ function noteToNativeBeatEvents(
       targetNode,
       note: pitch,
       velocity: normalizeVelocity(note.velocity),
-      atBeat: scheduledNoteOnBeat
+      atBeat: scheduledNoteOnBeat,
+      traceId: {
+        ...traceBase,
+        role: 'note-on'
+      }
     },
     {
       kind: 'note-off',
       targetNode,
       note: pitch,
-      atBeat: scheduledNoteOffBeat
+      atBeat: scheduledNoteOffBeat,
+      traceId: {
+        ...traceBase,
+        role: 'note-off'
+      }
     }
   ]
 }
 
 function playbackEventToNativeBeatEvents(
   event: PlaybackEvent,
-  targetNode: number
+  targetNode: number,
+  options: NativeClipScheduleOptions
 ): NativeScheduledBeatEvent[] {
+  const traceBase = nativeNoteTraceBase(
+    options.clipId,
+    'noteId' in event ? event.noteId : event.id,
+    options.generation
+  )
+
   if (event.type === 'note:on') {
     return [
       {
@@ -382,7 +403,11 @@ function playbackEventToNativeBeatEvents(
         targetNode,
         note: clampMidiNote(event.pitch),
         velocity: normalizeVelocity(event.velocity),
-        atBeat: event.beat
+        atBeat: event.beat,
+        traceId: {
+          ...traceBase,
+          role: 'note-on'
+        }
       }
     ]
   }
@@ -394,12 +419,28 @@ function playbackEventToNativeBeatEvents(
         targetNode,
         note: clampMidiNote(event.pitch),
         atBeat: event.beat,
-        ownerLifetime: 'completion-required'
+        ownerLifetime: 'completion-required',
+        traceId: {
+          ...traceBase,
+          role: 'note-off'
+        }
       }
     ]
   }
 
   return []
+}
+
+function nativeNoteTraceBase(
+  clipId: string,
+  noteId: string,
+  generation = 0
+): Omit<NativeNoteTraceId, 'role'> {
+  return {
+    clipOwnerId: stableNumericId(clipId),
+    generation,
+    noteId: stableNumericId(noteId)
+  }
 }
 
 function canonicalClipNoteBeats(
@@ -493,6 +534,16 @@ function noteIsActiveAtBeat(
 
 function positiveModulo(value: number, modulus: number): number {
   return ((value % modulus) + modulus) % modulus
+}
+
+function stableNumericId(value: string): number {
+  let hash = 5381
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 33) ^ value.charCodeAt(index)
+  }
+
+  return (hash >>> 0) || 1
 }
 
 function beatToSample(

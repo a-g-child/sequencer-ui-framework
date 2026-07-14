@@ -148,6 +148,7 @@ export interface NativeScheduledBeatNoteOnEvent {
   readonly velocity: number
   readonly atBeat: number
   readonly ownerLifetime?: ScheduledEventOwnerLifetime
+  readonly traceId?: NativeNoteTraceId
 }
 
 export interface NativeScheduledBeatNoteOffEvent {
@@ -156,11 +157,19 @@ export interface NativeScheduledBeatNoteOffEvent {
   readonly note: number
   readonly atBeat: number
   readonly ownerLifetime?: ScheduledEventOwnerLifetime
+  readonly traceId?: NativeNoteTraceId
 }
 
 export type ScheduledEventOwnerLifetime =
   | 'generation-bound'
   | 'completion-required'
+
+export interface NativeNoteTraceId {
+  readonly clipOwnerId: number
+  readonly generation: number
+  readonly noteId: number
+  readonly role: 'note-on' | 'note-off'
+}
 
 export interface NativeScheduledSampleNoteOnEvent {
   readonly kind: 'note-on'

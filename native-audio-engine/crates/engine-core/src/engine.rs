@@ -415,9 +415,7 @@ fn command_order_priority(command: EngineCommand) -> u8 {
         EngineCommand::SetTempoMap { .. } => 0,
         EngineCommand::SetTransportLoop { .. } => 1,
         EngineCommand::SetScheduledEventOwnerGeneration { .. } => 2,
-        EngineCommand::ScheduleBeatEvent {
-            owner: Some(_), ..
-        } => 3,
+        EngineCommand::ScheduleBeatEvent { owner: Some(_), .. } => 3,
         EngineCommand::TransportStart { .. } => 4,
         EngineCommand::ScheduleEvent { .. }
         | EngineCommand::ScheduleBeatEvent { owner: None, .. } => 5,
@@ -2670,6 +2668,7 @@ mod tests {
                     at_beat: 0.25,
                 },
                 owner: Some(ScheduledEventOwner::generation_bound(42, 1)),
+                trace_id: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -2711,7 +2710,9 @@ mod tests {
             Some(18_000)
         );
         assert_eq!(
-            engine.current_scheduler_diagnostics().events_dropped_not_playing,
+            engine
+                .current_scheduler_diagnostics()
+                .events_dropped_not_playing,
             0
         );
     }
@@ -2741,6 +2742,7 @@ mod tests {
                     at_beat: 0.0,
                 },
                 owner: Some(ScheduledEventOwner::generation_bound(42, 1)),
+                trace_id: None,
                 at_sample: start_sample,
             })
             .unwrap();
@@ -2770,7 +2772,10 @@ mod tests {
 
         assert!(engine.is_playing());
         assert!(engine.scheduled_test_voice.active);
-        assert_eq!(engine.current_scheduler_diagnostics().note_ons_dispatched, 1);
+        assert_eq!(
+            engine.current_scheduler_diagnostics().note_ons_dispatched,
+            1
+        );
         assert_eq!(
             engine.current_scheduler_diagnostics().beat_event_min_sample,
             Some(start_sample)
@@ -2823,6 +2828,7 @@ mod tests {
                     at_beat: 0.0,
                 },
                 owner: Some(ScheduledEventOwner::generation_bound(42, 1)),
+                trace_id: None,
                 at_sample: start_sample,
             })
             .unwrap();
@@ -2889,6 +2895,7 @@ mod tests {
                     at_beat: 0.0,
                 },
                 owner: Some(ScheduledEventOwner::generation_bound(42, 1)),
+                trace_id: None,
                 at_sample: start_sample,
             })
             .unwrap();
@@ -2964,6 +2971,7 @@ mod tests {
                     at_beat: 1.0,
                 },
                 owner: Some(ScheduledEventOwner::generation_bound(42, 1)),
+                trace_id: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -3019,6 +3027,7 @@ mod tests {
                     at_beat: 0.0,
                 },
                 owner: Some(ScheduledEventOwner::generation_bound(42, 1)),
+                trace_id: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -3031,6 +3040,7 @@ mod tests {
                     at_beat: 1.0,
                 },
                 owner: Some(ScheduledEventOwner::completion_required(42, 1)),
+                trace_id: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -3094,6 +3104,7 @@ mod tests {
                     at_beat: 0.004,
                 },
                 owner: None,
+                trace_id: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -3107,6 +3118,7 @@ mod tests {
                     at_beat: 1.0,
                 },
                 owner: None,
+                trace_id: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -4620,6 +4632,7 @@ mod tests {
                     at_beat: 1.0,
                 },
                 owner: None,
+                trace_id: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -4632,6 +4645,7 @@ mod tests {
                     at_beat: 1.5,
                 },
                 owner: None,
+                trace_id: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -4760,6 +4774,7 @@ mod tests {
                     at_beat: 2.0,
                 },
                 owner: Some(ScheduledEventOwner::generation_bound(42, 1)),
+                trace_id: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -4772,6 +4787,7 @@ mod tests {
                     at_beat: 2.5,
                 },
                 owner: Some(ScheduledEventOwner::completion_required(42, 1)),
+                trace_id: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -4843,6 +4859,7 @@ mod tests {
                     at_beat: 2.0,
                 },
                 owner: Some(ScheduledEventOwner::generation_bound(42, 1)),
+                trace_id: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -4855,6 +4872,7 @@ mod tests {
                     at_beat: 2.5,
                 },
                 owner: Some(ScheduledEventOwner::completion_required(42, 1)),
+                trace_id: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -4916,6 +4934,7 @@ mod tests {
                     at_beat: 2.0,
                 },
                 owner: None,
+                trace_id: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -4928,6 +4947,7 @@ mod tests {
                     at_beat: 3.0,
                 },
                 owner: None,
+                trace_id: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -4993,6 +5013,7 @@ mod tests {
                     at_beat: 3.75,
                 },
                 owner: Some(ScheduledEventOwner::generation_bound(42, 1)),
+                trace_id: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -5005,6 +5026,7 @@ mod tests {
                     at_beat: 4.0,
                 },
                 owner: Some(ScheduledEventOwner::completion_required(42, 1)),
+                trace_id: None,
                 at_sample: 0,
             })
             .unwrap();
@@ -5016,7 +5038,10 @@ mod tests {
         assert!(frame_is_silent(&output, 187));
         assert!(frame_has_signal(&output, 189));
         assert!(frame_is_silent(&output, 192));
-        assert_eq!(engine.current_scheduler_diagnostics().note_ons_dispatched, 2);
+        assert_eq!(
+            engine.current_scheduler_diagnostics().note_ons_dispatched,
+            2
+        );
         assert_eq!(
             engine.current_scheduler_diagnostics().note_offs_dispatched,
             2
@@ -5084,14 +5109,23 @@ mod tests {
         engine.apply_scheduled_events_until(128);
 
         assert!(engine.scheduled_test_voice.active);
-        assert_eq!(engine.scheduler_diagnostics.loop_reschedule_skipped_outside, 0);
+        assert_eq!(
+            engine.scheduler_diagnostics.loop_reschedule_skipped_outside,
+            0
+        );
         assert_eq!(engine.scheduler_diagnostics.loop_reschedules, 1);
         assert!(matches!(
-            engine.scheduled_events.take_due_before(159).map(|entry| entry.event),
+            engine
+                .scheduled_events
+                .take_due_before(159)
+                .map(|entry| entry.event),
             None
         ));
         assert!(matches!(
-            engine.scheduled_events.take_due_before(160).map(|entry| entry.event),
+            engine
+                .scheduled_events
+                .take_due_before(160)
+                .map(|entry| entry.event),
             Some(ScheduledEngineEvent::NoteOn { at_sample: 160, .. })
         ));
     }
@@ -5369,6 +5403,7 @@ mod tests {
                     at_beat: 0.0,
                 },
                 owner: Some(ScheduledEventOwner::generation_bound(7, 1)),
+                trace_id: None,
                 at_sample: 128,
             })
             .unwrap();
