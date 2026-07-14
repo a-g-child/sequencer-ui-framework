@@ -415,13 +415,13 @@ fn next_loop_iteration_after(loop_origin: u64, current_sample: u64, loop_length:
         .saturating_add(1)
 }
 
-fn command_order_priority(command: EngineCommand) -> u8 {
+fn command_order_priority(command: &EngineCommand) -> u8 {
     match command {
         EngineCommand::SetTempoMap { .. } => 0,
         EngineCommand::SetTransportLoop { .. } => 1,
         EngineCommand::SetScheduledEventOwnerGeneration { .. } => 2,
         EngineCommand::ScheduleBeatEvent { owner: Some(_), .. } => 3,
-        EngineCommand::TransportStart { .. } => 4,
+        EngineCommand::PreparedTransportStart { .. } | EngineCommand::TransportStart { .. } => 4,
         EngineCommand::ScheduleEvent { .. }
         | EngineCommand::ScheduleBeatEvent { owner: None, .. } => 5,
         EngineCommand::TransportStop { .. } | EngineCommand::Panic { .. } => 6,
@@ -787,7 +787,7 @@ impl AudioEngine {
         self.block_commands.clear();
 
         for index in 0..self.processing_commands.len() {
-            let command = self.processing_commands[index];
+            let command = self.processing_commands[index].clone();
 
             match command {
                 EngineCommand::SwapExecutionPlan {
@@ -899,7 +899,7 @@ impl AudioEngine {
         self.block_commands.clear();
 
         for index in 0..self.processing_commands.len() {
-            let command = self.processing_commands[index];
+            let command = self.processing_commands[index].clone();
             let applied_sample = command.at_sample().max(block_start);
 
             if applied_sample <= block_start {
@@ -1257,7 +1257,7 @@ impl AudioEngine {
         sample_position: u64,
     ) -> usize {
         while command_index < self.processing_commands.len() {
-            let command = self.processing_commands[command_index];
+            let command = self.processing_commands[command_index].clone();
             let applied_sample = command.at_sample().max(block_start);
 
             if applied_sample > sample_position {
@@ -1776,7 +1776,7 @@ impl AudioEngine {
 
     fn retain_future_commands(&mut self, command_index: usize, block_end: u64) {
         for index in command_index..self.processing_commands.len() {
-            let command = self.processing_commands[index];
+            let command = self.processing_commands[index].clone();
 
             if command.at_sample() >= block_end {
                 self.push_pending_command_sorted(command);
@@ -1788,7 +1788,7 @@ impl AudioEngine {
 
     fn retain_all_processing_commands(&mut self) {
         for index in 0..self.processing_commands.len() {
-            self.push_pending_command_sorted(self.processing_commands[index]);
+            self.push_pending_command_sorted(self.processing_commands[index].clone());
         }
 
         self.processing_commands.clear();
@@ -1797,7 +1797,7 @@ impl AudioEngine {
     fn push_pending_command_sorted(&mut self, command: EngineCommand) {
         let command_key = (
             command.at_sample(),
-            command_order_priority(command),
+            command_order_priority(&command),
             command.id(),
         );
         let insert_index = self
@@ -1806,7 +1806,7 @@ impl AudioEngine {
             .position(|pending| {
                 (
                     pending.at_sample(),
-                    command_order_priority(*pending),
+                    command_order_priority(pending),
                     pending.id(),
                 ) > command_key
             })
@@ -1838,6 +1838,8 @@ impl AudioEngine {
     }
 
     fn apply_command(&mut self, command: EngineCommand, applied_sample: u64, late_by_samples: u64) {
+        let command_id = command.id();
+
         match command {
             EngineCommand::TransportStart { .. } => {
                 self.playing = true;
@@ -1891,7 +1893,7 @@ impl AudioEngine {
                 ..
             } => {
                 if !self.set_parameter(parameter_id, value, ramp_samples) {
-                    self.reject_command(command.id(), CommandRejection::UnknownParameter);
+                    self.reject_command(command_id, CommandRejection::UnknownParameter);
                     return;
                 }
 
@@ -1922,13 +1924,49 @@ impl AudioEngine {
                     .scheduled_event_owners
                     .set_generation(owner_id, generation)
                 {
-                    self.reject_command(command.id(), CommandRejection::SchedulerFull);
+                    self.reject_command(command_id, CommandRejection::SchedulerFull);
                     return;
                 }
                 self.scheduler_diagnostics.owner_generations_set = self
                     .scheduler_diagnostics
                     .owner_generations_set
                     .saturating_add(1);
+            }
+            EngineCommand::PreparedTransportStart {
+                tempo,
+                transport_loop,
+                owner_id,
+                generation,
+                events,
+                ..
+            } => {
+                self.tempo_map = tempo;
+                self.transport_loop = transport_loop;
+                if !self
+                    .scheduled_event_owners
+                    .set_generation(owner_id, generation)
+                {
+                    self.reject_command(command_id, CommandRejection::SchedulerFull);
+                    return;
+                }
+                self.scheduler_diagnostics.owner_generations_set = self
+                    .scheduler_diagnostics
+                    .owner_generations_set
+                    .saturating_add(1);
+
+                for event in events.iter() {
+                    if !self.insert_prepared_transport_start_event(event) {
+                        self.reject_command(command_id, CommandRejection::SchedulerFull);
+                        return;
+                    }
+                }
+
+                self.playing = true;
+                self.diagnostic_signal.panic_muted = false;
+                self.publish_event(EngineEvent::TransportStateChanged {
+                    playing: true,
+                    at_sample: applied_sample,
+                });
             }
             EngineCommand::ScheduleEvent { event, .. } => {
                 if !self.playing {
@@ -1948,7 +1986,7 @@ impl AudioEngine {
                         .scheduler_diagnostics
                         .events_dropped_capacity
                         .saturating_add(1);
-                    self.reject_command(command.id(), CommandRejection::SchedulerFull);
+                    self.reject_command(command_id, CommandRejection::SchedulerFull);
                     return;
                 }
                 self.scheduler_diagnostics.sample_events_inserted = self
@@ -1988,7 +2026,7 @@ impl AudioEngine {
                         .scheduler_diagnostics
                         .events_dropped_capacity
                         .saturating_add(1);
-                    self.reject_command(command.id(), CommandRejection::SchedulerFull);
+                    self.reject_command(command_id, CommandRejection::SchedulerFull);
                     self.record_scheduler_trace_for_command(
                         trace_id,
                         event,
@@ -2021,10 +2059,64 @@ impl AudioEngine {
 
         self.command_diagnostics.applied = self.command_diagnostics.applied.saturating_add(1);
         self.publish_event(EngineEvent::CommandApplied {
-            command_id: command.id(),
+            command_id,
             applied_sample,
             late_by_samples,
         });
+    }
+
+    fn insert_prepared_transport_start_event(
+        &mut self,
+        prepared: &engine_protocol::PreparedTransportStartEvent,
+    ) -> bool {
+        let sample_event = prepared.event.to_sample_event(self.tempo_map);
+        let sample = sample_event.at_sample();
+
+        if self
+            .scheduled_events
+            .insert(
+                sample_event,
+                Some(prepared.event),
+                Some(prepared.owner),
+                prepared.trace_id,
+            )
+            .is_err()
+        {
+            self.scheduler_diagnostics.events_dropped_capacity = self
+                .scheduler_diagnostics
+                .events_dropped_capacity
+                .saturating_add(1);
+            self.record_scheduler_trace_for_command(
+                prepared.trace_id,
+                prepared.event,
+                Some(sample),
+                Some(ScheduledEventDropReason::SchedulerCapacity),
+            );
+            return false;
+        }
+
+        self.record_scheduler_trace_for_command(
+            prepared.trace_id,
+            prepared.event,
+            Some(sample),
+            None,
+        );
+        self.scheduler_diagnostics.beat_events_inserted = self
+            .scheduler_diagnostics
+            .beat_events_inserted
+            .saturating_add(1);
+        self.scheduler_diagnostics.beat_event_min_sample = Some(
+            self.scheduler_diagnostics
+                .beat_event_min_sample
+                .map_or(sample, |current| current.min(sample)),
+        );
+        self.scheduler_diagnostics.beat_event_max_sample = Some(
+            self.scheduler_diagnostics
+                .beat_event_max_sample
+                .map_or(sample, |current| current.max(sample)),
+        );
+
+        true
     }
 
     fn set_parameter(&mut self, parameter_id: u32, value: f32, ramp_samples: u32) -> bool {
@@ -2940,7 +3032,7 @@ mod tests {
     }
 
     #[test]
-    fn same_sample_start_dispatches_beat_zero_event_after_schedule_activation() {
+    fn prepared_transport_start_dispatches_beat_zero_event_after_activation() {
         let (command_sender, command_receiver) = crate::engine_command_queue();
         let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
         let mut engine = AudioEngine::new()
@@ -2955,38 +3047,23 @@ mod tests {
         };
 
         command_sender
-            .push(EngineCommand::ScheduleBeatEvent {
+            .push(EngineCommand::PreparedTransportStart {
                 id: 1,
-                event: ScheduledBeatEvent::NoteOn {
-                    target_node: 1,
-                    note: 69,
-                    velocity: 1.0,
-                    at_beat: 0.0,
-                },
-                owner: Some(ScheduledEventOwner::generation_bound(42, 1)),
-                trace_id: None,
                 at_sample: start_sample,
-            })
-            .unwrap();
-        command_sender
-            .push(EngineCommand::TransportStart {
-                id: 2,
-                at_sample: start_sample,
-            })
-            .unwrap();
-        command_sender
-            .push(EngineCommand::SetScheduledEventOwnerGeneration {
-                id: 3,
+                tempo,
+                transport_loop: TransportLoop::default(),
                 owner_id: 42,
                 generation: 1,
-                at_sample: start_sample,
-            })
-            .unwrap();
-        command_sender
-            .push(EngineCommand::SetTempoMap {
-                id: 4,
-                tempo,
-                at_sample: start_sample,
+                events: Box::new([engine_protocol::PreparedTransportStartEvent {
+                    event: ScheduledBeatEvent::NoteOn {
+                        target_node: 1,
+                        note: 69,
+                        velocity: 1.0,
+                        at_beat: 0.0,
+                    },
+                    owner: ScheduledEventOwner::generation_bound(42, 1),
+                    trace_id: None,
+                }]),
             })
             .unwrap();
 

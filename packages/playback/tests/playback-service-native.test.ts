@@ -49,13 +49,7 @@ describe('PlaybackService native startup', () => {
     assert.equal(backend.activateCalls, 1)
     assert.deepEqual(
       backend.commands.map((command) => command.type),
-      [
-        'event-owner:generation:set',
-        'tempo-map:set',
-        'transport-loop:set',
-        'event:schedule-beat-batch',
-        'transport:start'
-      ]
+      ['transport:start-prepared']
     )
     assert.equal(controller.status.snapshot?.transport.playing, true)
   })
@@ -79,25 +73,13 @@ describe('PlaybackService native startup', () => {
 
     assert.deepEqual(
       backend.commands.map((command) => command.type),
-      [
-        'event-owner:generation:set',
-        'tempo-map:set',
-        'transport-loop:set',
-        'event:schedule-beat-batch',
-        'transport:start'
-      ]
+      ['transport:start-prepared']
     )
 
-    const batch = backend.commands.find(
-      (command) => command.type === 'event:schedule-beat-batch'
-    ) as { events?: readonly unknown[]; atSample?: number } | undefined
-    const start = backend.commands.find(
-      (command) => command.type === 'transport:start'
-    ) as { atSample?: number } | undefined
+    const batch = preparedStartCommand(backend.commands)
 
     assert.ok((batch?.events?.length ?? 0) > 0)
-    assert.equal(batch?.atSample, start?.atSample)
-    assert.equal(start?.atSample, 12_000)
+    assert.equal(batch.atSample, 12_000)
 
     const firstNoteOn = batch?.events?.find(
       (event) => (event as { kind?: string }).kind === 'note-on'
@@ -123,12 +105,10 @@ describe('PlaybackService native startup', () => {
       timeMs: 0
     })
 
-    const batch = backend.commands.find(
-      (command) => command.type === 'event:schedule-beat-batch'
-    ) as { events?: readonly { kind?: string; atBeat?: number }[] } | undefined
+    const batch = preparedStartCommand(backend.commands)
 
     assert.deepEqual(
-      [...new Set(batch?.events
+      [...new Set(batch.events
         ?.filter((event) => event.kind === 'note-on')
         .map((event) => event.atBeat))],
       [128 / 24_000, 0.25, 0.5, 0.75]
@@ -167,22 +147,14 @@ describe('PlaybackService native startup', () => {
       timeMs: 0
     })
 
-    const batch = backend.commands.find(
-      (command) => command.type === 'event:schedule-beat-batch'
-    ) as {
-      events?: readonly {
-        kind?: string
-        atBeat?: number
-        ownerLifetime?: string
-      }[]
-    } | undefined
+    const batch = preparedStartCommand(backend.commands)
 
     assert.deepEqual(
-      uniqueEventShapes(batch?.events?.map((event) => ({
+      uniqueEventShapes(batch.events.map((event) => ({
         kind: event.kind,
         atBeat: event.atBeat,
         ownerLifetime: event.ownerLifetime
-      })) ?? []),
+      }))),
       [
         { kind: 'note-on', atBeat: 3.75, ownerLifetime: undefined },
         {
@@ -212,28 +184,15 @@ describe('PlaybackService native startup', () => {
       timeMs: 0
     })
 
-    const ownerCommands = backend.commands.filter(
-      (command) => command.type === 'event-owner:generation:set'
-    )
-    const tempo = backend.commands.find((command) => command.type === 'tempo-map:set')
-    const loop = backend.commands.find((command) => command.type === 'transport-loop:set')
-    const batch = backend.commands.find(
-      (command) => command.type === 'event:schedule-beat-batch'
-    )
-    const start = backend.commands.find((command) => command.type === 'transport:start')
+    const batch = preparedStartCommand(backend.commands)
 
-    assert.equal(ownerCommands.length, 1)
-    assert.equal(tempo?.type, 'tempo-map:set')
-    assert.equal(loop?.type, 'transport-loop:set')
-    assert.equal(batch?.type, 'event:schedule-beat-batch')
-    assert.equal(start?.type, 'transport:start')
-    assert.equal(tempo.atSample, batch.atSample)
-    assert.equal(loop.atSample, batch.atSample)
-    assert.equal(start.atSample, tempo.originSample)
-    assert.equal(loop.startSample, tempo.originSample)
-    assert.equal(tempo.originBeat, 0)
-    assert.equal(ownerCommands[0]?.clipId, batch.clipId)
-    assert.equal(batch.generation, ownerCommands[0]?.generation)
+    assert.deepEqual(
+      backend.commands.map((command) => command.type),
+      ['transport:start-prepared']
+    )
+    assert.equal(batch.atSample, batch.tempo.originSample)
+    assert.equal(batch.transportLoop.startSample, batch.tempo.originSample)
+    assert.equal(batch.tempo.originBeat, 0)
     assert.equal(batch.clipId, 'clip-1:active')
 
     const traceOwner = batch.events[0]?.traceId?.clipOwnerId
@@ -342,13 +301,7 @@ describe('PlaybackService native startup', () => {
 
     assert.deepEqual(
       backend.commands.map((command) => command.type),
-      [
-        'event-owner:generation:set',
-        'tempo-map:set',
-        'transport-loop:set',
-        'event:schedule-beat-batch',
-        'transport:start'
-      ]
+      ['transport:start-prepared']
     )
   })
 
@@ -377,13 +330,10 @@ describe('PlaybackService native startup', () => {
       timeMs: 0
     })
 
-    const tempo = backend.commands.find((command) => command.type === 'tempo-map:set')
-    const loop = backend.commands.find((command) => command.type === 'transport-loop:set')
+    const start = preparedStartCommand(backend.commands)
 
-    assert.equal(tempo?.type, 'tempo-map:set')
-    assert.equal(loop?.type, 'transport-loop:set')
-    assert.equal(tempo.originBeat, 0)
-    assert.equal(loop.startSample, tempo.originSample)
+    assert.equal(start.tempo.originBeat, 0)
+    assert.equal(start.transportLoop.startSample, start.tempo.originSample)
   })
 
   it('waits for a pending native stop before scheduling a fresh restart', async () => {
@@ -430,15 +380,15 @@ describe('PlaybackService native startup', () => {
       (command) => command.type === 'transport:stop'
     )
     const scheduleIndex = backend.commands.findIndex(
-      (command) => command.type === 'event:schedule-beat-batch'
+      (command) => command.type === 'transport:start-prepared'
     )
     const startIndex = backend.commands.findIndex(
-      (command) => command.type === 'transport:start'
+      (command) => command.type === 'transport:start-prepared'
     )
 
     assert.ok(stopIndex >= 0)
     assert.ok(scheduleIndex > stopIndex)
-    assert.ok(startIndex > scheduleIndex)
+    assert.equal(startIndex, scheduleIndex)
   })
 
   it('aligns armed clip origins to the native playback start beat', () => {
@@ -651,13 +601,10 @@ describe('PlaybackService native startup', () => {
       timeMs: 0
     })
 
-    const tempo = backend.commands.find((command) => command.type === 'tempo-map:set')
-    const loop = backend.commands.find((command) => command.type === 'transport-loop:set')
+    const start = preparedStartCommand(backend.commands)
 
-    assert.equal(tempo?.type, 'tempo-map:set')
-    assert.equal(loop?.type, 'transport-loop:set')
-    assert.equal(loop?.startSample, tempo?.originSample)
-    assert.equal(loop?.endSample, (tempo?.originSample ?? 0) + 96_000)
+    assert.equal(start.transportLoop.startSample, start.tempo.originSample)
+    assert.equal(start.transportLoop.endSample, start.tempo.originSample + 96_000)
   })
 
   it('does not reactivate the native graph when playback only adds a clip schedule', async () => {
@@ -685,13 +632,7 @@ describe('PlaybackService native startup', () => {
     assert.equal(backend.activateCalls, 1)
     assert.deepEqual(
       backend.commands.map((command) => command.type),
-      [
-        'event-owner:generation:set',
-        'tempo-map:set',
-        'transport-loop:set',
-        'event:schedule-beat-batch',
-        'transport:start'
-      ]
+      ['transport:start-prepared']
     )
   })
 
@@ -1114,15 +1055,9 @@ describe('PlaybackService native startup', () => {
       timeMs: 0
     })
 
-    const scheduleCommands = backend.commands.filter(
-      (command) =>
-        command.type === 'tempo-map:set' ||
-        command.type === 'transport-loop:set' ||
-        command.type === 'event:schedule-beat-batch'
-    )
+    const command = preparedStartCommand(backend.commands)
 
-    assert.ok(scheduleCommands.length > 0)
-    assert.ok(scheduleCommands.every((command) => command.atSample >= 256))
+    assert.ok(command.atSample >= 256)
   })
 
   it('keeps native plan revisions stable across schedule-only model changes', () => {
@@ -1261,7 +1196,7 @@ class FakeRuntimeBackend implements RuntimeBackend {
     for (const command of commands) {
       this.commands.push(command)
 
-      if (command.type === 'transport:start') {
+      if (command.type === 'transport:start' || command.type === 'transport:start-prepared') {
         this.playing = true
       } else if (command.type === 'transport:stop' || command.type === 'panic') {
         this.playing = false
@@ -1278,6 +1213,21 @@ class FakeRuntimeBackend implements RuntimeBackend {
   }
 
   async dispose(): Promise<void> {}
+}
+
+function preparedStartCommand(
+  commands: readonly EngineCommand[]
+): Extract<EngineCommand, { readonly type: 'transport:start-prepared' }> {
+  const command = commands.find(
+    (candidate): candidate is Extract<
+      EngineCommand,
+      { readonly type: 'transport:start-prepared' }
+    > => candidate.type === 'transport:start-prepared'
+  )
+
+  assert.equal(command?.type, 'transport:start-prepared')
+
+  return command
 }
 
 class ScheduleApplyRuntimeBackend extends FakeRuntimeBackend {
@@ -1313,7 +1263,15 @@ class ScheduleApplyRuntimeBackend extends FakeRuntimeBackend {
         this.batchQueued = true
       }
 
-      if (command.type === 'transport:start') {
+      if (command.type === 'transport:start-prepared') {
+        this.ownerGenerationsSetAtBeatBatch =
+          this.snapshot.diagnostics.scheduler?.ownerGenerationsSet ?? 0
+        this.pendingOwnerGenerations += 1
+        this.pendingBeatEvents += command.events.length
+        this.batchQueued = true
+      }
+
+      if (command.type === 'transport:start' || command.type === 'transport:start-prepared') {
         this.beatEventsInsertedAtTransportStart =
           this.snapshot.diagnostics.scheduler?.beatEventsInserted ?? 0
         this.transportStartQueued = true

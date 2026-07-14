@@ -23,10 +23,10 @@
 - [x] Assert owner and generation match the activation command.
 
 ## Phase 3: Atomic Transport Start Transaction
-- [ ] Add a prepared transport-start request on the control side.
-- [ ] Transfer one compact activate-transport-start command to the audio thread.
-- [ ] Apply tempo, transport anchor, loop, owner generations, schedules, and playing state atomically.
-- [ ] Dispatch events due exactly at the activation sample after transaction activation.
+- [x] Add a prepared transport-start request on the control side.
+- [x] Transfer one compact activate-transport-start command to the audio thread.
+- [x] Apply tempo, transport anchor, loop, owner generations, schedules, and playing state atomically.
+- [x] Dispatch events due exactly at the activation sample after transaction activation.
 
 ## Phase 4: Separate Device Time From Transport Time
 - [ ] Formalise device clock and transport timeline structures.

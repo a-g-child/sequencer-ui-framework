@@ -180,7 +180,14 @@ impl ScheduledBeatEvent {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreparedTransportStartEvent {
+    pub event: ScheduledBeatEvent,
+    pub owner: ScheduledEventOwner,
+    pub trace_id: Option<ScheduledEventTraceId>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum EngineCommand {
     TransportStart {
         id: u64,
@@ -228,6 +235,15 @@ pub enum EngineCommand {
         trace_id: Option<ScheduledEventTraceId>,
         at_sample: u64,
     },
+    PreparedTransportStart {
+        id: u64,
+        at_sample: u64,
+        tempo: TempoMapSnapshot,
+        transport_loop: TransportLoop,
+        owner_id: u64,
+        generation: u64,
+        events: Box<[PreparedTransportStartEvent]>,
+    },
     SwapExecutionPlan {
         id: u64,
         transfer_id: u64,
@@ -247,6 +263,7 @@ impl EngineCommand {
             | Self::SetScheduledEventOwnerGeneration { id, .. }
             | Self::ScheduleEvent { id, .. }
             | Self::ScheduleBeatEvent { id, .. }
+            | Self::PreparedTransportStart { id, .. }
             | Self::SwapExecutionPlan { id, .. } => id,
         }
     }
@@ -260,7 +277,8 @@ impl EngineCommand {
             | Self::SetTempoMap { at_sample, .. }
             | Self::SetTransportLoop { at_sample, .. }
             | Self::SetScheduledEventOwnerGeneration { at_sample, .. }
-            | Self::ScheduleBeatEvent { at_sample, .. } => at_sample,
+            | Self::ScheduleBeatEvent { at_sample, .. }
+            | Self::PreparedTransportStart { at_sample, .. } => at_sample,
             Self::ScheduleEvent { event, .. } => event.at_sample(),
             Self::SwapExecutionPlan {
                 requested_sample, ..

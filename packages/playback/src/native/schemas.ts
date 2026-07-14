@@ -27,6 +27,7 @@ export type EngineCommand =
   | ScheduleSampleEventCommand
   | ScheduleBeatEventCommand
   | ScheduleBeatEventBatchCommand
+  | PreparedTransportStartCommand
   | LaunchClipCommand
   | ParameterModulateCommand
   | SwapExecutionPlanCommand
@@ -205,6 +206,25 @@ export interface ScheduleBeatEventBatchCommand extends DeviceCommandBase {
   readonly generation: number
   readonly events: readonly NativeScheduledBeatEvent[]
   readonly atSample: number
+}
+
+export interface PreparedTransportStartCommand extends DeviceCommandBase {
+  readonly type: 'transport:start-prepared'
+  readonly atSample: number
+  readonly tempo: {
+    readonly originSample: number
+    readonly originBeat: number
+    readonly bpm: number
+    readonly sampleRate: number
+  }
+  readonly transportLoop: {
+    readonly enabled: boolean
+    readonly startSample: number
+    readonly endSample: number
+  }
+  readonly clipId: string
+  readonly generation: number
+  readonly events: readonly NativeScheduledBeatEvent[]
 }
 
 export interface LaunchClipCommand extends DeviceCommandBase {

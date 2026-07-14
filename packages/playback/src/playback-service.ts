@@ -41,6 +41,7 @@ import {
   createNativeTempoMapCommand,
   createNativeTransportLoopCommand,
   nativeClipImmediateNoteOffCommands,
+  nativePreparedTransportStartCommand,
   nativeClipScheduleBatchCommand,
   nativeScheduledEventOwnerGenerationCommand,
   type NativeClipScheduleSubmission,
@@ -116,6 +117,7 @@ type NativeClipScheduleSubmitResult = {
   readonly commandSnapshot?: RuntimeSnapshot
   readonly beatEventCount: number
   readonly baseBeatEventsInserted?: number
+  readonly transportStarted?: boolean
   readonly clipId?: string
   readonly generation?: number
   readonly scheduleSample: number
@@ -806,14 +808,18 @@ export class PlaybackService implements Service, DocumentObserver {
       schedule
     })
     this.setNativeRuntimeStatus('transport-start-requested')
-    await this.runtimeController.play(
-      schedule === undefined
-        ? undefined
-        : {
-            atSample: schedule.startSample,
-            commandSnapshot: schedule.commandSnapshot
-          }
-    )
+    if (schedule?.transportStarted) {
+      await this.runtimeController.confirmPreparedTransportStart(schedule.commandSnapshot)
+    } else {
+      await this.runtimeController.play(
+        schedule === undefined
+          ? undefined
+          : {
+              atSample: schedule.startSample,
+              commandSnapshot: schedule.commandSnapshot
+            }
+      )
+    }
     const snapshot = await this.runtimeController.refreshSnapshot()
     this.logNativePlaybackStart('after-transport-start', {
       clockBeat: state.beat,
@@ -1192,7 +1198,8 @@ export class PlaybackService implements Service, DocumentObserver {
         originBeat,
         bpm: state.bpm,
         sampleRate,
-        nudgeStartBoundaryEvents: mode === 'begin'
+        nudgeStartBoundaryEvents: mode === 'begin',
+        preparedTransportStart: mode === 'begin'
       },
       `clip-schedule-${mode}`,
       baseBeatEventsInserted,
@@ -1211,6 +1218,7 @@ export class PlaybackService implements Service, DocumentObserver {
       readonly bpm: number
       readonly sampleRate: number
       readonly nudgeStartBoundaryEvents?: boolean
+      readonly preparedTransportStart?: boolean
     },
     action: string,
     baseBeatEventsInserted?: number,
@@ -1264,37 +1272,60 @@ export class PlaybackService implements Service, DocumentObserver {
       firstEventBeat = schedule.events[0]?.atBeat
       lastEventBeat = schedule.events.at(-1)?.atBeat
 
-      commands.push(
-        nativeScheduledEventOwnerGenerationCommand(submission.active, {
-          atSample,
-          timeMs
-        }),
-        createNativeTempoMapCommand(model, {
-          sampleRate,
-          bpm,
-          originSample,
-          originBeat,
-          atSample,
-          timeMs
-        }),
-        createNativeTransportLoopCommand({
-          clip: { ...clip, loop: false },
-          bpm,
-          sampleRate,
-          originSample,
-          originBeat,
-          atSample,
-          timeMs
-        })
-      )
+      const tempoCommand = createNativeTempoMapCommand(model, {
+        sampleRate,
+        bpm,
+        originSample,
+        originBeat,
+        atSample,
+        timeMs
+      })
+      const loopCommand = createNativeTransportLoopCommand({
+        clip: { ...clip, loop: false },
+        bpm,
+        sampleRate,
+        originSample,
+        originBeat,
+        atSample,
+        timeMs
+      })
 
-      if (schedule.events.length > 0) {
+      if (options.preparedTransportStart && schedule.events.length > 0) {
         commands.push(
-          nativeClipScheduleBatchCommand(schedule, {
+          nativePreparedTransportStartCommand(schedule, {
             atSample,
-            timeMs
+            timeMs,
+            tempo: {
+              originSample: tempoCommand.originSample,
+              originBeat: tempoCommand.originBeat,
+              bpm: tempoCommand.bpm,
+              sampleRate: tempoCommand.sampleRate
+            },
+            transportLoop: {
+              enabled: loopCommand.enabled,
+              startSample: loopCommand.startSample,
+              endSample: loopCommand.endSample
+            }
           })
         )
+      } else {
+        commands.push(
+          nativeScheduledEventOwnerGenerationCommand(submission.active, {
+            atSample,
+            timeMs
+          }),
+          tempoCommand,
+          loopCommand
+        )
+
+        if (schedule.events.length > 0) {
+          commands.push(
+            nativeClipScheduleBatchCommand(schedule, {
+              atSample,
+              timeMs
+            })
+          )
+        }
       }
 
       this.nativeScheduledClipModels.set(clip.id, model)
@@ -1323,6 +1354,7 @@ export class PlaybackService implements Service, DocumentObserver {
       commandSnapshot,
       beatEventCount,
       baseBeatEventsInserted,
+      transportStarted: options.preparedTransportStart && beatEventCount > 0,
       clipId: activeClipId,
       generation: activeGeneration,
       scheduleSample: atSample,

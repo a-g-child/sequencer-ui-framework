@@ -17,17 +17,17 @@ pub enum QueuePushError {
     Full,
 }
 
-struct RealtimeQueue<T: Copy + Send, const N: usize> {
+struct RealtimeQueue<T: Send, const N: usize> {
     buffer: Box<[UnsafeCell<MaybeUninit<T>>]>,
     head: AtomicUsize,
     tail: AtomicUsize,
     overflow_count: AtomicU64,
 }
 
-unsafe impl<T: Copy + Send, const N: usize> Send for RealtimeQueue<T, N> {}
-unsafe impl<T: Copy + Send, const N: usize> Sync for RealtimeQueue<T, N> {}
+unsafe impl<T: Send, const N: usize> Send for RealtimeQueue<T, N> {}
+unsafe impl<T: Send, const N: usize> Sync for RealtimeQueue<T, N> {}
 
-impl<T: Copy + Send, const N: usize> RealtimeQueue<T, N> {
+impl<T: Send, const N: usize> RealtimeQueue<T, N> {
     fn new() -> Self {
         assert!(N > 1, "realtime queue capacity must be greater than one");
 
@@ -87,6 +87,12 @@ impl<T: Copy + Send, const N: usize> RealtimeQueue<T, N> {
 
     fn overflow_count(&self) -> u64 {
         self.overflow_count.load(Ordering::Relaxed)
+    }
+}
+
+impl<T: Send, const N: usize> Drop for RealtimeQueue<T, N> {
+    fn drop(&mut self) {
+        while self.pop().is_some() {}
     }
 }
 

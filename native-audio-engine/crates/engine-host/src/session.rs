@@ -18,10 +18,10 @@ use engine_protocol::{
     diagnostic_tone_plan, event_endpoint, AudioBufferSlot, AudioTelemetry, CommandRejection,
     EngineCommand, EngineEvent, EventInputNodePlan, EventRoute, EventRouteMask, GainNodePlan,
     InstrumentNodePlan, NativeExecutionPlan, OutputNodePlan, ParameterSlot, PlanNode, PlanNodeKind,
-    RecentEventTrace, ScheduledBeatEvent, ScheduledEngineEvent, ScheduledEventDropReason,
-    ScheduledEventLifetime, ScheduledEventOwner, ScheduledEventTraceId, ScheduledEventTraceRole,
-    TempoMapSnapshot, TransportLoop, NATIVE_EXECUTION_PLAN_VERSION, NODE_EVENT_INPUT, NODE_GAIN,
-    NODE_INSTRUMENT, NODE_OUTPUT, PARAM_GAIN_GAIN,
+    PreparedTransportStartEvent, RecentEventTrace, ScheduledBeatEvent, ScheduledEngineEvent,
+    ScheduledEventDropReason, ScheduledEventLifetime, ScheduledEventOwner, ScheduledEventTraceId,
+    ScheduledEventTraceRole, TempoMapSnapshot, TransportLoop, NATIVE_EXECUTION_PLAN_VERSION,
+    NODE_EVENT_INPUT, NODE_GAIN, NODE_INSTRUMENT, NODE_OUTPUT, PARAM_GAIN_GAIN,
 };
 
 use crate::DriverKind;
@@ -365,7 +365,7 @@ impl<W: Write> Session<W> {
         self.next_command_id = self.next_command_id.saturating_add(commands.len() as u64);
 
         for command in commands {
-            self.observe_engine_command(command);
+            self.observe_engine_command(&command);
 
             if self
                 .command_sender
@@ -394,10 +394,17 @@ impl<W: Write> Session<W> {
         Ok(())
     }
 
-    fn observe_engine_command(&mut self, command: EngineCommand) {
+    fn observe_engine_command(&mut self, command: &EngineCommand) {
         match command {
             EngineCommand::SetTempoMap { tempo, .. } => {
-                self.tempo_map = tempo;
+                self.tempo_map = *tempo;
+            }
+            EngineCommand::PreparedTransportStart { tempo, .. } => {
+                self.tempo_map = *tempo;
+                self.transport_playing = true;
+            }
+            EngineCommand::TransportStart { .. } => {
+                self.transport_playing = true;
             }
             EngineCommand::TransportStop { .. } | EngineCommand::Panic { .. } => {
                 self.transport_playing = false;
@@ -1486,6 +1493,9 @@ fn parse_session_engine_commands(
             id: first_command_id,
             at_sample,
         },
+        Some("transport:start-prepared") => {
+            return parse_prepared_transport_start(&command_json, first_command_id, at_sample);
+        }
         Some("transport:stop") => EngineCommand::TransportStop {
             id: first_command_id,
             at_sample,
@@ -1583,6 +1593,68 @@ fn parse_scheduled_sample_event(command_json: &str) -> Result<ScheduledEngineEve
     parse_scheduled_sample_event_object(&event_json)
 }
 
+fn parse_prepared_transport_start(
+    command_json: &str,
+    command_id: u64,
+    at_sample: u64,
+) -> Result<Vec<EngineCommand>, SessionError> {
+    let fields = parse_flat_json_object(command_json);
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+    let clip_id = field("clipId").ok_or_else(|| SessionError::new("command.clipId is required"))?;
+    let generation = parse_required_u64(field("generation"), "command.generation")?;
+    let owner_id = stable_owner_id(clip_id);
+    let tempo_json = extract_json_value(command_json, "tempo")
+        .ok_or_else(|| SessionError::new("command.tempo is required"))?;
+    let transport_loop_json = extract_json_value(command_json, "transportLoop")
+        .ok_or_else(|| SessionError::new("command.transportLoop is required"))?;
+    let event_json = extract_json_value(command_json, "events")
+        .ok_or_else(|| SessionError::new("command.events is required"))?;
+    let event_objects = parse_json_object_array(&event_json);
+
+    if event_objects.is_empty() {
+        return Err(SessionError::new("command.events must not be empty"));
+    }
+    if event_objects.len() > MAX_SCHEDULED_BEAT_BATCH_EVENTS {
+        return Err(SessionError::new(format!(
+            "command.events exceeds maximum batch size {MAX_SCHEDULED_BEAT_BATCH_EVENTS}"
+        )));
+    }
+
+    let mut events = Vec::with_capacity(event_objects.len());
+    for event_json in event_objects.iter() {
+        let event = parse_scheduled_beat_event_object(event_json)?;
+        let owner = match parse_scheduled_event_owner_lifetime(event_json)? {
+            ScheduledEventLifetime::GenerationBound => {
+                ScheduledEventOwner::generation_bound(owner_id, generation)
+            }
+            ScheduledEventLifetime::CompletionRequired => {
+                ScheduledEventOwner::completion_required(owner_id, generation)
+            }
+        };
+
+        events.push(PreparedTransportStartEvent {
+            event,
+            owner,
+            trace_id: parse_scheduled_event_trace_id(event_json)?,
+        });
+    }
+
+    Ok(vec![EngineCommand::PreparedTransportStart {
+        id: command_id,
+        at_sample,
+        tempo: parse_tempo_map_object(&tempo_json)?,
+        transport_loop: parse_transport_loop_object(&transport_loop_json)?,
+        owner_id,
+        generation,
+        events: events.into_boxed_slice(),
+    }])
+}
+
 fn parse_scheduled_beat_event_batch(
     command_json: &str,
     first_command_id: u64,
@@ -1640,6 +1712,44 @@ fn parse_scheduled_beat_event_batch(
     }
 
     Ok(commands)
+}
+
+fn parse_tempo_map_object(tempo_json: &str) -> Result<TempoMapSnapshot, SessionError> {
+    let fields = parse_flat_json_object(tempo_json);
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+
+    Ok(TempoMapSnapshot {
+        origin_sample: parse_optional_u64(field("originSample"), "command.tempo.originSample")?
+            .unwrap_or(0),
+        origin_beat: parse_optional_f64(field("originBeat"), "command.tempo.originBeat")?
+            .unwrap_or(0.0),
+        bpm: parse_required_f64(field("bpm"), "command.tempo.bpm")?,
+        sample_rate: parse_required_f64(field("sampleRate"), "command.tempo.sampleRate")?,
+    })
+}
+
+fn parse_transport_loop_object(transport_loop_json: &str) -> Result<TransportLoop, SessionError> {
+    let fields = parse_flat_json_object(transport_loop_json);
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+
+    Ok(TransportLoop {
+        enabled: parse_required_bool(field("enabled"), "command.transportLoop.enabled")?,
+        start_sample: parse_required_u64(
+            field("startSample"),
+            "command.transportLoop.startSample",
+        )?,
+        end_sample: parse_required_u64(field("endSample"), "command.transportLoop.endSample")?,
+    })
 }
 
 fn parse_scheduled_event_owner_lifetime(

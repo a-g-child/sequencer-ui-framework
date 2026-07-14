@@ -3,6 +3,7 @@ import type { PlaybackEvent } from '../events.ts'
 import type {
   NativeNoteTraceId,
   NativeScheduledBeatEvent,
+  PreparedTransportStartCommand,
   ScheduleSampleEventCommand,
   ScheduleBeatEventBatchCommand,
   ScheduleBeatEventCommand,
@@ -233,6 +234,35 @@ export function nativeClipScheduleBatchCommand(
     generation: schedule.generation,
     events: schedule.events,
     atSample: options.atSample ?? 0,
+    timeMs: options.timeMs
+  }
+}
+
+export function nativePreparedTransportStartCommand(
+  schedule: NativeClipSchedule,
+  options: NativeClipScheduleCommandOptions & {
+    readonly tempo: {
+      readonly originSample: number
+      readonly originBeat: number
+      readonly bpm: number
+      readonly sampleRate: number
+    }
+    readonly transportLoop: {
+      readonly enabled: boolean
+      readonly startSample: number
+      readonly endSample: number
+    }
+  }
+): PreparedTransportStartCommand {
+  return {
+    id: `${schedule.clipId}:${schedule.generation}:transport-start-prepared`,
+    type: 'transport:start-prepared',
+    atSample: options.atSample ?? options.tempo.originSample,
+    tempo: options.tempo,
+    transportLoop: options.transportLoop,
+    clipId: schedule.clipId,
+    generation: schedule.generation,
+    events: schedule.events,
     timeMs: options.timeMs
   }
 }

@@ -113,7 +113,7 @@ export class WebAudioBackend implements RuntimeBackend {
 
   sendCommands(commands: readonly EngineCommand[]): void {
     for (const command of commands) {
-      if (command.type === 'transport:start') {
+      if (command.type === 'transport:start' || command.type === 'transport:start-prepared') {
         this.running = true
       } else if (command.type === 'transport:stop' || command.type === 'panic') {
         this.running = false
@@ -449,6 +449,7 @@ function isNativeExecutionPlan(plan: RuntimeCompilePlan): plan is NativeExecutio
 function isNativeRuntimeCommand(command: EngineCommand): boolean {
   return (
     command.type === 'transport:start' ||
+    command.type === 'transport:start-prepared' ||
     command.type === 'transport:stop' ||
     command.type === 'panic' ||
     command.type === 'tempo-map:set' ||

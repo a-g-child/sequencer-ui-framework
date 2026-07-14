@@ -211,6 +211,26 @@ export class PlaybackRuntimeController {
     this.backend.sendCommands(commands)
   }
 
+  async confirmPreparedTransportStart(
+    commandSnapshotOverride?: RuntimeSnapshot
+  ): Promise<void> {
+    this.ensureReady()
+    const commandSnapshot = commandSnapshotOverride ?? await this.backend.getSnapshot()
+
+    this.latestSnapshot = commandSnapshot
+    this.requestedTransportPlaying = true
+    this.commandPending = true
+    this.failure = undefined
+    this.emit()
+
+    try {
+      await this.waitForTransportConfirmation(true)
+    } catch (error) {
+      this.fail(error)
+      throw error
+    }
+  }
+
   async refreshSnapshot(): Promise<RuntimeSnapshot> {
     this.ensureReady()
 
