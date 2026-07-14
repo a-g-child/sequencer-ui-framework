@@ -700,18 +700,30 @@ impl PreparedExecutionPlan {
     ) -> bool {
         self.future_event_queue.clear();
         let source_node = source.node_id;
-        let Some(source_node_index) = self.event_graph.source_node_index(source_node) else {
-            return false;
-        };
-        let Some(source_endpoint_index) = self
-            .event_graph
-            .source_endpoint_index(source_node_index, source.port_id)
-        else {
-            self.event_graph_diagnostics.events_received = self
-                .event_graph_diagnostics
-                .events_received
-                .saturating_add(1);
-            return false;
+        let source_endpoint_index = match self.event_graph.source_node_index(source_node) {
+            Some(source_node_index) => {
+                let Some(source_endpoint_index) = self
+                    .event_graph
+                    .source_endpoint_index(source_node_index, source.port_id)
+                else {
+                    self.event_graph_diagnostics.events_received = self
+                        .event_graph_diagnostics
+                        .events_received
+                        .saturating_add(1);
+                    return false;
+                };
+
+                source_endpoint_index
+            }
+            None => {
+                let Some(source_endpoint_index) =
+                    self.event_graph.fallback_source_endpoint_index(event)
+                else {
+                    return false;
+                };
+
+                source_endpoint_index
+            }
         };
 
         self.event_work_queue.clear();
@@ -3038,6 +3050,18 @@ impl PreparedEventGraph {
             })
     }
 
+    fn fallback_source_endpoint_index(&self, event: ScheduledEngineEvent) -> Option<u32> {
+        self.source_ranges
+            .iter()
+            .enumerate()
+            .find_map(|(index, range)| {
+                self.routes[range.start as usize..range.end() as usize]
+                    .iter()
+                    .any(|route| route.accepts(event))
+                    .then_some(index as u32)
+            })
+    }
+
     fn source_node_id(&self, source_node_index: u32) -> Option<NodeId> {
         self.source_node_indexes
             .get(source_node_index as usize)
@@ -4049,6 +4073,30 @@ mod tests {
                 active_voices: 1,
                 peak_active_voices: 1,
                 voice_steals: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn instrument_accepts_note_from_unknown_compatible_event_source() {
+        const UNKNOWN_BRIDGE_SOURCE_NODE: u32 = 999_001;
+
+        let mut prepared =
+            PreparedExecutionPlan::prepare(&instrument_plan_with_voice_count(4), 128).unwrap();
+
+        assert!(prepared.dispatch_event(note_on(
+            UNKNOWN_BRIDGE_SOURCE_NODE,
+            60,
+            0.5,
+            0,
+        )));
+        assert_eq!(instrument_diagnostics(&prepared).active_voices, 1);
+        assert_eq!(
+            prepared.event_graph_diagnostics(),
+            EventGraphDiagnostics {
+                events_received: 1,
+                route_dispatches: 1,
+                ..EventGraphDiagnostics::default()
             }
         );
     }

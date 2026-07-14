@@ -170,8 +170,18 @@ export class PlaybackRuntimeController {
     return snapshot
   }
 
-  async play(options: { readonly atSample?: number } = {}): Promise<void> {
-    await this.sendTransportCommand('transport:start', true, options.atSample)
+  async play(
+    options: {
+      readonly atSample?: number
+      readonly commandSnapshot?: RuntimeSnapshot
+    } = {}
+  ): Promise<void> {
+    await this.sendTransportCommand(
+      'transport:start',
+      true,
+      options.atSample,
+      options.commandSnapshot
+    )
   }
 
   async stop(): Promise<void> {
@@ -235,10 +245,11 @@ export class PlaybackRuntimeController {
   private async sendTransportCommand(
     type: 'transport:start' | 'transport:stop' | 'panic',
     requestedPlaying: boolean,
-    requestedSample?: number
+    requestedSample?: number,
+    commandSnapshotOverride?: RuntimeSnapshot
   ): Promise<void> {
     this.ensureReady()
-    const commandSnapshot = await this.backend.getSnapshot()
+    const commandSnapshot = commandSnapshotOverride ?? await this.backend.getSnapshot()
 
     this.latestSnapshot = commandSnapshot
     this.requestedTransportPlaying = requestedPlaying

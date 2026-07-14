@@ -55,6 +55,61 @@ describe('Native runtime bridge', () => {
     ])
   })
 
+  it('renderer transport lowers app native execution plans before prepare', async () => {
+    let preparedPlan: unknown
+    const api: NativeRuntimeApi = {
+      async start() {
+        return {
+          executionPlanVersion: 1,
+          eventGraphVersion: 1,
+          parameterGraphVersion: 0,
+          assets: false,
+          telemetry: true
+        }
+      },
+      async preparePlan(plan) {
+        preparedPlan = plan
+        return { transferId: 12, planId: 34, revision: 2 }
+      },
+      async activatePlan() {
+        return { planId: 34, revision: 2, requestedSample: 0, appliedSample: 0 }
+      },
+      async sendCommands() {},
+      async getSnapshot() {
+        return {
+          backend: 'native',
+          transport: {
+            playing: false,
+            samplePosition: 0,
+            beatPosition: 0,
+            loopIteration: 0
+          },
+          stream: { sampleRate: 48_000, callbackCount: 0 },
+          plan: { activePlanId: null, activeRevision: null, pendingTransfers: 0 },
+          diagnostics: { xruns: 0, queueOverflows: 0 },
+          samplePosition: 0,
+          sampleRate: 48_000,
+          running: false
+        }
+      },
+      async stopAudio() {},
+      async dispose() {}
+    }
+    const transport = new RendererNativeRuntimeTransport({ api })
+
+    await transport.start({ driver: 'null' })
+    await transport.preparePlan(createAppNativeExecutionPlanFixture())
+
+    assert.equal(
+      (preparedPlan as { kind?: unknown } | undefined)?.kind,
+      'instrument-gain-output'
+    )
+    assert.equal(
+      Array.isArray((preparedPlan as { nodes?: unknown } | undefined)?.nodes),
+      false
+    )
+  })
+
   it('renderer transport surfaces structured failures', async () => {
     const bridgeError = new NativeRuntimeBridgeError('native-runtime:failed', 'bridge failed', { detail: true })
     const api: NativeRuntimeApi = {
@@ -90,3 +145,36 @@ describe('Native runtime bridge', () => {
     })
   })
 })
+
+function createAppNativeExecutionPlanFixture(): unknown {
+  return {
+    id: 'native-plan:test-project',
+    graphId: 'test-project',
+    revision: 17,
+    nodes: [
+      {
+        nodeId: 'test-event-input',
+        descriptorId: 'sequencer.source.midi-input'
+      },
+      {
+        nodeId: 'test-instrument',
+        descriptorId: 'sequencer.source.oscillator'
+      },
+      {
+        nodeId: 'test-gain',
+        descriptorId: 'sequencer.processor.gain'
+      },
+      {
+        nodeId: 'test-output',
+        descriptorId: 'sequencer.output.audio-out'
+      }
+    ],
+    parameters: [
+      {
+        nodeId: 'test-gain',
+        parameterId: 'gain',
+        defaultValue: 0.5
+      }
+    ]
+  }
+}

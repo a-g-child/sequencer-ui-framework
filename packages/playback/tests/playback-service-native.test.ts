@@ -96,8 +96,192 @@ describe('PlaybackService native startup', () => {
     ) as { atSample?: number } | undefined
 
     assert.ok((batch?.events?.length ?? 0) > 0)
-    assert.equal(start?.atSample, batch?.atSample)
-    assert.ok((start?.atSample ?? 0) >= 12_000)
+    assert.equal(batch?.atSample, start?.atSample)
+    assert.equal(start?.atSample, 12_000)
+
+    const firstNoteOn = batch?.events?.find(
+      (event) => (event as { kind?: string }).kind === 'note-on'
+    ) as { atBeat?: number } | undefined
+
+    assert.equal(firstNoteOn?.atBeat, 128 / 24_000)
+  })
+
+  it('includes the whole first beat in the initial native clip batch', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    service['model'] = createFirstBeatPlaybackModelFixture()
+    service['runtimeBpm'] = 120
+    service.requestClipLaunch('track-1', 'clip-1', 'bar')
+
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    const batch = backend.commands.find(
+      (command) => command.type === 'event:schedule-beat-batch'
+    ) as { events?: readonly { kind?: string; atBeat?: number }[] } | undefined
+
+    assert.deepEqual(
+      [...new Set(batch?.events
+        ?.filter((event) => event.kind === 'note-on')
+        .map((event) => event.atBeat))],
+      [128 / 24_000, 0.25, 0.5, 0.75]
+    )
+  })
+
+  it('queues native transport start without waiting for scheduler telemetry', async () => {
+    const backend = new ScheduleApplyRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    service['model'] = createFirstBeatPlaybackModelFixture()
+    service['runtimeBpm'] = 120
+    service.requestClipLaunch('track-1', 'clip-1', 'bar')
+
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    assert.equal(backend.snapshotsBetweenBatchAndTransportStart, 0)
+    assert.equal(backend.ownerGenerationsSetAtBeatBatch, 0)
+  })
+
+  it('resubmits the active clip schedule on a fresh native restart', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    service['model'] = createPlaybackModelFixture()
+    service['runtimeBpm'] = 120
+    service.requestClipLaunch('track-1', 'clip-1', 'bar')
+
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+    await controller.stop()
+
+    backend.commands = []
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 1_000
+    })
+
+    assert.deepEqual(
+      backend.commands.map((command) => command.type),
+      [
+        'event-owner:generation:set',
+        'tempo-map:set',
+        'transport-loop:set',
+        'event:schedule-beat-batch',
+        'transport:start'
+      ]
+    )
+  })
+
+  it('uses the requested clock beat as native origin for a fresh start', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    backend.setSnapshot({
+      transport: {
+        playing: true,
+        beatPosition: 12.5,
+        samplePosition: 640_000,
+        loopIteration: 0
+      }
+    })
+    service['model'] = createPlaybackModelFixture()
+    service['runtimeBpm'] = 120
+    service.requestClipLaunch('track-1', 'clip-1', 'none')
+
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    const tempo = backend.commands.find((command) => command.type === 'tempo-map:set')
+    const loop = backend.commands.find((command) => command.type === 'transport-loop:set')
+
+    assert.equal(tempo?.type, 'tempo-map:set')
+    assert.equal(loop?.type, 'transport-loop:set')
+    assert.equal(tempo.originBeat, 0)
+    assert.equal(loop.startSample, tempo.originSample)
+  })
+
+  it('waits for a pending native stop before scheduling a fresh restart', async () => {
+    const backend = new DelayedStopRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, {
+      autoPoll: false,
+      pollIntervalMs: 1
+    })
+    const service = new PlaybackService(undefined, controller)
+
+    service['model'] = createPlaybackModelFixture()
+    service['runtimeBpm'] = 120
+    service.requestClipLaunch('track-1', 'clip-1', 'none')
+
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    backend.commands = []
+    service['handleServiceEvent']({
+      type: 'clock:stopped',
+      serviceId: 'clock',
+      payload: {
+        bpm: 120,
+        beat: 0,
+        currentStep: 0,
+        running: false,
+        timeMs: 500
+      }
+    })
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 600
+    })
+
+    const stopIndex = backend.commands.findIndex(
+      (command) => command.type === 'transport:stop'
+    )
+    const scheduleIndex = backend.commands.findIndex(
+      (command) => command.type === 'event:schedule-beat-batch'
+    )
+    const startIndex = backend.commands.findIndex(
+      (command) => command.type === 'transport:start'
+    )
+
+    assert.ok(stopIndex >= 0)
+    assert.ok(scheduleIndex > stopIndex)
+    assert.ok(startIndex > scheduleIndex)
   })
 
   it('aligns armed clip origins to the native playback start beat', () => {
@@ -128,6 +312,37 @@ describe('PlaybackService native startup', () => {
     assert.equal(
       service['liveClips'].state.activeClipByTrackId['track-1']?.launchedAtBeat,
       36
+    )
+  })
+
+  it('quantizes native clip launches from the observed runtime beat', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    backend.setSnapshot({
+      transport: {
+        playing: true,
+        beatPosition: 26.75,
+        samplePosition: 640_000,
+        loopIteration: 0
+      }
+    })
+    service['runtimeBpm'] = 120
+    service['latestClockState'] = {
+      bpm: 120,
+      beat: 24,
+      running: true,
+      sourceId: 'stale-clock',
+      timeMs: 12_000
+    }
+    await controller.start()
+
+    service.requestClipLaunch('track-1', 'clip-1', 'bar')
+
+    assert.equal(
+      service.status.liveClips.pendingLaunchByTrackId['track-1']?.launchAtBeat,
+      28
     )
   })
 
@@ -346,8 +561,205 @@ describe('PlaybackService native startup', () => {
     await Promise.resolve()
     await Promise.resolve()
 
+    assert.deepEqual(
+      backend.commands
+        .filter((command) => command.type === 'event:schedule-sample')
+        .map((command) => command.event.note),
+      [69]
+    )
     assert.ok(
-      backend.commands.some((command) => command.type === 'event:schedule-sample')
+      backend.commands
+        .filter((command) => command.type === 'event:schedule-sample')
+        .every((command) => command.event.atSample >= 12_000)
+    )
+  })
+
+  it('sends note-offs when disabling a document clip backed by an active playback clip id', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    service['model'] = createActivePlaybackModelFixture()
+    service['runtimeBpm'] = 120
+    service.requestClipLaunch('track-1', 'clip-1', 'none')
+
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    backend.commands = []
+    service['latestClockState'] = {
+      bpm: 120,
+      beat: 0.25,
+      currentStep: 1,
+      running: true,
+      timeMs: 125
+    }
+
+    service.clearActiveClipForTrack('track-1')
+    await waitForNativeServiceTasks()
+
+    assert.deepEqual(
+      backend.commands
+        .filter((command) => command.type === 'event:schedule-sample')
+        .map((command) => command.event.note),
+      [69]
+    )
+  })
+
+  it('pre-schedules quantized native clip launches at the launch beat', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    backend.setSnapshot({
+      transport: {
+        playing: true,
+        beatPosition: 3.25,
+        samplePosition: 78_000,
+        loopIteration: 0
+      }
+    })
+    service['runtimeBpm'] = 120
+    service['context'] = {
+      documentStore: { document: {} },
+      events: { emit() {}, subscribe: () => () => {} }
+    } as never
+    service['builder'].build = (_document, bpm, options) =>
+      createActivePlaybackModelFixture(
+        options.activeClipsByTrackId?.['track-1']?.launchedAtBeat ?? 0,
+        bpm
+      )
+    service['rebuildModel'] = () => {}
+    await controller.start()
+
+    service.requestClipLaunch('track-1', 'clip-1', 'bar')
+    await waitForNativeServiceTasks()
+
+    const tempo = backend.commands.find((command) => command.type === 'tempo-map:set')
+    const loop = backend.commands.find((command) => command.type === 'transport-loop:set')
+    const batch = backend.commands.find(
+      (command) => command.type === 'event:schedule-beat-batch'
+    )
+
+    assert.equal(tempo?.type, 'tempo-map:set')
+    assert.equal(loop?.type, 'transport-loop:set')
+    assert.equal(batch?.type, 'event:schedule-beat-batch')
+    assert.equal(tempo.originBeat, 4)
+    assert.equal(loop.startSample, tempo.originSample)
+    assert.deepEqual(
+      batch.events
+        .filter((event) => event.kind === 'note-on')
+        .map((event) => event.atBeat),
+      [4]
+    )
+
+    backend.commands = []
+    service['handleServiceEvent']({
+      type: 'clock:tick',
+      serviceId: 'clock',
+      payload: {
+        bpm: 120,
+        beat: 4,
+        currentStep: 16,
+        running: true,
+        timeMs: 500
+      }
+    })
+
+    assert.deepEqual(backend.commands, [])
+  })
+
+  it('schedules immediate native clip re-cues from the clip start beat', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    backend.setSnapshot({
+      transport: {
+        playing: true,
+        beatPosition: 2.375,
+        samplePosition: 114_000,
+        loopIteration: 0
+      }
+    })
+    service['runtimeBpm'] = 120
+    service['context'] = {
+      documentStore: { document: {} },
+      events: { emit() {}, subscribe: () => () => {} }
+    } as never
+    service['builder'].build = (_document, bpm, options) =>
+      createActivePlaybackModelFixture(
+        options.activeClipsByTrackId?.['track-1']?.launchedAtBeat ?? 0,
+        bpm
+      )
+    service['rebuildModel'] = () => {}
+    await controller.start()
+
+    service.requestClipLaunch('track-1', 'clip-1', 'none')
+    await waitForNativeServiceTasks()
+
+    const tempo = backend.commands.find((command) => command.type === 'tempo-map:set')
+    const loop = backend.commands.find((command) => command.type === 'transport-loop:set')
+    const batch = backend.commands.find(
+      (command) => command.type === 'event:schedule-beat-batch'
+    )
+
+    assert.equal(tempo?.type, 'tempo-map:set')
+    assert.equal(loop?.type, 'transport-loop:set')
+    assert.equal(batch?.type, 'event:schedule-beat-batch')
+    assert.equal(tempo.originBeat, 2.375)
+    assert.equal(loop.startSample, tempo.originSample)
+    assert.deepEqual(
+      batch.events
+        .filter((event) => event.kind === 'note-on')
+        .map((event) => event.atBeat),
+      [2.375]
+    )
+  })
+
+  it('releases the submitted native notes when a live edit is deferred before clip stop', async () => {
+    const backend = new FakeRuntimeBackend()
+    const controller = new PlaybackRuntimeController(backend, { autoPoll: false })
+    const service = new PlaybackService(undefined, controller)
+
+    service['model'] = createPlaybackModelFixture()
+    service['runtimeBpm'] = 120
+    service.requestClipLaunch('track-1', 'clip-1', 'none')
+
+    await service['prepareAndStartNativeRuntime']({
+      bpm: 120,
+      beat: 0,
+      currentStep: 0,
+      running: true,
+      timeMs: 0
+    })
+
+    backend.commands = []
+    service['latestClockState'] = {
+      bpm: 120,
+      beat: 0.25,
+      currentStep: 1,
+      running: true,
+      timeMs: 125
+    }
+    service['rebuildModel'] = () => {
+      service['model'] = createEditedPlaybackModelFixture()
+    }
+
+    service['handlePlaybackModelOperation']()
+    service.clearActiveClipForTrack('track-1')
+    await waitForNativeServiceTasks()
+
+    assert.deepEqual(
+      backend.commands
+        .filter((command) => command.type === 'event:schedule-sample')
+        .map((command) => command.event.note),
+      [69]
     )
   })
 
@@ -555,9 +967,9 @@ class FakeRuntimeBackend implements RuntimeBackend {
   compileCalls: RuntimeCompilePlan[] = []
   activateCalls = 0
   commands: EngineCommand[] = []
-  private started = false
-  private playing = false
-  private snapshot: RuntimeSnapshot = {
+  protected started = false
+  protected playing = false
+  protected snapshot: RuntimeSnapshot = {
     backend: 'native',
     transport: { playing: false, samplePosition: 0, beatPosition: 0, loopIteration: 0 },
     stream: { sampleRate: 48_000, callbackCount: 0 },
@@ -598,6 +1010,19 @@ class FakeRuntimeBackend implements RuntimeBackend {
     }
   }
 
+  setSnapshot(patch: {
+    readonly transport?: Partial<RuntimeSnapshot['transport']>
+  }): void {
+    this.snapshot = {
+      ...this.snapshot,
+      transport: {
+        ...this.snapshot.transport,
+        ...patch.transport
+      }
+    }
+    this.playing = this.snapshot.transport.playing
+  }
+
   sendCommands(commands: readonly EngineCommand[]): void {
     for (const command of commands) {
       this.commands.push(command)
@@ -619,6 +1044,108 @@ class FakeRuntimeBackend implements RuntimeBackend {
   }
 
   async dispose(): Promise<void> {}
+}
+
+class ScheduleApplyRuntimeBackend extends FakeRuntimeBackend {
+  beatEventsInsertedAtTransportStart = 0
+  ownerGenerationsSetAtBeatBatch = 0
+  snapshotsBetweenBatchAndTransportStart = 0
+  private pendingBeatEvents = 0
+  private pendingOwnerGenerations = 0
+  private batchQueued = false
+  private transportStartQueued = false
+
+  constructor() {
+    super()
+    this.snapshot = {
+      ...this.snapshot,
+      diagnostics: {
+        ...this.snapshot.diagnostics,
+        scheduler: createSchedulerDiagnostics()
+      }
+    }
+  }
+
+  sendCommands(commands: readonly EngineCommand[]): void {
+    for (const command of commands) {
+      if (command.type === 'event-owner:generation:set') {
+        this.pendingOwnerGenerations += 1
+      }
+
+      if (command.type === 'event:schedule-beat-batch') {
+        this.ownerGenerationsSetAtBeatBatch =
+          this.snapshot.diagnostics.scheduler?.ownerGenerationsSet ?? 0
+        this.pendingBeatEvents += command.events.length
+        this.batchQueued = true
+      }
+
+      if (command.type === 'transport:start') {
+        this.beatEventsInsertedAtTransportStart =
+          this.snapshot.diagnostics.scheduler?.beatEventsInserted ?? 0
+        this.transportStartQueued = true
+      }
+    }
+
+    super.sendCommands(commands)
+  }
+
+  async getSnapshot(): Promise<RuntimeSnapshot> {
+    if (this.batchQueued && !this.transportStartQueued) {
+      this.snapshotsBetweenBatchAndTransportStart += 1
+    }
+
+    if (this.pendingOwnerGenerations > 0 || this.pendingBeatEvents > 0) {
+      const scheduler = this.snapshot.diagnostics.scheduler ?? createSchedulerDiagnostics()
+
+      this.snapshot = {
+        ...this.snapshot,
+        diagnostics: {
+          ...this.snapshot.diagnostics,
+          scheduler: {
+            ...scheduler,
+            ownerGenerationsSet:
+              scheduler.ownerGenerationsSet + this.pendingOwnerGenerations,
+            beatEventsInserted: scheduler.beatEventsInserted + this.pendingBeatEvents
+          }
+        }
+      }
+      this.pendingOwnerGenerations = 0
+      this.pendingBeatEvents = 0
+    }
+
+    return super.getSnapshot()
+  }
+}
+
+class DelayedStopRuntimeBackend extends FakeRuntimeBackend {
+  private stopPending = false
+  private stopSnapshots = 0
+
+  sendCommands(commands: readonly EngineCommand[]): void {
+    for (const command of commands) {
+      if (command.type === 'transport:stop') {
+        this.commands.push(command)
+        this.stopPending = true
+        this.stopSnapshots = 0
+        continue
+      }
+
+      super.sendCommands([command])
+    }
+  }
+
+  async getSnapshot(): Promise<RuntimeSnapshot> {
+    if (this.stopPending) {
+      this.stopSnapshots += 1
+
+      if (this.stopSnapshots >= 2) {
+        this.playing = false
+        this.stopPending = false
+      }
+    }
+
+    return super.getSnapshot()
+  }
 }
 
 class AdvancingSnapshotRuntimeBackend extends FakeRuntimeBackend {
@@ -688,6 +1215,48 @@ function createPlaybackModelFixture(): PlaybackModel {
   })
 }
 
+function createSchedulerDiagnostics(
+  beatEventsInserted = 0
+): NonNullable<RuntimeSnapshot['diagnostics']['scheduler']> {
+  return {
+    ownerGenerationsSet: 0,
+    sampleEventsInserted: 0,
+    beatEventsInserted,
+    beatEventMinSample: null,
+    beatEventMaxSample: null,
+    eventsDroppedCapacity: 0,
+    eventsDroppedNotPlaying: 0,
+    eventsDiscardedOwner: 0,
+    eventsDiscardedFutureOwner: 0,
+    noteOnsDispatched: 0,
+    noteOffsDispatched: 0,
+    loopReschedules: 0,
+    loopRescheduleSkippedDisabled: 0,
+    loopRescheduleSkippedOutside: 0,
+    eventsCleared: 0,
+    transportLoopEnabled: false,
+    transportLoopStartSample: 0,
+    transportLoopEndSample: 0
+  }
+}
+
+function createFirstBeatPlaybackModelFixture(): PlaybackModel {
+  return freezePlaybackModel({
+    ...createPlaybackModelFixture(),
+    notes: [0, 0.25, 0.5, 0.75].map((beat, index) => ({
+      id: `note-${index + 1}`,
+      sourceNoteId: `note-${index + 1}`,
+      trackId: 'track-1',
+      clipId: 'clip-1',
+      patternId: 'pattern-1',
+      pitch: 60 + index,
+      velocity: 0.8,
+      beat,
+      duration: 0.125
+    }))
+  })
+}
+
 function createPlaybackGraphFixture(): PlaybackModel {
   return freezePlaybackModel({
     ...createEmptyPlaybackModel(120),
@@ -699,6 +1268,45 @@ function createPlaybackGraphFixture(): PlaybackModel {
         channel: 1,
         mixer: { volume: 1, pan: 0 },
         deviceInstanceIds: ['device-1']
+      }
+    ]
+  })
+}
+
+function createActivePlaybackModelFixture(start = 0, bpm = 120): PlaybackModel {
+  return freezePlaybackModel({
+    ...createPlaybackModelFixture(),
+    tempoMap: {
+      defaultBpm: bpm,
+      changes: [{ beat: 0, bpm }]
+    },
+    clips: [
+      {
+        id: 'clip-1:active',
+        trackId: 'track-1',
+        patternId: 'pattern-1',
+        name: 'Main',
+        start,
+        length: 4,
+        loop: true,
+        loopStart: 0,
+        loopLength: 4,
+        sourceStart: 0,
+        sourceLength: 4,
+        loopIndex: 0
+      }
+    ],
+    notes: [
+      {
+        id: 'clip-1:active:note-1',
+        sourceNoteId: 'note-1',
+        trackId: 'track-1',
+        clipId: 'clip-1:active',
+        patternId: 'pattern-1',
+        pitch: 69,
+        velocity: 0.8,
+        beat: start,
+        duration: 1
       }
     ]
   })
@@ -768,6 +1376,25 @@ function createEmptyClipPlaybackModelFixture(): PlaybackModel {
   return freezePlaybackModel({
     ...createPlaybackModelFixture(),
     notes: []
+  })
+}
+
+function createEditedPlaybackModelFixture(): PlaybackModel {
+  return freezePlaybackModel({
+    ...createPlaybackModelFixture(),
+    notes: [
+      {
+        id: 'note-1',
+        sourceNoteId: 'note-1',
+        trackId: 'track-1',
+        clipId: 'clip-1',
+        patternId: 'pattern-1',
+        pitch: 72,
+        velocity: 0.8,
+        beat: 0,
+        duration: 1
+      }
+    ]
   })
 }
 

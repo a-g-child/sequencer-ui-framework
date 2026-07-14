@@ -4,6 +4,7 @@ import {
   DEFAULT_AUDIO_NODE_DESCRIPTORS,
   buildDeviceChainGraph,
   type AudioGraphDiagnostic,
+  type NativeExecutionPlan,
   type RuntimeAudioGraph,
   type RuntimeNodeDiagnostics
 } from '@sequencer/audio-graph'
@@ -35,12 +36,14 @@ import type { PlaybackModel } from './model.ts'
 import { NativeAudioAdapter } from './native/NativeAudioAdapter.ts'
 import { compilePlaybackModelToNativePlan } from './native/PlaybackModelCompiler.ts'
 import {
-  compileNativeClipSchedule,
+  compileNativePlaybackEventSchedule,
+  NATIVE_EVENT_INPUT_NODE_ID,
   createNativeTempoMapCommand,
   createNativeTransportLoopCommand,
   nativeClipImmediateNoteOffCommands,
   nativeClipScheduleBatchCommand,
   nativeScheduledEventOwnerGenerationCommand,
+  type NativeClipScheduleSubmission,
   NativeClipScheduleSubmissionState,
 } from './native/NativeClipSchedule.ts'
 import {
@@ -79,6 +82,9 @@ import {
 
 const MIN_NATIVE_SCHEDULE_LEAD_SAMPLES = 4096
 const NATIVE_SCHEDULE_LEAD_SECONDS = 0.25
+const NATIVE_SCHEDULER_LOOKAHEAD_MS = 250
+const NATIVE_INITIAL_SCHEDULE_MIN_LOOKAHEAD_BEATS = 1
+const NATIVE_START_BOUNDARY_EVENT_NUDGE_SAMPLES = 128
 
 export interface PlaybackServiceStatus extends SchedulerStatus {
   readonly modelId: string
@@ -103,6 +109,21 @@ export interface PlaybackNativeRuntimeStatus {
   readonly lastAction: string
   readonly lastCommandTypes: readonly string[]
   readonly lastError?: string
+}
+
+type NativeClipScheduleSubmitResult = {
+  readonly startSample: number
+  readonly commandSnapshot?: RuntimeSnapshot
+  readonly beatEventCount: number
+  readonly baseBeatEventsInserted?: number
+  readonly clipId?: string
+  readonly generation?: number
+  readonly scheduleSample: number
+  readonly originBeat: number
+  readonly firstEventBeat?: number
+  readonly lastEventBeat?: number
+  readonly targetNodes: readonly number[]
+  readonly commandTypes: readonly string[]
 }
 
 export interface PlaybackTrackGraphDiagnostics {
@@ -149,16 +170,23 @@ export class PlaybackService implements Service, DocumentObserver {
   private readonly webAudioOutput = new WebAudioOutput()
   private readonly webMidiOutput = new WebMidiOutput()
   private readonly nativeClipScheduleSubmissions = new NativeClipScheduleSubmissionState()
+  private readonly nativeScheduledClipModels = new Map<string, PlaybackModel>()
+  private readonly nativePreScheduledLaunches = new Map<
+    string,
+    { readonly clipId: string; readonly launchAtBeat: number }
+  >()
   private nativeRuntimeStatus: PlaybackNativeRuntimeStatus = {
     lastAction: 'idle',
     lastCommandTypes: []
   }
   private unsubscribeServiceEvents?: () => void
   private unsubscribeRuntimeController?: () => void
+  private pendingNativeTransportStop?: Promise<void>
   private activeNativeCompilation?: {
     readonly planId: string
     readonly revision: number
     readonly modelKey: string
+    readonly eventInputNodeId?: number
   }
   private pendingNativePlanPreparation?: {
     readonly modelKey: string
@@ -380,18 +408,25 @@ export class PlaybackService implements Service, DocumentObserver {
   ): void {
     const previousClipId = this.liveClips.state.activeClipByTrackId[trackId]?.clipId
 
-    this.liveClips.requestLaunch(
+    const clockState = this.currentLaunchClockState()
+    const launch = this.liveClips.requestLaunch(
       trackId,
       clipId,
-      this.latestClockState ?? this.createStoppedClockState(),
+      clockState,
       launchQuantize
+    )
+    const nativeLaunchScheduled = this.submitNativePendingClipLaunch(
+      trackId,
+      clipId,
+      launch.launchAtBeat,
+      clockState
     )
     const activeClipId = this.liveClips.state.activeClipByTrackId[trackId]?.clipId
 
     if (activeClipId === clipId) {
       this.clearTrackVoicesAfterClipSwitch(trackId, previousClipId, clipId)
     }
-    this.rebuildModel()
+    this.rebuildModel({ submitNativeClipSchedule: !nativeLaunchScheduled })
     this.emitStatus()
   }
 
@@ -401,7 +436,7 @@ export class PlaybackService implements Service, DocumentObserver {
   ): void {
     if (launches.length === 0) return
 
-    const clockState = this.latestClockState ?? this.createStoppedClockState()
+    const clockState = this.currentLaunchClockState()
     const previousClipIdByTrackId = Object.fromEntries(
       launches.map(({ trackId }) => [
         trackId,
@@ -409,13 +444,22 @@ export class PlaybackService implements Service, DocumentObserver {
       ])
     )
 
+    let nativeLaunchesScheduled = launches.length > 0
+
     for (const { trackId, clipId } of launches) {
-      this.liveClips.requestLaunch(
+      const launch = this.liveClips.requestLaunch(
         trackId,
         clipId,
         clockState,
         launchQuantize
       )
+      nativeLaunchesScheduled =
+        this.submitNativePendingClipLaunch(
+          trackId,
+          clipId,
+          launch.launchAtBeat,
+          clockState
+        ) && nativeLaunchesScheduled
     }
 
     for (const { trackId, clipId } of launches) {
@@ -431,7 +475,7 @@ export class PlaybackService implements Service, DocumentObserver {
       }
     }
 
-    this.rebuildModel()
+    this.rebuildModel({ submitNativeClipSchedule: !nativeLaunchesScheduled })
     this.emitStatus()
   }
 
@@ -585,6 +629,29 @@ export class PlaybackService implements Service, DocumentObserver {
     }
   }
 
+  private consumeNativePreScheduledLaunches(
+    launches: readonly AppliedClipLaunch[]
+  ): boolean {
+    if (launches.length === 0) return false
+
+    let allPreScheduled = true
+
+    for (const launch of launches) {
+      const preScheduled = this.nativePreScheduledLaunches.get(launch.trackId)
+      const matches =
+        preScheduled?.clipId === launch.clipId &&
+        preScheduled.launchAtBeat === launch.launchAtBeat
+
+      if (matches) {
+        this.nativePreScheduledLaunches.delete(launch.trackId)
+      } else {
+        allPreScheduled = false
+      }
+    }
+
+    return allPreScheduled
+  }
+
   private handleServiceEvent(event: ServiceEvent): void {
     if (event.serviceId === this.id) return
 
@@ -596,6 +663,7 @@ export class PlaybackService implements Service, DocumentObserver {
       this.clearTrackVoicesForAppliedLaunches(this.liveClips.applyDueLaunches(state))
       this.rebuildModel({ prepareNativeRuntimePlan: false })
       if (this.runtimeController) {
+        this.scheduler.start(state.beat)
         void this.prepareAndStartNativeRuntime(state).catch((error) => {
           this.setNativeRuntimeStatus('transport-start-failed', [], error)
           this.runtimeController?.fail(error)
@@ -611,8 +679,19 @@ export class PlaybackService implements Service, DocumentObserver {
       this.latestClockState = event.payload as ClockState
       this.scheduler.stop()
       this.nativeClipScheduleSubmissions.stop()
+      this.nativeScheduledClipModels.clear()
+      this.nativePreScheduledLaunches.clear()
       if (this.runtimeController) {
-        void this.runtimeController.stop().catch(() => {})
+        const stop = this.runtimeController.stop().catch((error) => {
+          this.setNativeRuntimeStatus('transport-stop-failed', [], error)
+          this.runtimeController?.fail(error)
+        })
+        const pendingStop = stop.finally(() => {
+          if (this.pendingNativeTransportStop === pendingStop) {
+            this.pendingNativeTransportStop = undefined
+          }
+        })
+        this.pendingNativeTransportStop = pendingStop
       } else {
         this.panicRuntimeVoices()
       }
@@ -654,9 +733,16 @@ export class PlaybackService implements Service, DocumentObserver {
 
         if (appliedLaunches.length > 0) {
           this.clearTrackVoicesForAppliedLaunches(appliedLaunches)
-          this.rebuildModel({ prepareNativeRuntimePlan: false })
+          this.rebuildModel({
+            prepareNativeRuntimePlan: false,
+            submitNativeClipSchedule: !this.consumeNativePreScheduledLaunches(
+              appliedLaunches
+            )
+          })
         }
 
+        const events = this.scheduler.tick(state)
+        this.submitNativeSchedulerEvents(events, state)
         this.emitStatus()
         return
       }
@@ -696,14 +782,37 @@ export class PlaybackService implements Service, DocumentObserver {
   private async prepareAndStartNativeRuntime(state: ClockState): Promise<void> {
     if (!this.runtimeController || !this.model) return
 
+    await this.pendingNativeTransportStop
+    this.scheduler.setModel(this.model)
+    this.scheduler.start(state.beat)
     this.setNativeRuntimeStatus('prepare-start')
     await this.prepareNativeRuntimePlan(this.model)
     this.setNativeRuntimeStatus('schedule-start')
-    const startSample = await this.submitNativeClipSchedule(state, 'begin')
+    this.nativeClipScheduleSubmissions.stop()
+    this.nativeScheduledClipModels.clear()
+    const schedule = await this.submitNativeClipSchedule(state, 'begin')
+    this.logNativePlaybackStart('before-transport-start', {
+      clockBeat: state.beat,
+      clockBpm: state.bpm,
+      schedule
+    })
     this.setNativeRuntimeStatus('transport-start-requested')
     await this.runtimeController.play(
-      startSample === undefined ? undefined : { atSample: startSample }
+      schedule === undefined
+        ? undefined
+        : {
+            atSample: schedule.startSample,
+            commandSnapshot: schedule.commandSnapshot
+          }
     )
+    const snapshot = await this.runtimeController.refreshSnapshot()
+    this.logNativePlaybackStart('after-transport-start', {
+      clockBeat: state.beat,
+      clockBpm: state.bpm,
+      schedule,
+      snapshot: nativeStartSnapshotDiagnostics(snapshot)
+    })
+    this.logNativePlaybackStartFollowUps(state, schedule)
     this.setNativeRuntimeStatus('transport-start-confirmed')
   }
 
@@ -801,7 +910,8 @@ export class PlaybackService implements Service, DocumentObserver {
     this.activeNativeCompilation = {
       planId: compilation.plan.id,
       revision: compilation.plan.revision,
-      modelKey
+      modelKey,
+      eventInputNodeId: nativeEventInputNodeId(compilation.plan)
     }
     this.setNativeRuntimeStatus('plan-active')
   }
@@ -825,6 +935,51 @@ export class PlaybackService implements Service, DocumentObserver {
     })
   }
 
+  private submitNativeSchedulerEvents(
+    events: readonly PlaybackEvent[],
+    state: ClockState
+  ): void {
+    if (!this.runtimeController || events.length === 0) return
+    if (!this.runtimeController.status.snapshot?.transport.playing) return
+
+    const generation = this.nativeClipScheduleSubmissions.current()
+
+    if (!generation) return
+
+    void this.sendNativeSchedulerEvents(events, generation, state).catch((error) => {
+      this.setNativeRuntimeStatus('scheduler-events-failed', [], error)
+      this.runtimeController?.fail(error)
+    })
+  }
+
+  private async sendNativeSchedulerEvents(
+    events: readonly PlaybackEvent[],
+    generation: { readonly clipId: string; readonly generation: number },
+    state: ClockState
+  ): Promise<void> {
+    if (!this.runtimeController) return
+
+    const snapshot = await this.runtimeController.refreshSnapshot()
+    const sampleRate = snapshot?.stream.sampleRate || snapshot?.sampleRate || 48_000
+    const currentSample = snapshot?.transport.samplePosition ?? 0
+    const atSample = currentSample + nativeScheduleLeadSamples(sampleRate)
+    const schedule = compileNativePlaybackEventSchedule(events, {
+      clipId: generation.clipId,
+      generation: generation.generation,
+      targetNodes: this.nativeScheduleTargetNodes()
+    })
+
+    if (schedule.events.length === 0) return
+
+    const command = nativeClipScheduleBatchCommand(schedule, {
+      atSample,
+      timeMs: state.timeMs
+    })
+
+    this.setNativeRuntimeStatus('scheduler-events', [command.type])
+    this.runtimeController.sendCommands([command])
+  }
+
   private submitNativeTempoMapUpdate(state: ClockState): void {
     if (!this.runtimeController || !this.model) return
     if (!this.runtimeController.status.snapshot?.transport.playing) return
@@ -839,10 +994,87 @@ export class PlaybackService implements Service, DocumentObserver {
     if (!this.runtimeController || !this.model || !this.latestClockState?.running) return
     if (!this.runtimeController.status.snapshot?.transport.playing) return
 
-    void this.sendNativeClipStop(clipId, this.latestClockState).catch((error) => {
+    const playbackClipId = this.nativePlaybackClipIdForLaunch(clipId) ?? clipId
+
+    void this.sendNativeClipStop(playbackClipId, this.latestClockState).catch((error) => {
       this.setNativeRuntimeStatus('clip-stop-failed', [], error)
       this.runtimeController?.fail(error)
     })
+  }
+
+  private submitNativePendingClipLaunch(
+    trackId: string,
+    clipId: string,
+    launchAtBeat: number,
+    state: ClockState
+  ): boolean {
+    if (!this.runtimeController || !this.context || !state.running) return false
+    if (!this.runtimeController.status.snapshot?.transport.playing) return false
+
+    void this.sendNativePendingClipLaunch(
+      trackId,
+      clipId,
+      launchAtBeat,
+      state
+    ).catch((error) => {
+      this.setNativeRuntimeStatus('clip-launch-schedule-failed', [], error)
+      this.runtimeController?.fail(error)
+    })
+    return true
+  }
+
+  private async sendNativePendingClipLaunch(
+    trackId: string,
+    clipId: string,
+    launchAtBeat: number,
+    state: ClockState
+  ): Promise<void> {
+    if (!this.runtimeController || !this.context) return
+
+    const snapshot = await this.runtimeController.refreshSnapshot()
+    const sampleRate = snapshot?.stream.sampleRate || snapshot?.sampleRate || 48_000
+    const currentSample = snapshot?.transport.samplePosition ?? 0
+    const currentBeat = snapshot?.transport.beatPosition ?? state.beat
+    const launchSample = currentSample + beatDeltaToSamples(
+      launchAtBeat - currentBeat,
+      state.bpm,
+      sampleRate
+    )
+    const atSample = Math.max(
+      currentSample + nativeScheduleLeadSamples(sampleRate),
+      launchSample
+    )
+    const launchModel = this.builder.build(
+      this.context.documentStore.document,
+      this.runtimeBpm ?? state.bpm,
+      {
+        activeClipsByTrackId: {
+          ...this.liveClips.state.activeClipByTrackId,
+          [trackId]: { trackId, clipId, launchedAtBeat: launchAtBeat }
+        }
+      }
+    )
+    const clip = launchModel.clips.find(
+      (candidate) =>
+        candidate.trackId === trackId &&
+        playbackClipMatchesLaunch(candidate.id, clipId)
+    )
+
+    if (!clip) return
+
+    this.sendNativeClipScheduleForModel(
+      launchModel,
+      clip,
+      this.nativeClipScheduleSubmissions.replace(clip.id),
+      {
+        atSample,
+        originBeat: launchAtBeat,
+        bpm: state.bpm,
+        sampleRate
+      },
+      'clip-launch-schedule'
+    )
+    this.nativePreScheduledLaunches.set(trackId, { clipId, launchAtBeat })
   }
 
   private async sendNativeClipStop(
@@ -852,16 +1084,21 @@ export class PlaybackService implements Service, DocumentObserver {
     if (!this.runtimeController || !this.model) return
 
     const snapshot = await this.runtimeController.refreshSnapshot()
-    const atSample = snapshot?.transport.samplePosition ?? 0
-    const commands = nativeClipImmediateNoteOffCommands(this.model, {
+    const sampleRate = snapshot?.stream.sampleRate || snapshot?.sampleRate || 48_000
+    const currentSample = snapshot?.transport.samplePosition ?? 0
+    const atSample = currentSample + nativeScheduleLeadSamples(sampleRate)
+    const scheduledModel = this.nativeScheduledClipModels.get(clipId) ?? this.model
+    const commands = nativeClipImmediateNoteOffCommands(scheduledModel, {
       clipId,
       beat: state.beat,
       atSample,
-      timeMs: nowMs()
+      timeMs: nowMs(),
+      releaseAll: true
     })
 
     if (commands.length === 0) return
 
+    this.nativeScheduledClipModels.delete(clipId)
     this.setNativeRuntimeStatus(
       'clip-stop-release',
       commands.map((command) => command.type)
@@ -892,15 +1129,25 @@ export class PlaybackService implements Service, DocumentObserver {
   private async submitNativeClipSchedule(
     state: ClockState,
     mode: 'begin' | 'replace'
-  ): Promise<number | undefined> {
+  ): Promise<NativeClipScheduleSubmitResult | undefined> {
     if (!this.runtimeController || !this.model) return
 
     const snapshot = await this.runtimeController.refreshSnapshot()
     const sampleRate = snapshot?.stream.sampleRate || snapshot?.sampleRate || 48_000
     const currentSample = snapshot?.transport.samplePosition ?? 0
-    const atSample = currentSample + nativeScheduleLeadSamples(sampleRate)
-    const originBeat = this.nativeOriginBeatAtScheduledSample(snapshot, state, atSample)
-    const timeMs = nowMs()
+    const baseBeatEventsInserted =
+      mode === 'begin'
+        ? snapshot.diagnostics.scheduler?.beatEventsInserted
+        : undefined
+    const originSample =
+      mode === 'begin'
+        ? currentSample + nativeScheduleLeadSamples(sampleRate)
+        : currentSample + nativeScheduleLeadSamples(sampleRate)
+    const scheduleSample = originSample
+    const originBeat =
+      mode === 'begin'
+        ? state.beat
+        : this.nativeOriginBeatAtScheduledSample(snapshot, state, scheduleSample)
     const clip = this.nativeScheduleClip()
     const submission = clip
       ? mode === 'replace'
@@ -910,39 +1157,106 @@ export class PlaybackService implements Service, DocumentObserver {
         ? this.nativeClipScheduleSubmissions.clear()
         : undefined
 
+    return this.sendNativeClipScheduleForModel(
+      this.model,
+      clip,
+      submission,
+      {
+        atSample: scheduleSample,
+        originSample,
+        originBeat,
+        bpm: state.bpm,
+        sampleRate,
+        nudgeStartBoundaryEvents: mode === 'begin'
+      },
+      `clip-schedule-${mode}`,
+      baseBeatEventsInserted,
+      mode === 'begin' ? snapshot : undefined
+    )
+  }
+
+  private sendNativeClipScheduleForModel(
+    model: PlaybackModel,
+    clip: PlaybackModel['clips'][number] | undefined,
+    submission: NativeClipScheduleSubmission | undefined,
+    options: {
+      readonly atSample: number
+      readonly originSample?: number
+      readonly originBeat: number
+      readonly bpm: number
+      readonly sampleRate: number
+      readonly nudgeStartBoundaryEvents?: boolean
+    },
+    action: string,
+    baseBeatEventsInserted?: number,
+    commandSnapshot?: RuntimeSnapshot
+  ): NativeClipScheduleSubmitResult | undefined {
+    if (!this.runtimeController) return undefined
     if (submission === undefined) return undefined
 
+    const timeMs = nowMs()
+    const { atSample, originBeat, bpm, sampleRate } = options
+    const originSample = options.originSample ?? atSample
     const commands: EngineCommand[] = submission.invalidations.map((generation) =>
       nativeScheduledEventOwnerGenerationCommand(generation, {
         atSample,
         timeMs
       })
     )
+    for (const generation of submission.invalidations) {
+      this.nativeScheduledClipModels.delete(generation.clipId)
+    }
+
+    let beatEventCount = 0
+    let activeClipId: string | undefined
+    let activeGeneration: number | undefined
+    let firstEventBeat: number | undefined
+    let lastEventBeat: number | undefined
 
     if (clip && submission.active) {
-      const schedule = compileNativeClipSchedule(this.model, {
-        clipId: clip.id,
-        generation: submission.active.generation
-      })
+      activeClipId = clip.id
+      activeGeneration = submission.active.generation
+      const lookaheadBeats = nativeInitialScheduleLookaheadBeats(clip)
+      const schedulerEvents =
+        model === this.model
+          ? this.scheduler.scheduleLookahead(lookaheadBeats)
+          : nativeSchedulerEventsForModel(
+              model,
+              originBeat,
+              lookaheadBeats
+            )
+      const schedule = compileNativePlaybackEventSchedule(
+        options.nudgeStartBoundaryEvents
+          ? nudgeStartBoundaryNoteOns(schedulerEvents, originBeat, bpm, sampleRate)
+          : schedulerEvents,
+        {
+          clipId: clip.id,
+          generation: submission.active.generation,
+          targetNodes: this.nativeScheduleTargetNodes()
+        }
+      )
+      beatEventCount = schedule.events.length
+      firstEventBeat = schedule.events[0]?.atBeat
+      lastEventBeat = schedule.events.at(-1)?.atBeat
 
       commands.push(
         nativeScheduledEventOwnerGenerationCommand(submission.active, {
           atSample,
           timeMs
         }),
-        createNativeTempoMapCommand(this.model, {
+        createNativeTempoMapCommand(model, {
           sampleRate,
-          bpm: state.bpm,
-          originSample: atSample,
+          bpm,
+          originSample,
           originBeat,
           atSample,
           timeMs
         }),
         createNativeTransportLoopCommand({
-          clip,
-          bpm: state.bpm,
+          clip: { ...clip, loop: false },
+          bpm,
           sampleRate,
-          originSample: atSample,
+          originSample,
           originBeat,
           atSample,
           timeMs
@@ -957,16 +1271,117 @@ export class PlaybackService implements Service, DocumentObserver {
           })
         )
       }
+
+      this.nativeScheduledClipModels.set(clip.id, model)
     }
 
-    if (commands.length === 0) return atSample
+    if (commands.length === 0) {
+      return {
+        startSample: originSample,
+        commandSnapshot,
+        beatEventCount: 0,
+        baseBeatEventsInserted,
+        scheduleSample: atSample,
+        originBeat,
+        targetNodes: this.nativeScheduleTargetNodes(),
+        commandTypes: []
+      }
+    }
 
     this.setNativeRuntimeStatus(
-      `clip-schedule-${mode}`,
+      action,
       commands.map((command) => command.type)
     )
     this.runtimeController.sendCommands(commands)
-    return atSample
+    return {
+      startSample: originSample,
+      commandSnapshot,
+      beatEventCount,
+      baseBeatEventsInserted,
+      clipId: activeClipId,
+      generation: activeGeneration,
+      scheduleSample: atSample,
+      originBeat,
+      firstEventBeat,
+      lastEventBeat,
+      targetNodes: this.nativeScheduleTargetNodes(),
+      commandTypes: commands.map((command) => command.type)
+    }
+  }
+
+  private nativeScheduleTargetNodes(): readonly number[] {
+    return uniqueNumbers([
+      NATIVE_EVENT_INPUT_NODE_ID,
+      this.activeNativeCompilation?.eventInputNodeId
+    ])
+  }
+
+  private logNativePlaybackStart(
+    stage: string,
+    details: {
+      readonly clockBeat: number
+      readonly clockBpm: number
+      readonly schedule?: NativeClipScheduleSubmitResult
+      readonly snapshot?: ReturnType<typeof nativeStartSnapshotDiagnostics>
+    }
+  ): void {
+    if (!nativeStartLoggingEnabled()) return
+
+    const payload = {
+      stage,
+      timeMs: nowMs(),
+      clockBeat: details.clockBeat,
+      clockBpm: details.clockBpm,
+      schedule: details.schedule === undefined
+        ? undefined
+        : {
+            clipId: details.schedule.clipId,
+            generation: details.schedule.generation,
+            scheduleSample: details.schedule.scheduleSample,
+            startSample: details.schedule.startSample,
+            leadSamples:
+              details.schedule.startSample - details.schedule.scheduleSample,
+            originBeat: details.schedule.originBeat,
+            beatEventCount: details.schedule.beatEventCount,
+            baseBeatEventsInserted:
+              details.schedule.baseBeatEventsInserted,
+            firstEventBeat: details.schedule.firstEventBeat,
+            lastEventBeat: details.schedule.lastEventBeat,
+            targetNodes: details.schedule.targetNodes,
+            commandTypes: details.schedule.commandTypes
+          },
+      snapshot: details.snapshot
+    }
+
+    console.info(`[playback:native-start] ${JSON.stringify(payload)}`)
+  }
+
+  private logNativePlaybackStartFollowUps(
+    state: ClockState,
+    schedule: NativeClipScheduleSubmitResult | undefined
+  ): void {
+    if (!this.runtimeController || !nativeStartLoggingEnabled()) return
+
+    for (const delayMs of [350, 2_500]) {
+      setTimeout(() => {
+        this.runtimeController?.refreshSnapshot()
+          .then((snapshot) => {
+            this.logNativePlaybackStart(`after-start+${delayMs}ms`, {
+              clockBeat: state.beat,
+              clockBpm: state.bpm,
+              schedule,
+              snapshot: nativeStartSnapshotDiagnostics(snapshot)
+            })
+          })
+          .catch((error) => {
+            console.info(`[playback:native-start] ${JSON.stringify({
+              stage: `after-start+${delayMs}ms`,
+              timeMs: nowMs(),
+              error: runtimeErrorMessage(error)
+            })}`)
+          })
+      }, delayMs)
+    }
   }
 
   private nativeOriginBeatAtScheduledSample(
@@ -1006,6 +1421,16 @@ export class PlaybackService implements Service, DocumentObserver {
     }
 
     return this.model.clips[0]
+  }
+
+  private nativePlaybackClipIdForLaunch(
+    clipId: string
+  ): string | undefined {
+    if (!this.model) return undefined
+
+    return this.model.clips.find((candidate) =>
+      playbackClipMatchesLaunch(candidate.id, clipId)
+    )?.id
   }
 
   private nativeActiveClips(
@@ -1300,6 +1725,22 @@ export class PlaybackService implements Service, DocumentObserver {
     }
   }
 
+  private currentLaunchClockState(): ClockState {
+    const snapshot = this.runtimeController?.status.snapshot
+
+    if (snapshot?.transport.playing) {
+      return {
+        running: true,
+        beat: snapshot.transport.beatPosition,
+        bpm: this.runtimeBpm ?? this.latestClockState?.bpm ?? 120,
+        timeMs: nowMs(),
+        sourceId: 'native-runtime'
+      }
+    }
+
+    return this.latestClockState ?? this.createStoppedClockState()
+  }
+
 }
 
 export type { PlaybackEvent }
@@ -1508,6 +1949,102 @@ function nativeScheduleLeadSamples(sampleRate: number): number {
   )
 }
 
+function beatDeltaToSamples(
+  beatDelta: number,
+  bpm: number,
+  sampleRate: number
+): number {
+  return Math.max(
+    0,
+    Math.round((Math.max(0, beatDelta) * 60 * Math.max(1, sampleRate)) / Math.max(1, bpm))
+  )
+}
+
+function nudgeStartBoundaryNoteOns(
+  events: readonly PlaybackEvent[],
+  originBeat: number,
+  bpm: number,
+  sampleRate: number
+): readonly PlaybackEvent[] {
+  const beatNudge =
+    (NATIVE_START_BOUNDARY_EVENT_NUDGE_SAMPLES * Math.max(1, bpm)) /
+    60 /
+    Math.max(1, sampleRate)
+
+  return events.map((event) => {
+    if (event.type !== 'note:on' || event.beat !== originBeat) return event
+
+    return {
+      ...event,
+      beat: event.beat + beatNudge
+    }
+  })
+}
+
+function nativeInitialScheduleLookaheadBeats(
+  clip: PlaybackModel['clips'][number]
+): number {
+  const preferredLength = clip.loop && clip.loopLength > 0
+    ? clip.loopLength
+    : Math.max(clip.length, clip.sourceLength)
+
+  return Math.max(NATIVE_INITIAL_SCHEDULE_MIN_LOOKAHEAD_BEATS, preferredLength)
+}
+
+function nativeSchedulerEventsForModel(
+  model: PlaybackModel,
+  beat: number,
+  lookaheadBeats: number
+): readonly PlaybackEvent[] {
+  const scheduler = new TypeScriptScheduler()
+
+  scheduler.setModel(model)
+  scheduler.start(beat)
+
+  return scheduler.scheduleLookahead(lookaheadBeats)
+}
+
+function nativeEventInputNodeId(
+  plan: NativeExecutionPlan
+): number | undefined {
+  const eventInputNodeId =
+    plan.eventRoutes.find((route) => {
+      const source = plan.nodes.find((node) => node.nodeId === route.sourceNodeId)
+
+      return source?.descriptorId === 'sequencer.source.midi-input'
+    })?.sourceNodeId ??
+    plan.nodes.find(
+      (node) => node.descriptorId === 'sequencer.source.midi-input'
+    )?.nodeId
+
+  return eventInputNodeId
+    ? stableNumericId(eventInputNodeId)
+    : undefined
+}
+
+function stableNumericId(value: string): number {
+  let hash = 5381
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 33) ^ value.charCodeAt(index)
+  }
+
+  return (hash >>> 0) || 1
+}
+
+function uniqueNumbers(values: readonly (number | undefined)[]): readonly number[] {
+  return [
+    ...new Set(
+      values.filter(
+        (value): value is number =>
+          typeof value === 'number' &&
+          Number.isFinite(value) &&
+          value > 0
+      )
+    )
+  ]
+}
+
 function voiceStatsFromDiagnostics(
   diagnostics: unknown
 ): {
@@ -1555,4 +2092,69 @@ function runtimeErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message
 
   return String(error)
+}
+
+function nativeStartLoggingEnabled(): boolean {
+  return typeof (globalThis as { window?: unknown }).window !== 'undefined'
+}
+
+function nativeStartSnapshotDiagnostics(snapshot: RuntimeSnapshot): {
+  readonly transport: {
+    readonly playing: boolean
+    readonly samplePosition: number
+    readonly beatPosition: number
+  }
+  readonly plan: {
+    readonly activePlanId: number | null
+    readonly activeRevision: number | null
+    readonly pendingTransfers: number
+  }
+  readonly scheduler?: {
+    readonly ownerGenerationsSet: number
+    readonly beatEventsInserted: number
+    readonly beatEventMinSample?: number | null
+    readonly beatEventMaxSample?: number | null
+    readonly sampleEventsInserted: number
+    readonly noteOnsDispatched: number
+    readonly noteOffsDispatched: number
+    readonly eventsDiscardedOwner: number
+    readonly eventsDiscardedFutureOwner: number
+    readonly eventsDroppedNotPlaying: number
+    readonly eventsDroppedCapacity: number
+    readonly loopReschedules: number
+    readonly eventsCleared: number
+    readonly transportLoopEnabled: boolean
+    readonly transportLoopStartSample: number
+    readonly transportLoopEndSample: number
+  }
+  readonly eventGraph?: {
+    readonly eventsReceived: number
+    readonly routeDispatches: number
+    readonly eventsEmitted: number
+    readonly eventsSuppressed: number
+    readonly eventsDroppedCapacity: number
+    readonly eventsDroppedDepth: number
+    readonly eventsDroppedBudget: number
+    readonly futureEventsRequested: number
+    readonly futureEventsRejectedLate: number
+    readonly futureEventsDroppedCapacity: number
+    readonly futureEventsDroppedSchedulerFull: number
+    readonly futureEventsDiscardedPlanRevision: number
+    readonly futureEventsDiscardedGeneration: number
+  }
+} {
+  return {
+    transport: {
+      playing: snapshot.transport.playing,
+      samplePosition: snapshot.transport.samplePosition,
+      beatPosition: snapshot.transport.beatPosition
+    },
+    plan: {
+      activePlanId: snapshot.plan.activePlanId,
+      activeRevision: snapshot.plan.activeRevision,
+      pendingTransfers: snapshot.plan.pendingTransfers
+    },
+    scheduler: snapshot.diagnostics.scheduler,
+    eventGraph: snapshot.diagnostics.eventGraph
+  }
 }

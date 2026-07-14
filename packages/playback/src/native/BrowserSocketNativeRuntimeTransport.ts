@@ -27,6 +27,7 @@ import {
   type NativeRuntimeSocketServerMessage,
   type NativeRuntimeSocketSuccess
 } from './NativeRuntimeSocketProtocol.ts'
+import { toEngineHostPlan } from './EngineHostPlan.ts'
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 5_000
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
@@ -217,7 +218,10 @@ export class BrowserSocketNativeRuntimeTransport
     await this.ensureConnected()
     this.ensureRuntimeStarted()
 
-    return (await this.sendRequest('plan:prepare', plan)) as NativePreparedPlanHandle
+    return (await this.sendRequest(
+      'plan:prepare',
+      toEngineHostPlan(plan)
+    )) as NativePreparedPlanHandle
   }
 
   async activatePlan(

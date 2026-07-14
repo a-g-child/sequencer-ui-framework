@@ -13,6 +13,7 @@ import type {
   NativeRuntimeTransport,
   NativeSessionCapabilities
 } from './NativeRuntimeTransport.ts'
+import { toEngineHostPlan } from './EngineHostPlan.ts'
 
 export interface NativeRuntimeStartOptions {
   readonly driver?: NativeAudioDriver
@@ -137,7 +138,7 @@ export class RendererNativeRuntimeTransport implements NativeRuntimeTransport {
   }
 
   async preparePlan(plan: unknown): Promise<NativePreparedPlanHandle> {
-    return this.getRuntimeApi().preparePlan(plan)
+    return this.getRuntimeApi().preparePlan(toEngineHostPlan(plan))
   }
 
   async activatePlan(

@@ -170,6 +170,60 @@ describe('BrowserSocketNativeRuntimeTransport', () => {
     await transport.dispose()
   })
 
+  it('lowers app native execution plans before preparing over the socket', async () => {
+    let preparedPlan: unknown
+    const server = new FakeSocketServer((socket, payload) => {
+      if (payload.type === 'handshake') {
+        socket.sendServerMessage({
+          type: 'handshake:ok',
+          protocolVersion: NATIVE_RUNTIME_SOCKET_PROTOCOL_VERSION
+        })
+        return
+      }
+
+      const request = payload as NativeRuntimeSocketRequest
+
+      if (request.method === 'runtime:start') {
+        socket.sendServerMessage({
+          requestId: request.requestId,
+          ok: true,
+          result: {
+            executionPlanVersion: 1,
+            eventGraphVersion: 1,
+            parameterGraphVersion: 1,
+            assets: false,
+            telemetry: true
+          }
+        })
+        return
+      }
+
+      if (request.method === 'plan:prepare') {
+        preparedPlan = request.params
+        socket.sendServerMessage({
+          requestId: request.requestId,
+          ok: true,
+          result: { transferId: 7, planId: 123, revision: 5 }
+        })
+      }
+    })
+
+    const transport = createTransport(server)
+    await transport.start({ driver: 'null' })
+    await transport.preparePlan(createAppNativeExecutionPlanFixture())
+
+    assert.equal(
+      (preparedPlan as { kind?: unknown } | undefined)?.kind,
+      'instrument-gain-output'
+    )
+    assert.equal(
+      Array.isArray((preparedPlan as { nodes?: unknown } | undefined)?.nodes),
+      false
+    )
+
+    await transport.dispose()
+  })
+
   it('delivers unsolicited events through onEvent callback', async () => {
     const events: string[] = []
 
@@ -567,4 +621,37 @@ function createTransport(
     onEvent: options.onEvent,
     onProtocolWarning: options.onProtocolWarning
   })
+}
+
+function createAppNativeExecutionPlanFixture(): unknown {
+  return {
+    id: 'native-plan:test-project',
+    graphId: 'test-project',
+    revision: 17,
+    nodes: [
+      {
+        nodeId: 'test-event-input',
+        descriptorId: 'sequencer.source.midi-input'
+      },
+      {
+        nodeId: 'test-instrument',
+        descriptorId: 'sequencer.source.oscillator'
+      },
+      {
+        nodeId: 'test-gain',
+        descriptorId: 'sequencer.processor.gain'
+      },
+      {
+        nodeId: 'test-output',
+        descriptorId: 'sequencer.output.audio-out'
+      }
+    ],
+    parameters: [
+      {
+        nodeId: 'test-gain',
+        parameterId: 'gain',
+        defaultValue: 0.5
+      }
+    ]
+  }
 }

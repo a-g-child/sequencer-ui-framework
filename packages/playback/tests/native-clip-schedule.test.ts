@@ -225,6 +225,21 @@ describe('NativeClipSchedule', () => {
     )
   })
 
+  it('can release every clip pitch when stopping native playback', () => {
+    const model = createFourQuarterNoteFixture()
+
+    assert.deepEqual(
+      nativeClipImmediateNoteOffCommands(model, {
+        clipId: 'clip-1',
+        beat: 1.25,
+        atSample: 24_000,
+        timeMs: 750,
+        releaseAll: true
+      }).map((command) => command.event.note),
+      [60, 62, 64, 65]
+    )
+  })
+
   it('turns a clip owner generation into an invalidation command', () => {
     assert.deepEqual(
       nativeScheduledEventOwnerGenerationCommand(

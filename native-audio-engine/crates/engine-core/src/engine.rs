@@ -403,6 +403,18 @@ fn next_loop_iteration_after(loop_origin: u64, current_sample: u64, loop_length:
         .saturating_add(1)
 }
 
+fn command_order_priority(command: EngineCommand) -> u8 {
+    match command {
+        EngineCommand::SetTempoMap { .. } => 0,
+        EngineCommand::SetTransportLoop { .. } => 1,
+        EngineCommand::SetScheduledEventOwnerGeneration { .. } => 2,
+        EngineCommand::TransportStart { .. } => 3,
+        EngineCommand::ScheduleEvent { .. } | EngineCommand::ScheduleBeatEvent { .. } => 4,
+        EngineCommand::TransportStop { .. } | EngineCommand::Panic { .. } => 5,
+        EngineCommand::SetParameter { .. } | EngineCommand::SwapExecutionPlan { .. } => 6,
+    }
+}
+
 fn drain_future_event_requests_from(
     scheduled_events: &mut ScheduledEventSet,
     plan: &mut PreparedExecutionPlan,
@@ -1562,11 +1574,21 @@ impl AudioEngine {
     }
 
     fn push_pending_command_sorted(&mut self, command: EngineCommand) {
-        let command_key = (command.at_sample(), command.id());
+        let command_key = (
+            command.at_sample(),
+            command_order_priority(command),
+            command.id(),
+        );
         let insert_index = self
             .pending_commands
             .iter()
-            .position(|pending| (pending.at_sample(), pending.id()) > command_key)
+            .position(|pending| {
+                (
+                    pending.at_sample(),
+                    command_order_priority(*pending),
+                    pending.id(),
+                ) > command_key
+            })
             .unwrap_or(self.pending_commands.len());
 
         self.pending_commands.insert(insert_index, command);
@@ -2601,6 +2623,76 @@ mod tests {
     }
 
     #[test]
+    fn same_sample_start_commands_apply_before_beat_event_insertion() {
+        let (command_sender, command_receiver) = crate::engine_command_queue();
+        let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
+        let mut engine = AudioEngine::new()
+            .with_scheduled_test_voice()
+            .with_realtime_queues(command_receiver, telemetry_sender);
+        let tempo = TempoMapSnapshot {
+            origin_sample: 12_000,
+            origin_beat: 0.0,
+            bpm: 120.0,
+            sample_rate: 48_000.0,
+        };
+
+        command_sender
+            .push(EngineCommand::ScheduleBeatEvent {
+                id: 1,
+                event: ScheduledBeatEvent::NoteOn {
+                    target_node: 1,
+                    note: 69,
+                    velocity: 1.0,
+                    at_beat: 0.25,
+                },
+                owner: Some(ScheduledEventOwner::generation_bound(42, 1)),
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::TransportStart {
+                id: 2,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetScheduledEventOwnerGeneration {
+                id: 3,
+                owner_id: 42,
+                generation: 1,
+                at_sample: 0,
+            })
+            .unwrap();
+        command_sender
+            .push(EngineCommand::SetTempoMap {
+                id: 4,
+                tempo,
+                at_sample: 0,
+            })
+            .unwrap();
+
+        process_frames(&mut engine, 1);
+
+        let samples = engine
+            .scheduled_events
+            .entries
+            .iter()
+            .filter_map(|entry| entry.as_ref())
+            .map(ScheduledEventEntry::effective_sample)
+            .collect::<Vec<_>>();
+
+        assert_eq!(samples, vec![18_000]);
+        assert_eq!(
+            engine.current_scheduler_diagnostics().beat_event_min_sample,
+            Some(18_000)
+        );
+        assert_eq!(
+            engine.current_scheduler_diagnostics().events_dropped_not_playing,
+            0
+        );
+    }
+
+    #[test]
     fn scheduled_clip_generation_replacement_drops_uncommitted_note_on() {
         let (command_sender, command_receiver) = crate::engine_command_queue();
         let (telemetry_sender, _telemetry_receiver) = crate::engine_telemetry_queue();
@@ -2776,11 +2868,11 @@ mod tests {
             .push(EngineCommand::SetTempoMap {
                 id: 4,
                 tempo: slower_tempo,
-                at_sample: 0,
+                at_sample: 1,
             })
             .unwrap();
 
-        process_frames(&mut engine, 1);
+        process_frames(&mut engine, 2);
 
         let samples = engine
             .scheduled_events

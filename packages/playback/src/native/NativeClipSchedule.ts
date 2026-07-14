@@ -1,4 +1,5 @@
 import type { PlaybackClip, PlaybackModel, PlaybackNote } from '../model.ts'
+import type { PlaybackEvent } from '../events.ts'
 import type {
   NativeScheduledBeatEvent,
   ScheduleSampleEventCommand,
@@ -27,6 +28,7 @@ export interface NativeClipScheduleOptions {
   readonly clipId: string
   readonly generation: number
   readonly targetNode?: number
+  readonly targetNodes?: readonly number[]
   readonly timing?: ClipTimingSettings
 }
 
@@ -111,6 +113,16 @@ export class NativeClipScheduleSubmissionState {
     this.activeClipId = undefined
   }
 
+  current(): NativeClipScheduleGeneration | undefined {
+    if (!this.active || !this.activeClipId) return undefined
+
+    const generation = this.generations.get(this.activeClipId)
+
+    return generation === undefined
+      ? undefined
+      : { clipId: this.activeClipId, generation }
+  }
+
   private activate(clipId: string): NativeClipScheduleGeneration {
     const generation = this.nextGeneration(clipId)
 
@@ -153,6 +165,40 @@ export function compileNativeClipSchedule(
     generation: options.generation,
     events
   }
+}
+
+export function compileNativePlaybackEventSchedule(
+  events: readonly PlaybackEvent[],
+  options: NativeClipScheduleOptions
+): NativeClipSchedule {
+  const targetNodes = uniqueTargetNodes(options)
+  const nativeEvents = events
+    .flatMap((event) =>
+      targetNodes.flatMap((targetNode) =>
+        playbackEventToNativeBeatEvents(event, targetNode)
+      )
+    )
+    .sort(compareNativeBeatEvents)
+
+  return {
+    clipId: options.clipId,
+    generation: options.generation,
+    events: nativeEvents
+  }
+}
+
+function uniqueTargetNodes(options: NativeClipScheduleOptions): readonly number[] {
+  const values = options.targetNodes ?? [options.targetNode ?? NATIVE_EVENT_INPUT_NODE_ID]
+  const nodes = values.filter(
+    (value): value is number =>
+      typeof value === 'number' &&
+      Number.isFinite(value) &&
+      value > 0
+  )
+
+  return [...new Set(nodes)].length > 0
+    ? [...new Set(nodes)]
+    : [NATIVE_EVENT_INPUT_NODE_ID]
 }
 
 export function nativeClipScheduleCommands(
@@ -209,6 +255,7 @@ export function nativeClipImmediateNoteOffCommands(
     readonly atSample: number
     readonly timeMs: number
     readonly targetNode?: number
+    readonly releaseAll?: boolean
   }
 ): ScheduleSampleEventCommand[] {
   const clip = model.clips.find((candidate) => candidate.id === options.clipId)
@@ -216,11 +263,11 @@ export function nativeClipImmediateNoteOffCommands(
   if (!clip) return []
 
   const targetNode = options.targetNode ?? NATIVE_EVENT_INPUT_NODE_ID
-  const activeNotes = model.notes.filter(
-    (note) =>
-      note.clipId === options.clipId &&
-      noteIsActiveAtBeat(note, clip, options.beat)
-  )
+  const activeNotes = model.notes.filter((note) => {
+    if (note.clipId !== options.clipId) return false
+
+    return options.releaseAll || noteIsActiveAtBeat(note, clip, options.beat)
+  })
   const notes = [...new Set(activeNotes.map((note) => clampMidiNote(note.pitch)))]
 
   return notes.map((note, index) => ({
@@ -316,6 +363,37 @@ function noteToNativeBeatEvents(
       atBeat: noteOffBeat
     }
   ]
+}
+
+function playbackEventToNativeBeatEvents(
+  event: PlaybackEvent,
+  targetNode: number
+): NativeScheduledBeatEvent[] {
+  if (event.type === 'note:on') {
+    return [
+      {
+        kind: 'note-on',
+        targetNode,
+        note: clampMidiNote(event.pitch),
+        velocity: normalizeVelocity(event.velocity),
+        atBeat: event.beat
+      }
+    ]
+  }
+
+  if (event.type === 'note:off') {
+    return [
+      {
+        kind: 'note-off',
+        targetNode,
+        note: clampMidiNote(event.pitch),
+        atBeat: event.beat,
+        ownerLifetime: 'completion-required'
+      }
+    ]
+  }
+
+  return []
 }
 
 function canonicalClipNoteBeats(
